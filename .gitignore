@@ -2,3 +2,4 @@
 .devbox
 dist
 node_modules
+*.out

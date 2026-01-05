@@ -59,7 +59,6 @@
     "typescriptreact",
     "vue",
     "html",
-    "markdown",
     "json",
     "jsonc",
     "yaml",
@@ -71,7 +70,17 @@
   ],
   "cSpell.words": [
     "DEVBOX",
+    "fsys",
+    "gofmt",
+    "golangci",
+    "golint",
     "inconshreveable",
-    "pflag"
+    "Javy",
+    "myapp",
+    "mycompany",
+    "pflag",
+    "simpleplatform",
+    "tmpl",
+    "userstamps"
   ]
 }

@@ -24,15 +24,17 @@ var RootCmd = &cobra.Command{
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
-func Execute() {
+// Execute adds all child commands to the root command and sets flags appropriately.
+func Execute() int {
 	if err := RootCmd.Execute(); err != nil {
 		if jsonOutput {
 			printErrorJSON(err)
 		} else {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 		}
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 
 func init() {
@@ -40,13 +42,14 @@ func init() {
 }
 
 // Helper to print JSON output
-func printJSON(data interface{}) {
+func printJSON(data interface{}) error {
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(data); err != nil {
 		printErrorJSON(fmt.Errorf("failed to encode JSON output: %w", err))
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 // Helper to print JSON error
