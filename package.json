@@ -9,7 +9,13 @@
     "node": ">=25"
   },
   "scripts": {
-    "lint": "eslint sdks/ts .github *.{js,ts,json}"
+    "lint": "pnpm lint:js && pnpm lint:go",
+    "lint:js": "eslint sdks/ts .github *.{js,ts,json}",
+    "lint:go": "cd tools/simple-cli && golangci-lint run ./...",
+    "test": "pnpm test:go",
+    "test:go": "cd tools/simple-cli && go test -cover ./...",
+    "go:build": "cd tools/simple-cli && go build -o bin/simple ./cmd/simple",
+    "go:tidy": "cd tools/simple-cli && go mod tidy"
   },
   "dependencies": {
     "is-ci": "^4.1.0"
@@ -35,6 +41,7 @@
     "pre-commit": "pnpm lint-staged"
   },
   "lint-staged": {
-    "*.{json,ts,js,yml,yaml}": "eslint --fix"
+    "*.{json,ts,js,yml,yaml}": "eslint --fix",
+    "*.go": "golangci-lint run"
   }
 }
