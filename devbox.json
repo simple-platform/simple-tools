@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "packages": {
+    "nodejs": "25.2.1",
+    "go":     "1.25.4"
+  },
+  "env": {
+    "COREPACK_INTEGRITY_KEYS": "0",
+    "DEVBOX_COREPACK_ENABLED": "true"
+  },
+  "shell": {
+    "init_hook": []
+  }
+}

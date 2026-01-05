@@ -1,0 +1,40 @@
+{
+  "name": "@simple/tools",
+  "type": "module",
+  "packageManager": "pnpm@10.27.0",
+  "description": "Simple Platform Tools",
+  "license": "Apache-2.0",
+  "prepare": "is-ci || npx simple-git-hooks",
+  "engines": {
+    "node": ">=25"
+  },
+  "scripts": {
+    "lint": "eslint sdks/ts .github *.{js,ts,json}"
+  },
+  "dependencies": {
+    "is-ci": "^4.1.0"
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "6.7.3",
+    "@commitlint/cli": "20.3.0",
+    "@commitlint/config-conventional": "20.3.0",
+    "@typescript-eslint/parser": "8.51.0",
+    "@typescript-eslint/typescript-estree": "8.51.0",
+    "commitizen": "4.3.1",
+    "cz-conventional-changelog": "3.3.0",
+    "eslint": "9.39.2",
+    "eslint-plugin-format": "1.1.0",
+    "eslint-plugin-perfectionist": "5.2.0",
+    "globals": "17.0.0",
+    "lint-staged": "16.2.7",
+    "simple-git-hooks": "2.13.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.51.0"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm lint-staged"
+  },
+  "lint-staged": {
+    "*.{json,ts,js,yml,yaml}": "eslint --fix"
+  }
+}

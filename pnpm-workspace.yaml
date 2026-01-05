@@ -1,0 +1,10 @@
+shellEmulator: true
+
+trustPolicy: no-downgrade
+
+packages:
+  - tools/*
+  - packages/*
+
+onlyBuiltDependencies:
+  - simple-git-hooks

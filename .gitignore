@@ -1,0 +1,4 @@
+.DS_Store
+.devbox
+dist
+node_modules
