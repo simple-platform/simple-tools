@@ -1,7 +1,10 @@
 package main
 
-import "os"
+import (
+	"os"
+	"simple-cli/internal/cli"
+)
 
 func main() {
-	os.Exit(Execute())
+	os.Exit(cli.Execute())
 }

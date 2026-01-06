@@ -1,0 +1,4 @@
+id {{.AppID}}
+version 0.0.1
+display_name "{{.DisplayName}}"
+description "{{.Description}}"

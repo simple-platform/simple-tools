@@ -70,16 +70,22 @@
   ],
   "cSpell.words": [
     "DEVBOX",
+    "Errorf",
     "fsys",
     "gofmt",
     "golangci",
     "golint",
+    "gopls",
     "inconshreveable",
     "Javy",
+    "myaction",
     "myapp",
+    "mycommand",
     "mycompany",
     "pflag",
+    "rwxr",
     "simpleplatform",
+    "staticcheck",
     "tmpl",
     "userstamps"
   ]
