@@ -172,6 +172,8 @@ Follow this process strictly for all requests.
 *   **Security:** Validate all inputs. Never trust user data.
 *   **Control Flow:** Avoid deep nesting. Use **Early Returns** (Guard Clauses) instead of `if-else` blocks.
 *   **Async Logic:** Always use **async/await** instead of `Promise` chains.
+*   **Clean Code:** Remove unused variables and parameters. If a parameter is required by a signature but unused, prefix with `_` (e.g., `_req`).
+*   **Zero Warnings:** There must be **ZERO warnings or errors** reported by the IDE. Treat every warning as an error.
 
 ### Documentation
 *   **Structure:**

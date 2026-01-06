@@ -1,10 +1,9 @@
 package cli
 
 import (
+	"os"
 	"simple-cli/internal/fsx"
 	"testing"
-
-	"github.com/spf13/cobra"
 )
 
 func TestRunDeploy(t *testing.T) {
@@ -27,8 +26,19 @@ func TestRunDeploy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := &cobra.Command{}
-			err := runDeploy(fsx.OSFileSystem{}, cmd, tt.args)
+
+			// Setup fs
+			tmpDir := t.TempDir()
+			oldWd, _ := os.Getwd()
+			os.Chdir(tmpDir)
+			defer os.Chdir(oldWd)
+
+			if !tt.wantErr {
+				// Create app dir
+				os.MkdirAll("apps/"+tt.args[0], 0755)
+			}
+
+			err := runDeploy(fsx.OSFileSystem{}, tt.args)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("runDeploy() error = %v, wantErr %v", err, tt.wantErr)
 			}

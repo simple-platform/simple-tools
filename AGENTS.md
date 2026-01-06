@@ -138,6 +138,10 @@ A: To allow 100% stable tests that run in parallel without race conditions or di
 ### Zero-Tolerance Policy
 We maintain a strict **zero-warning** policy. Code must be clean, formatted, and linted at all times.
 
+*   **No Unresolved Warnings:** There must be **ZERO warnings or errors** reported by the IDE (gopls, golangci-lint). If a warning is valid but unavoidable, it must be explicitly suppressed with a comment explaining why.
+*   **No Unused Parameters:** If a function signature requires a parameter (e.g., `cmd *cobra.Command`) that is unused, usage must be added (e.g., for logging) or the parameter should be renamed to `_` if permitted. For internal helpers, remove unused parameters.
+
+
 ### Routine Checks
 Run these commands deeply from the monorepo root (using `pnpm`) or inside a specific tool directory.
 

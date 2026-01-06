@@ -1,11 +1,10 @@
 package cli
 
 import (
+	"os"
 	"simple-cli/internal/fsx"
 	"strings"
 	"testing"
-
-	"github.com/spf13/cobra"
 )
 
 func TestRunBuild(t *testing.T) {
@@ -51,14 +50,29 @@ func TestRunBuild(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup
-			cmd := &cobra.Command{}
 			buildAll = tt.buildAll // Set global flag (in a real app, passing this via config is better)
+
+			// Create temp dir for test
+			tmpDir := t.TempDir()
+			oldWd, _ := os.Getwd()
+			os.Chdir(tmpDir)
+			defer os.Chdir(oldWd)
+
+			// Create dummy targets for success cases
+			if !tt.wantErr {
+				if tt.name == "build target success" {
+					os.MkdirAll("myapp/action", 0755)
+				}
+				if tt.name == "build all success" {
+					// No specific target needed for all, but good to have env clean
+				}
+			}
 
 			// Capture output
 			// (If we wanted to capture stdout, we'd need to redirect os.Stdout or inject a Writer,
 			// but for now we just check errors)
 
-			err := runBuild(fsx.OSFileSystem{}, cmd, tt.args)
+			err := runBuild(fsx.OSFileSystem{}, tt.args)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("runBuild() error = %v, wantErr %v", err, tt.wantErr)
 				return

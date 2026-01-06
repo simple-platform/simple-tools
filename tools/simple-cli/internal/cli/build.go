@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"simple-cli/internal/fsx"
+	"simple-cli/internal/scaffold"
 
 	"github.com/spf13/cobra"
 )
@@ -18,11 +19,11 @@ Examples:
   simple build myapp
   simple build --all`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runBuild(fsx.OSFileSystem{}, cmd, args)
+		return runBuild(fsx.OSFileSystem{}, args)
 	},
 }
 
-func runBuild(fsys fsx.FileSystem, cmd *cobra.Command, args []string) error {
+func runBuild(fsys fsx.FileSystem, args []string) error {
 	if buildAll {
 		if len(args) > 0 {
 			return fmt.Errorf("cannot use --all with a target argument")
@@ -42,6 +43,12 @@ func runBuild(fsys fsx.FileSystem, cmd *cobra.Command, args []string) error {
 	}
 
 	target := args[0]
+
+	// Validate target exists
+	if !scaffold.PathExists(fsys, target) && !scaffold.PathExists(fsys, "apps/"+target) {
+		return fmt.Errorf("build target '%s' not found", target)
+	}
+
 	// TODO: Implement build target logic (parse app/action)
 	if jsonOutput {
 		printJSON(map[string]string{"status": "success", "target": target, "msg": fmt.Sprintf("Built %s", target)})
