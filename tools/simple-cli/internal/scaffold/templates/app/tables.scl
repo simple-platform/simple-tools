@@ -1,0 +1,5 @@
+# Define your schema here
+# table user {
+#   required name, :string
+#   required email, :string
+# }
