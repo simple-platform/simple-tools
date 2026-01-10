@@ -46,7 +46,7 @@ You can run the parser as a command-line tool to convert SCL to JSON.
 mix run -e 'SCLParser.CLI.main(["path/to/file.scl"])'
 
 # Or via built binary (if using Burrito/Release)
-./scl_parser path/to/file.scl
+./scl-parser path/to/file.scl
 ```
 
 ## Development
