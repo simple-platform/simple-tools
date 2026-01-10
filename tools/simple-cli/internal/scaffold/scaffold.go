@@ -158,8 +158,22 @@ func CreateTriggerStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath 
 		return fmt.Errorf("app does not exist: %s", cfg.AppID)
 	}
 
-	// For validation purposes, we should ideally check if the trigger already exists in the file,
-	// but since we're appending to a shared file, we'll skip complex parsing for now.
+	recordsPath := filepath.Join(appPath, "records")
+	if err := fsys.MkdirAll(recordsPath, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create records directory: %w", err)
+	}
+
+	// Check for duplicate trigger
+	existingTriggersFile := filepath.Join(recordsPath, "20_triggers.scl")
+	if PathExists(fsys, existingTriggersFile) {
+		content, err := fsys.ReadFile(existingTriggersFile)
+		if err != nil {
+			return fmt.Errorf("failed to read existing triggers: %w", err)
+		}
+		if strings.Contains(string(content), fmt.Sprintf("set dev_simple_system.trigger, %s", cfg.TriggerNameScl)) {
+			return fmt.Errorf("trigger already exists: %s", cfg.TriggerNameScl)
+		}
+	}
 
 	// Determine template file based on type
 	var templateFile string
@@ -202,11 +216,6 @@ func CreateTriggerStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath 
 		// Webhook
 		"Method":   cfg.Method,
 		"IsPublic": cfg.IsPublic,
-	}
-
-	recordsPath := filepath.Join(appPath, "records")
-	if err := fsys.MkdirAll(recordsPath, fsx.DirPerm); err != nil {
-		return fmt.Errorf("failed to create records directory: %w", err)
 	}
 
 	// 1. Append to 20_triggers.scl
@@ -286,6 +295,21 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		return fmt.Errorf("app does not exist: %s", cfg.AppID)
 	}
 
+	// Check for duplicate action in SCL
+	recordsPath := filepath.Join(appPath, "records")
+	actionsScl := filepath.Join(recordsPath, "10_actions.scl")
+	if PathExists(fsys, actionsScl) {
+		content, err := fsys.ReadFile(actionsScl)
+		if err != nil {
+			return fmt.Errorf("failed to read existing actions: %w", err)
+		}
+		// Check for "set dev_simple_system.logic, action_name {"
+		actionNameScl := strings.ReplaceAll(cfg.ActionName, "-", "_")
+		if strings.Contains(string(content), fmt.Sprintf("set dev_simple_system.logic, %s", actionNameScl)) {
+			return fmt.Errorf("action already exists: %s", actionNameScl)
+		}
+	}
+
 	actionPath := filepath.Join(appPath, "actions", cfg.ActionName)
 
 	// Validate: action must not exist
@@ -334,12 +358,10 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 	}
 
 	// Create or append to records/10_actions.scl
-	recordsPath := filepath.Join(appPath, "records")
 	if err := fsys.MkdirAll(recordsPath, fsx.DirPerm); err != nil {
 		return fmt.Errorf("failed to create records directory: %w", err)
 	}
 
-	actionsScl := filepath.Join(recordsPath, "10_actions.scl")
 	if err := appendActionRecord(fsys, tplFS, actionsScl, data); err != nil {
 		return err
 	}

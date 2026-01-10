@@ -290,11 +290,6 @@ func runNewTrigger(cmd *cobra.Command, args []string, triggerType string) error 
 		daysStr, _ := cmd.Flags().GetString("days")
 		if daysStr != "" {
 			// Convert comma-separated string to JSON string array: "MON,TUE" -> `["MON", "TUE"]`
-			parts := make([]string, 0)
-			for _, d := range regexp.MustCompile(`,`).Split(daysStr, -1) {
-				parts = append(parts, fmt.Sprintf(`"%s"`, d))
-			}
-			cfg.Days = fmt.Sprintf(`[%s]`, regexp.MustCompile(`\s+`).ReplaceAllString(regexp.MustCompile(`,`).ReplaceAllString(daysStr, `", "`), ""))
 			// Better explicit construction
 			cfg.Days = "["
 			for i, p := range regexp.MustCompile(`,`).Split(daysStr, -1) {

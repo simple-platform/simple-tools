@@ -267,6 +267,9 @@ func TestCreateActionStructure_ActionExists(t *testing.T) {
 			// Both app and action exist
 			return strings.Contains(name, "apps/com.test")
 		},
+		files: map[string][]byte{
+			"/root/apps/com.test/records/10_actions.scl": []byte("set dev_simple_system.logic, existing {"),
+		},
 	}
 
 	cfg := ActionConfig{
@@ -283,10 +286,39 @@ func TestCreateActionStructure_ActionExists(t *testing.T) {
 	}
 }
 
+func TestCreateActionStructure_DuplicateSCL(t *testing.T) {
+	// Action directory doesn't exist, but it's present in SCL
+	mockFS := &mockWriteTrackingFS{
+		statFn: func(name string) bool {
+			// App exists, SCL exists, action dir doesn't
+			if strings.Contains(name, "10_actions.scl") {
+				return true
+			}
+			return strings.Contains(name, "apps/com.test") && !strings.Contains(name, "actions/my-action")
+		},
+		files: map[string][]byte{
+			"/root/apps/com.test/records/10_actions.scl": []byte("set dev_simple_system.logic, my_action {"),
+		},
+	}
+
+	cfg := ActionConfig{
+		AppID:      "com.test",
+		ActionName: "my-action",
+	}
+
+	err := CreateActionStructure(mockFS, &fsx.MockTemplateFS{}, "/root", cfg)
+	if err == nil {
+		t.Error("Expected error for duplicate action in SCL")
+	}
+	if !strings.Contains(err.Error(), "action already exists") {
+		t.Errorf("Expected 'action already exists' error, got: %v", err)
+	}
+}
+
 func TestCreateActionStructure_MkdirError(t *testing.T) {
 	mockFS := &mockWriteTrackingFS{
 		statFn: func(name string) bool {
-			return strings.Contains(name, "apps/com.test") && !strings.Contains(name, "actions/my-action")
+			return name == "/root/apps/com.test"
 		},
 		mkdirErr: errors.New("permission denied"),
 	}
@@ -468,14 +500,14 @@ func TestCreateTriggerStructure_Errors(t *testing.T) {
 		},
 		{
 			name:    "unknown trigger type",
-			mockFS:  &mockWriteTrackingFS{statFn: func(s string) bool { return strings.Contains(s, "apps/com.test") }},
+			mockFS:  &mockWriteTrackingFS{statFn: func(s string) bool { return s == "/root/apps/com.test" }},
 			cfg:     TriggerConfig{AppID: "com.test", TriggerType: "unknown"},
 			wantErr: "unknown trigger type",
 		},
 		{
 			name: "append trigger record failed",
 			mockFS: &mockWriteTrackingFS{
-				statFn:   func(s string) bool { return strings.Contains(s, "apps/com.test") },
+				statFn:   func(s string) bool { return s == "/root/apps/com.test" },
 				writeErr: errors.New("write failed"),
 			},
 			mockTpl: &fsx.MockTemplateFS{
@@ -483,6 +515,21 @@ func TestCreateTriggerStructure_Errors(t *testing.T) {
 			},
 			cfg:     TriggerConfig{AppID: "com.test", TriggerType: "timed"},
 			wantErr: "failed to append trigger record",
+		},
+		{
+			name: "duplicate trigger",
+			mockFS: &mockWriteTrackingFS{
+				statFn: func(s string) bool { return true },
+				files: map[string][]byte{
+					"/root/apps/com.test/records/20_triggers.scl": []byte("set dev_simple_system.trigger, daily_sync {"),
+				},
+			},
+			cfg: TriggerConfig{
+				AppID:          "com.test",
+				TriggerType:    "timed",
+				TriggerNameScl: "daily_sync",
+			},
+			wantErr: "trigger already exists: daily_sync",
 		},
 	}
 
