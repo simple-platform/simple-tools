@@ -5,6 +5,7 @@
   "scripts": {
     "lint": "mix credo --strict",
     "test": "mix test --cover",
+    "build:release": "mix release --overwrite",
     "deps": "mix deps.get"
   }
 }

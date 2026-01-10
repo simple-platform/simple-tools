@@ -1,0 +1,171 @@
+name: Build and Release SCL Parser
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    name: Preview Version & Changelog
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      version_tag: ${{ steps.version.outputs.version_tag }}
+      changed: ${{ steps.version.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Version
+        id: version
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: v
+          major_pattern: '/(\(scl-parser\).*!)|BREAKING CHANGE/'
+          minor_pattern: '/feat\(scl-parser\):/'
+          version_format: '${major}.${minor}.${patch}'
+          change_path: packages/scl_parser
+          namespace: scl-parser
+          bump_each_commit: false
+          search_commit_body: true
+          enable_prerelease_mode: false
+
+      - name: Generate Changelog Preview
+        if: steps.version.outputs.changed == 'true'
+        run: |
+          echo "## 🚀 Next Version: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "Tag: ${{ steps.version.outputs.version_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Simple changelog generation for preview
+          echo "### Referenced Commits" >> $GITHUB_STEP_SUMMARY
+          git log $(git describe --tags --abbrev=0)..HEAD --pretty=format:"* %s (%h)" -- packages/scl_parser >> $GITHUB_STEP_SUMMARY
+
+  test:
+    name: Run Tests
+    needs: preview
+    if: needs.preview.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd packages/scl_parser
+          mix deps.get
+          
+      - name: Run Tests
+        run: |
+          cd packages/scl_parser
+          mix test
+
+  build_binaries:
+    name: Build Binary (${{ matrix.target }})
+    needs: preview
+    if: needs.preview.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [macos, linux, windows]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd packages/scl_parser
+          mix deps.get
+          
+      - name: Build Release
+        env:
+          BURRITO_TARGET: ${{ matrix.target }}
+        run: |
+          cd packages/scl_parser
+          mix release --overwrite
+          
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: packages/scl_parser/burrito_out/**
+          retention-days: 1
+
+  publish_hex:
+    name: Publish to Hex
+    needs: [test, build_binaries, preview]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd packages/scl_parser
+          mix deps.get
+          
+      - name: Publish to Hex
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          cd packages/scl_parser
+          mix hex.publish --yes
+
+  release:
+    name: GitHub Release
+    needs: [test, build_binaries, preview]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          
+      - name: Consolidate Artifacts
+        run: |
+          mkdir -p releases
+          find artifacts -type f -exec cp {} releases/ \;
+          ls -l releases/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ needs.preview.outputs.version_tag }}
+          name: SCL Parser ${{ needs.preview.outputs.version }}
+          files: releases/*
+          draft: false
+          prerelease: false
