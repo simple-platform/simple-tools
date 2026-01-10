@@ -16,6 +16,7 @@ type FileSystem interface {
 	Stat(name string) (fs.FileInfo, error)
 	MkdirAll(path string, perm os.FileMode) error
 	WriteFile(name string, data []byte, perm os.FileMode) error
+	ReadFile(name string) ([]byte, error)
 }
 
 // TemplateFS abstraction for mocking embedded files
@@ -37,4 +38,8 @@ func (OSFileSystem) MkdirAll(path string, perm os.FileMode) error {
 
 func (OSFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(name, data, perm)
+}
+
+func (OSFileSystem) ReadFile(name string) ([]byte, error) {
+	return os.ReadFile(name)
 }

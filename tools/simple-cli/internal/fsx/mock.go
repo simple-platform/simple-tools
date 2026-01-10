@@ -12,6 +12,8 @@ type MockFileSystem struct {
 	StatErr      error
 	MkdirAllErr  error
 	WriteFileErr error
+	ReadFileErr  error
+	Files        map[string][]byte
 }
 
 func (m *MockFileSystem) Stat(name string) (fs.FileInfo, error) {
@@ -28,6 +30,16 @@ func (m *MockFileSystem) MkdirAll(path string, perm os.FileMode) error {
 
 func (m *MockFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
 	return m.WriteFileErr
+}
+
+func (m *MockFileSystem) ReadFile(name string) ([]byte, error) {
+	if m.ReadFileErr != nil {
+		return nil, m.ReadFileErr
+	}
+	if content, ok := m.Files[name]; ok {
+		return content, nil
+	}
+	return nil, os.ErrNotExist
 }
 
 // mockFileInfo implements fs.FileInfo

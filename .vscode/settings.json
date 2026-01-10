@@ -87,6 +87,7 @@
     "simpleplatform",
     "staticcheck",
     "tmpl",
-    "userstamps"
+    "userstamps",
+    "vitest"
   ]
 }

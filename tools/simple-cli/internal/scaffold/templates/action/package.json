@@ -1,0 +1,24 @@
+{
+  "name": "@{{.Scope}}/action-{{.ActionName}}",
+  "type": "module",
+  "version": "1.0.0",
+  "private": true,
+  "source": "index.ts",
+  "main": "build/release.wasm",
+  "scripts": {
+    "build:setup": "rm -rf build && mkdir -p build",
+    "build:js": "esbuild index.ts --bundle --minify --outfile=./build/bundle.js",
+    "build": "npm-run-all -s build:setup build:js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@simpleplatform/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.0",
+    "npm-run-all2": "^5.0.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

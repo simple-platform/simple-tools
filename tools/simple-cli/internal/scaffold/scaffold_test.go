@@ -2,9 +2,12 @@ package scaffold
 
 import (
 	"errors"
+	"io/fs"
+	"os"
 	"simple-cli/internal/fsx"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Tests follow...
@@ -184,3 +187,256 @@ func TestContextReadDirError(t *testing.T) {
 		t.Errorf("Expected read dir error, got: %v", err)
 	}
 }
+
+// Tests for CreateActionStructure
+
+func TestCreateActionStructure_Success(t *testing.T) {
+	// Use a mock that tracks what was written
+	written := make(map[string][]byte)
+
+	mockFS := &mockWriteTrackingFS{
+		written: written,
+		statFn: func(name string) bool {
+			// Simulate that app exists but action and 10_actions.scl don't
+			if strings.Contains(name, "10_actions.scl") {
+				return false
+			}
+			return strings.Contains(name, "apps/com.test") && !strings.Contains(name, "actions/my-action")
+		},
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		Files: map[string][]byte{
+			"templates/action/package.json":        []byte(`{"name": "@{{.Scope}}/action-{{.ActionName}}"}`),
+			"templates/action/index.ts":            []byte("// {{.ActionName}}"),
+			"templates/action/tsconfig.json":       []byte("{}"),
+			"templates/action/vitest.config.ts":    []byte("export default {}"),
+			"templates/action/tests/helpers.ts":    []byte("// helpers"),
+			"templates/action/tests/index.test.ts": []byte("// test {{.ActionName}}"),
+			"templates/action/10_actions.scl":      []byte("set logic, {{.ActionName}} {}"),
+		},
+	}
+
+	cfg := ActionConfig{
+		AppID:        "com.test",
+		ActionName:   "my-action",
+		DisplayName:  "My Action",
+		Description:  "Test description",
+		Scope:        "mycompany",
+		ExecutionEnv: "server",
+	}
+
+	err := CreateActionStructure(mockFS, mockTpl, "/root", cfg)
+	if err != nil {
+		t.Fatalf("CreateActionStructure failed: %v", err)
+	}
+
+	// Verify package.json was written with correct content
+	pkgJson := written["/root/apps/com.test/actions/my-action/package.json"]
+	if !strings.Contains(string(pkgJson), "@mycompany/action-my-action") {
+		t.Errorf("package.json doesn't contain correct scope, got: %s", string(pkgJson))
+	}
+
+	// Verify 10_actions.scl was created
+	actionsScl := written["/root/apps/com.test/records/10_actions.scl"]
+	if !strings.Contains(string(actionsScl), "my-action") {
+		t.Errorf("10_actions.scl doesn't contain action name, got: %s", string(actionsScl))
+	}
+}
+
+func TestCreateActionStructure_AppNotExists(t *testing.T) {
+	mockFS := &fsx.MockFileSystem{} // Default: everything returns NotExist
+
+	cfg := ActionConfig{
+		AppID:      "nonexistent",
+		ActionName: "test",
+	}
+
+	err := CreateActionStructure(mockFS, &fsx.MockTemplateFS{}, "/root", cfg)
+	if err == nil {
+		t.Error("Expected error for non-existent app")
+	}
+	if !strings.Contains(err.Error(), "app does not exist") {
+		t.Errorf("Expected 'app does not exist' error, got: %v", err)
+	}
+}
+
+func TestCreateActionStructure_ActionExists(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn: func(name string) bool {
+			// Both app and action exist
+			return strings.Contains(name, "apps/com.test")
+		},
+	}
+
+	cfg := ActionConfig{
+		AppID:      "com.test",
+		ActionName: "existing",
+	}
+
+	err := CreateActionStructure(mockFS, &fsx.MockTemplateFS{}, "/root", cfg)
+	if err == nil {
+		t.Error("Expected error for existing action")
+	}
+	if !strings.Contains(err.Error(), "action already exists") {
+		t.Errorf("Expected 'action already exists' error, got: %v", err)
+	}
+}
+
+func TestCreateActionStructure_MkdirError(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn: func(name string) bool {
+			return strings.Contains(name, "apps/com.test") && !strings.Contains(name, "actions/my-action")
+		},
+		mkdirErr: errors.New("permission denied"),
+	}
+
+	cfg := ActionConfig{
+		AppID:      "com.test",
+		ActionName: "my-action",
+	}
+
+	err := CreateActionStructure(mockFS, &fsx.MockTemplateFS{}, "/root", cfg)
+	if err == nil {
+		t.Error("Expected mkdir error")
+	}
+	if !strings.Contains(err.Error(), "failed to create action directory") {
+		t.Errorf("Expected 'failed to create action directory' error, got: %v", err)
+	}
+}
+
+func TestCreateActionStructure_TemplateReadError(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn: func(name string) bool {
+			return strings.Contains(name, "apps/com.test") && !strings.Contains(name, "actions/my-action")
+		},
+		written: make(map[string][]byte),
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		ReadErrors: map[string]error{
+			"templates/action/package.json": errors.New("read failed"),
+		},
+	}
+
+	cfg := ActionConfig{
+		AppID:        "com.test",
+		ActionName:   "my-action",
+		Scope:        "test",
+		ExecutionEnv: "server",
+	}
+
+	err := CreateActionStructure(mockFS, mockTpl, "/root", cfg)
+	if err == nil {
+		t.Error("Expected template read error")
+	}
+}
+
+func TestAppendActionRecord_NewFile(t *testing.T) {
+	written := make(map[string][]byte)
+
+	mockFS := &mockWriteTrackingFS{
+		written: written,
+		statFn:  func(name string) bool { return false }, // File doesn't exist
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		Files: map[string][]byte{
+			"templates/action/10_actions.scl": []byte("set logic, {{.ActionName}} {}"),
+		},
+	}
+
+	data := map[string]string{"ActionName": "test"}
+	err := appendActionRecord(mockFS, mockTpl, "/path/10_actions.scl", data)
+	if err != nil {
+		t.Fatalf("appendActionRecord failed: %v", err)
+	}
+
+	content := written["/path/10_actions.scl"]
+	if !strings.Contains(string(content), "test") {
+		t.Errorf("Expected action name in output, got: %s", string(content))
+	}
+}
+
+func TestAppendActionRecord_AppendToExisting(t *testing.T) {
+	written := make(map[string][]byte)
+
+	mockFS := &mockWriteTrackingFS{
+		written: written,
+		statFn:  func(name string) bool { return true }, // File exists
+		files: map[string][]byte{
+			"/path/10_actions.scl": []byte("# existing content"),
+		},
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		Files: map[string][]byte{
+			"templates/action/10_actions.scl": []byte("set logic, {{.ActionName}} {}"),
+		},
+	}
+
+	data := map[string]string{"ActionName": "new-action"}
+	err := appendActionRecord(mockFS, mockTpl, "/path/10_actions.scl", data)
+	if err != nil {
+		t.Fatalf("appendActionRecord failed: %v", err)
+	}
+
+	content := written["/path/10_actions.scl"]
+	if !strings.Contains(string(content), "# existing content") {
+		t.Errorf("Expected existing content preserved, got: %s", string(content))
+	}
+	if !strings.Contains(string(content), "new-action") {
+		t.Errorf("Expected new action added, got: %s", string(content))
+	}
+}
+
+// mockWriteTrackingFS is a custom mock that tracks writes and allows custom stat behavior
+type mockWriteTrackingFS struct {
+	written  map[string][]byte
+	files    map[string][]byte
+	statFn   func(string) bool
+	mkdirErr error
+	writeErr error
+}
+
+func (m *mockWriteTrackingFS) Stat(name string) (fs.FileInfo, error) {
+	if m.statFn != nil && m.statFn(name) {
+		return &mockFileInfoSimple{}, nil
+	}
+	return nil, os.ErrNotExist
+}
+
+func (m *mockWriteTrackingFS) MkdirAll(path string, perm os.FileMode) error {
+	if m.mkdirErr != nil {
+		return m.mkdirErr
+	}
+	return nil
+}
+
+func (m *mockWriteTrackingFS) WriteFile(name string, data []byte, perm os.FileMode) error {
+	if m.writeErr != nil {
+		return m.writeErr
+	}
+	if m.written != nil {
+		m.written[name] = data
+	}
+	return nil
+}
+
+func (m *mockWriteTrackingFS) ReadFile(name string) ([]byte, error) {
+	if m.files != nil {
+		if content, ok := m.files[name]; ok {
+			return content, nil
+		}
+	}
+	return nil, errors.New("file not found")
+}
+
+type mockFileInfoSimple struct{}
+
+func (m *mockFileInfoSimple) Name() string       { return "mock" }
+func (m *mockFileInfoSimple) Size() int64        { return 0 }
+func (m *mockFileInfoSimple) Mode() os.FileMode  { return 0755 }
+func (m *mockFileInfoSimple) ModTime() time.Time { return time.Time{} }
+func (m *mockFileInfoSimple) IsDir() bool        { return true }
+func (m *mockFileInfoSimple) Sys() any           { return nil }
