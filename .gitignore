@@ -1,6 +1,11 @@
 .DS_Store
 .devbox
-dist
-node_modules
+.turbo
+.nix-*
 *.out
+_build
+tmp
 simple
+dist
+burrito_out
+node_modules

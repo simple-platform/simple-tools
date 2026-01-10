@@ -21,14 +21,14 @@ func setupTestRepo(t *testing.T) string {
 func TestNewTriggerTimedCmd_Success(t *testing.T) {
 	tmpDir := setupTestRepo(t)
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	appID := "com.example.test"
 	triggerName := "daily-sync"
 
 	// Create app and records dir
-	os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
 
 	args := []string{
 		"new", "trigger:timed", appID, triggerName, "Daily Sync",
@@ -69,11 +69,11 @@ func TestNewTriggerTimedCmd_Success(t *testing.T) {
 func TestNewTriggerDbCmd_Success(t *testing.T) {
 	tmpDir := setupTestRepo(t)
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	appID := "com.example.test"
-	os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
 
 	args := []string{
 		"new", "trigger:db", appID, "on-update", "On Update",
@@ -115,11 +115,11 @@ func TestNewTriggerDbCmd_Success(t *testing.T) {
 func TestNewTriggerWebhookCmd_Success(t *testing.T) {
 	tmpDir := setupTestRepo(t)
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	appID := "com.example.test"
-	os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
 
 	args := []string{
 		"new", "trigger:webhook", appID, "payment-hook", "Payment Hook",
@@ -155,11 +155,11 @@ func TestNewTriggerWebhookCmd_Success(t *testing.T) {
 func TestNewTriggerCmd_InvalidFrequency(t *testing.T) {
 	tmpDir := setupTestRepo(t)
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	appID := "com.example.test"
-	os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
 
 	args := []string{
 		"new", "trigger:timed", appID, "bad-freq", "Bad Freq",
@@ -180,11 +180,11 @@ func TestNewTriggerCmd_MissingAction(t *testing.T) {
 	// Flags are required by Cobra validation, so we expect error before run
 	tmpDir := setupTestRepo(t)
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	appID := "com.example.test"
-	os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "apps", appID, "records"), 0755)
 
 	args := []string{
 		"new", "trigger:timed", appID, "no-action", "No Action",
@@ -193,7 +193,7 @@ func TestNewTriggerCmd_MissingAction(t *testing.T) {
 	}
 
 	// Reset flags to ensure persistence doesn't hide the error
-	newTriggerTimedCmd.Flags().Set("action", "")
+	_ = newTriggerTimedCmd.Flags().Set("action", "")
 	newTriggerTimedCmd.Flags().Lookup("action").Changed = false
 
 	_, _, err := invokeCmd(args...)

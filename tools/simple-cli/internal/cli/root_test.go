@@ -34,7 +34,7 @@ func invokeCmd(args ...string) (string, string, error) {
 	err := RootCmd.Execute()
 
 	// Restore stdout/stderr
-	w.Close()
+	_ = w.Close()
 	os.Stdout = oldStdout
 	os.Stderr = oldStderr
 	out, _ := io.ReadAll(r)
@@ -89,7 +89,7 @@ func TestInitCmd_Integration(t *testing.T) {
 
 func TestInitCmd_ErrorIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Mkdir(tmpDir+"/exists", 0755)
+	_ = os.Mkdir(tmpDir+"/exists", 0755)
 
 	// Test 1: Error Normal
 	args := []string{"init", tmpDir + "/exists"}
@@ -118,9 +118,9 @@ func TestInitCmd_ErrorIntegration(t *testing.T) {
 		r, w, _ := os.Pipe()
 		os.Stdout = w
 
-		printJSON(map[string]string{"foo": "bar"})
+		_ = printJSON(map[string]string{"foo": "bar"})
 
-		w.Close()
+		_ = w.Close()
 		os.Stdout = old
 		out, _ := io.ReadAll(r)
 
@@ -138,7 +138,7 @@ func TestInitCmd_ErrorIntegration(t *testing.T) {
 
 		printErrorJSON(io.EOF) // Simple error
 
-		w.Close()
+		_ = w.Close()
 		os.Stderr = old
 		out, _ := io.ReadAll(r)
 
@@ -201,7 +201,7 @@ func TestExecute_Scenarios(t *testing.T) {
 			os.Stdout, _, _ = os.Pipe()
 
 			defer func() {
-				w.Close()
+				_ = w.Close()
 				os.Stderr = oldStderr
 				os.Stdout = oldStdout
 			}()
@@ -214,7 +214,7 @@ func TestExecute_Scenarios(t *testing.T) {
 			}
 
 			if tt.wantOutput != "" {
-				w.Close()
+				_ = w.Close()
 				// Restore early to read
 				os.Stderr = oldStderr
 				os.Stdout = oldStdout
