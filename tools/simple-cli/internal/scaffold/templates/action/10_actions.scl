@@ -1,0 +1,8 @@
+set logic, {{.ActionName}} {
+  name "{{.ActionName}}"
+  display_name "{{.DisplayName}}"
+  description "{{.Description}}"
+  execution_environment {{.ExecutionEnv}}
+  language typescript
+  is_active true
+}

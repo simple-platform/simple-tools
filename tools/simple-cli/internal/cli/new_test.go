@@ -107,3 +107,189 @@ func TestNewAppCmd_JSON(t *testing.T) {
 		t.Errorf("Expected app_id in output, got: %s", out)
 	}
 }
+
+// Action command tests
+
+func TestNewActionCmd_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create app structure
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	args := []string{"new", "action", "com.example.test", "send-email", "Send Email", "--scope", "mycompany", "--desc", "Sends emails"}
+	out, _, err := invokeCmd(args...)
+	if err != nil {
+		t.Fatalf("New Action failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Created action Send Email (send-email)") {
+		t.Errorf("Unexpected output: %s", out)
+	}
+
+	// Verify files created
+	actionDir := filepath.Join(appDir, "actions", "send-email")
+	filesToCheck := []string{
+		"package.json",
+		"index.ts",
+		"tsconfig.json",
+		"vitest.config.ts",
+		"tests/helpers.ts",
+		"tests/index.test.ts",
+	}
+
+	for _, file := range filesToCheck {
+		path := filepath.Join(actionDir, file)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			t.Errorf("%s not created", file)
+		}
+	}
+
+	// Verify package.json content
+	pkgJson, _ := os.ReadFile(filepath.Join(actionDir, "package.json"))
+	if !strings.Contains(string(pkgJson), "@mycompany/action-send-email") {
+		t.Error("package.json doesn't contain correct package name")
+	}
+
+	// Verify 10_actions.scl created
+	actionsScl := filepath.Join(appDir, "records", "10_actions.scl")
+	if _, err := os.Stat(actionsScl); os.IsNotExist(err) {
+		t.Error("10_actions.scl not created")
+	} else {
+		content, _ := os.ReadFile(actionsScl)
+		if !strings.Contains(string(content), "send-email") ||
+			!strings.Contains(string(content), "execution_environment server") {
+			t.Error("10_actions.scl content incorrect")
+		}
+	}
+}
+
+func TestNewActionCmd_MissingApp(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.Mkdir(filepath.Join(tmpDir, "apps"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	args := []string{"new", "action", "com.example.nonexistent", "test-action", "Test Action", "--scope", "test"}
+	_, _, err := invokeCmd(args...)
+	if err == nil {
+		t.Error("Expected error when app doesn't exist")
+	}
+	if !strings.Contains(err.Error(), "app does not exist") {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestNewActionCmd_ActionExists(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create app and action structure
+	actionDir := filepath.Join(tmpDir, "apps", "com.example.test", "actions", "existing-action")
+	os.MkdirAll(actionDir, 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	args := []string{"new", "action", "com.example.test", "existing-action", "Existing Action", "--scope", "test"}
+	_, _, err := invokeCmd(args...)
+	if err == nil {
+		t.Error("Expected error when action already exists")
+	}
+	if !strings.Contains(err.Error(), "action already exists") {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestNewActionCmd_InvalidLang(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	args := []string{"new", "action", "com.example.test", "test-action", "Test Action", "--lang", "go", "--scope", "test"}
+	_, _, err := invokeCmd(args...)
+	if err == nil {
+		t.Error("Expected error for unsupported language")
+	}
+	if !strings.Contains(err.Error(), "unsupported language") {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestNewActionCmd_InvalidEnv(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	args := []string{"new", "action", "com.example.test", "test-action", "Test Action", "--lang", "ts", "--env", "invalid", "--scope", "test"}
+	_, _, err := invokeCmd(args...)
+	if err == nil {
+		t.Error("Expected error for invalid execution environment")
+	}
+	if !strings.Contains(err.Error(), "invalid execution environment") {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestNewActionCmd_EmptyScope(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	// Explicitly pass empty scope to test our validation
+	args := []string{"new", "action", "com.example.test", "test-action", "Test Action", "--lang", "ts", "--env", "server", "--scope", ""}
+	_, _, err := invokeCmd(args...)
+	if err == nil {
+		t.Error("Expected error when scope is empty")
+	}
+	if err != nil && !strings.Contains(err.Error(), "scope") {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestNewActionCmd_JSON(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	args := []string{"new", "action", "com.example.test", "json-action", "JSON Action", "--lang", "ts", "--env", "server", "--scope", "test", "--json"}
+	out, _, err := invokeCmd(args...)
+	if err != nil {
+		t.Fatalf("New Action JSON failed: %v", err)
+	}
+
+	if !strings.Contains(out, `"status": "success"`) {
+		t.Errorf("Expected JSON success status, got: %s", out)
+	}
+	if !strings.Contains(out, `"action_name": "json-action"`) {
+		t.Errorf("Expected action_name in output, got: %s", out)
+	}
+}
