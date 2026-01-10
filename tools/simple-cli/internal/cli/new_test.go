@@ -12,12 +12,12 @@ func TestNewAppCmd_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create "apps" dir to satisfy check
-	os.Mkdir(filepath.Join(tmpDir, "apps"), 0755)
+	_ = os.Mkdir(filepath.Join(tmpDir, "apps"), 0755)
 
 	// Change CWD to tmpDir for the test
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	// Invoke: simple new app com.example.test "Test App"
 	args := []string{"new", "app", "com.example.test", "Test App"}
@@ -55,8 +55,8 @@ func TestNewAppCmd_MissingAppsDir(t *testing.T) {
 
 	// Change CWD
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "app", "com.example.fail", "Fail App"}
 	_, _, err := invokeCmd(args...)
@@ -70,11 +70,11 @@ func TestNewAppCmd_MissingAppsDir(t *testing.T) {
 
 func TestNewAppCmd_AppExists(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.MkdirAll(filepath.Join(tmpDir, "apps", "com.example.exists"), 0755)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "apps", "com.example.exists"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "app", "com.example.exists", "Exists App"}
 	_, _, err := invokeCmd(args...)
@@ -88,11 +88,11 @@ func TestNewAppCmd_AppExists(t *testing.T) {
 
 func TestNewAppCmd_JSON(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Mkdir(filepath.Join(tmpDir, "apps"), 0755)
+	_ = os.Mkdir(filepath.Join(tmpDir, "apps"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "app", "com.example.json", "JSON App", "--json"}
 	out, _, err := invokeCmd(args...)
@@ -115,12 +115,12 @@ func TestNewActionCmd_Success(t *testing.T) {
 
 	// Create app structure
 	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
-	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
-	os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "records"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "action", "com.example.test", "send-email", "Send Email", "--scope", "mycompany", "--desc", "Sends emails"}
 	out, _, err := invokeCmd(args...)
@@ -179,11 +179,11 @@ func TestNewActionCmd_Success(t *testing.T) {
 
 func TestNewActionCmd_MissingApp(t *testing.T) {
 	tmpDir := t.TempDir()
-	os.Mkdir(filepath.Join(tmpDir, "apps"), 0755)
+	_ = os.Mkdir(filepath.Join(tmpDir, "apps"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "action", "com.example.nonexistent", "test-action", "Test Action", "--scope", "test"}
 	_, _, err := invokeCmd(args...)
@@ -200,11 +200,11 @@ func TestNewActionCmd_ActionExists(t *testing.T) {
 
 	// Create app and action structure
 	actionDir := filepath.Join(tmpDir, "apps", "com.example.test", "actions", "existing-action")
-	os.MkdirAll(actionDir, 0755)
+	_ = os.MkdirAll(actionDir, 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "action", "com.example.test", "existing-action", "Existing Action", "--scope", "test"}
 	_, _, err := invokeCmd(args...)
@@ -220,11 +220,11 @@ func TestNewActionCmd_InvalidLang(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
-	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "action", "com.example.test", "test-action", "Test Action", "--lang", "go", "--scope", "test"}
 	_, _, err := invokeCmd(args...)
@@ -240,11 +240,11 @@ func TestNewActionCmd_InvalidEnv(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
-	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "action", "com.example.test", "test-action", "Test Action", "--lang", "ts", "--env", "invalid", "--scope", "test"}
 	_, _, err := invokeCmd(args...)
@@ -260,11 +260,11 @@ func TestNewActionCmd_EmptyScope(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
-	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	// Explicitly pass empty scope to test our validation
 	args := []string{"new", "action", "com.example.test", "test-action", "Test Action", "--lang", "ts", "--env", "server", "--scope", ""}
@@ -281,12 +281,12 @@ func TestNewActionCmd_JSON(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
-	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
-	os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "records"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	args := []string{"new", "action", "com.example.test", "json-action", "JSON Action", "--lang", "ts", "--env", "server", "--scope", "test", "--json"}
 	out, _, err := invokeCmd(args...)
@@ -306,11 +306,11 @@ func TestNewActionCmd_InvalidActionName(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
-	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
 
 	oldWd, _ := os.Getwd()
-	os.Chdir(tmpDir)
-	defer os.Chdir(oldWd)
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
 
 	testCases := []struct {
 		name        string
@@ -330,7 +330,7 @@ func TestNewActionCmd_InvalidActionName(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Clean up any previous action
-			os.RemoveAll(filepath.Join(appDir, "actions", tc.actionName))
+			_ = os.RemoveAll(filepath.Join(appDir, "actions", tc.actionName))
 
 			args := []string{"new", "action", "com.example.test", tc.actionName, "Test Action", "--scope", "test"}
 			_, _, err := invokeCmd(args...)

@@ -30,12 +30,12 @@ func TestRunDeploy(t *testing.T) {
 			// Setup fs
 			tmpDir := t.TempDir()
 			oldWd, _ := os.Getwd()
-			os.Chdir(tmpDir)
-			defer os.Chdir(oldWd)
+			_ = os.Chdir(tmpDir)
+			defer func() { _ = os.Chdir(oldWd) }()
 
 			if !tt.wantErr {
 				// Create app dir
-				os.MkdirAll("apps/"+tt.args[0], 0755)
+				_ = os.MkdirAll("apps/"+tt.args[0], 0755)
 			}
 
 			err := runDeploy(fsx.OSFileSystem{}, tt.args)

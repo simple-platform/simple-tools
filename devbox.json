@@ -1,15 +1,31 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
+  "nixpkgs": {
+    "commit": "11cb3517b3af6af300dd6c055aeda73c9bf52c48"
+  },
   "packages": {
-    "nodejs":        "25.2.1",
-    "go":            "1.25.5",
-    "golangci-lint": "2.7.2"
+    "nodejs":                   "25.2.1",
+    "go":                       "1.25.5",
+    "golangci-lint":            "2.7.2",
+    "erlang":                   "27.2",
+    "elixir":                   "1.18.1",
+    "beam27Packages.elixir-ls": "0.30.0",
+    "zig":                      "0.15.2",
+    "p7zip":                    "17.05"
   },
   "env": {
     "COREPACK_INTEGRITY_KEYS": "0",
     "DEVBOX_COREPACK_ENABLED": "true"
   },
   "shell": {
-    "init_hook": []
+    "init_hook": [
+      "mkdir -p .nix-mix",
+      "mkdir -p .nix-hex",
+      "export MIX_HOME=$PWD/.nix-mix",
+      "export HEX_HOME=$PWD/.nix-hex",
+      "export ERL_AFLAGS='-kernel shell_history enabled'",
+      "mix local.hex --force > /dev/null",
+      "mix local.rebar --force > /dev/null"
+    ]
   }
 }

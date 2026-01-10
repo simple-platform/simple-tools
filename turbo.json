@@ -1,0 +1,14 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "tasks": {
+    "build": {
+      "outputs": ["bin/**", "burrito_out/**"]
+    },
+    "lint": {},
+    "test": {},
+    "tidy": {},
+    "deps": {
+      "cache": false
+    }
+  }
+}

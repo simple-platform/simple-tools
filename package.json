@@ -9,13 +9,11 @@
     "node": ">=25"
   },
   "scripts": {
-    "lint": "pnpm lint:js && pnpm lint:go",
-    "lint:js": "eslint sdks/ts .github *.{js,ts,json}",
-    "lint:go": "cd tools/simple-cli && golangci-lint run ./...",
-    "test": "pnpm test:go",
-    "test:go": "cd tools/simple-cli && go test -cover ./...",
-    "go:build": "cd tools/simple-cli && go build -o bin/simple ./cmd/simple",
-    "go:tidy": "cd tools/simple-cli && go mod tidy"
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "build": "turbo run build",
+    "tidy": "turbo run tidy",
+    "deps": "turbo run deps"
   },
   "dependencies": {
     "is-ci": "^4.1.0"
@@ -34,6 +32,7 @@
     "globals": "17.0.0",
     "lint-staged": "16.2.7",
     "simple-git-hooks": "2.13.1",
+    "turbo": "^2.7.3",
     "typescript": "5.9.3",
     "typescript-eslint": "8.52.0"
   },

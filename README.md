@@ -29,6 +29,7 @@ This repository contains the official developer tools to build, test, and deploy
 | Tool | Description | Documentation |
 |------|-------------|---------------|
 | **[Simple CLI](./tools/simple-cli/)** | Command-line interface for scaffolding applications and actions | [📖 Full Documentation](./tools/simple-cli/README.md) |
+| **[SCL Parser](./packages/scl_parser/)** | Elixir library and CLI for SCL parsing | [📖 Full Documentation](./packages/scl_parser/README.md) |
 
 ---
 
@@ -36,11 +37,10 @@ This repository contains the official developer tools to build, test, and deploy
 
 ### Prerequisites
 
-| Requirement | Version | Purpose |
-|-------------|---------|---------|
-| [Go](https://golang.org/) | ≥1.25 | CLI compilation |
-| [Node.js](https://nodejs.org/) | ≥25 | Package management |
-| [pnpm](https://pnpm.io/) | ≥10 | Monorepo orchestration |
+This project is configured with [Devbox](https://www.jetify.com/devbox) to ensure a consistent development environment.
+
+1. Install Devbox.
+2. Run `devbox shell` at the root of the repository to load all necessary tools (Go, Node.js, Elixir, etc.).
 
 ### Install Simple CLI
 
