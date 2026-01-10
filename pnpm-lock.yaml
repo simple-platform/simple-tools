@@ -52,7 +52,7 @@ importers:
         specifier: 2.13.1
         version: 2.13.1
       turbo:
-        specifier: ^2.7.3
+        specifier: 2.7.3
         version: 2.7.3
       typescript:
         specifier: 5.9.3
