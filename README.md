@@ -124,7 +124,6 @@ We follow strict engineering standards. Before contributing:
 
 | Project | Description |
 |---------|-------------|
-| [Simple Platform](https://github.com/simple-platform/simple) | Core platform (Elixir backend) |
 | [Simple SDKs](https://github.com/simple-platform/simple-sdks) | TypeScript SDK for Actions |
 
 ---
