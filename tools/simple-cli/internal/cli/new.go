@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
 
@@ -80,6 +81,17 @@ Arguments:
 // validExecutionEnvs lists the valid execution environment values
 var validExecutionEnvs = []string{"server", "client", "both"}
 
+// actionNameRegex validates action names: all lowercase, starts with letter, only letters/numbers/hyphens
+var actionNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
+
+// validateActionName checks that the action name follows the naming conventions
+func validateActionName(name string) error {
+	if !actionNameRegex.MatchString(name) {
+		return fmt.Errorf("invalid action name: %q. Must be all lowercase, start with a letter, and contain only letters, numbers, and hyphens", name)
+	}
+	return nil
+}
+
 func runNewAction(cmd *cobra.Command, args []string) error {
 	appID := args[0]
 	actionName := args[1]
@@ -93,6 +105,11 @@ func runNewAction(cmd *cobra.Command, args []string) error {
 	// Validate language
 	if lang != "ts" {
 		return fmt.Errorf("unsupported language: %s. Only 'ts' (TypeScript) is supported", lang)
+	}
+
+	// Validate action name format
+	if err := validateActionName(actionName); err != nil {
+		return err
 	}
 
 	// Validate scope is provided
@@ -161,4 +178,181 @@ func init() {
 	RootCmd.AddCommand(newCmd)
 	newCmd.AddCommand(newAppCmd)
 	newCmd.AddCommand(newActionCmd)
+
+	// Register trigger commands
+	newCmd.AddCommand(newTriggerTimedCmd)
+	newCmd.AddCommand(newTriggerDbCmd)
+	newCmd.AddCommand(newTriggerWebhookCmd)
+
+	// Trigger common flags
+	for _, cmd := range []*cobra.Command{newTriggerTimedCmd, newTriggerDbCmd, newTriggerWebhookCmd} {
+		cmd.Flags().StringP("action", "a", "", "Action name to link to")
+		cmd.Flags().StringP("desc", "d", "", "Trigger description")
+		_ = cmd.MarkFlagRequired("action")
+	}
+
+	// Timed trigger flags
+	newTriggerTimedCmd.Flags().StringP("frequency", "f", "", "Frequency: minutely, hourly, daily, weekly, monthly, yearly")
+	newTriggerTimedCmd.Flags().IntP("interval", "i", 1, "Interval between runs")
+	newTriggerTimedCmd.Flags().StringP("time", "t", "00:00:00", "Time of day (HH:MM:SS)")
+	newTriggerTimedCmd.Flags().StringP("timezone", "z", "UTC", "Timezone")
+	newTriggerTimedCmd.Flags().String("days", "", "Specific days (MON,TUE,WED,THU,FRI,SAT,SUN)")
+	newTriggerTimedCmd.Flags().Bool("weekdays", false, "Run on weekdays (Mon-Fri)")
+	newTriggerTimedCmd.Flags().Bool("weekends", false, "Run on weekends (Sat-Sun)")
+	newTriggerTimedCmd.Flags().StringP("week-of-month", "w", "", "Week of month: first, second, third, fourth, fifth, last")
+	newTriggerTimedCmd.Flags().String("start-at", "", "Start time (ISO8601)")
+	newTriggerTimedCmd.Flags().String("end-at", "", "End time (ISO8601)")
+	newTriggerTimedCmd.Flags().String("on-overlap", "skip", "Overlap policy: skip, queue, allow")
+	_ = newTriggerTimedCmd.MarkFlagRequired("frequency")
+
+	// DB trigger flags
+	newTriggerDbCmd.Flags().StringP("table", "t", "", "Table name to watch")
+	newTriggerDbCmd.Flags().StringP("ops", "o", "insert", "Operations: insert,update,delete (comma-separated)")
+	newTriggerDbCmd.Flags().StringP("condition", "c", "", "JQ condition")
+	_ = newTriggerDbCmd.MarkFlagRequired("table")
+
+	// Webhook trigger flags
+	newTriggerWebhookCmd.Flags().StringP("method", "m", "post", "HTTP method: get, post, put, delete")
+	newTriggerWebhookCmd.Flags().BoolP("public", "p", false, "Make endpoint public")
+}
+
+// -----------------------------------------------------------
+// Trigger Commands
+// -----------------------------------------------------------
+
+var newTriggerTimedCmd = &cobra.Command{
+	Use:   "trigger:timed <app> <name> <display_name>",
+	Short: "Create a timed trigger",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runNewTrigger(cmd, args, "timed")
+	},
+}
+
+var newTriggerDbCmd = &cobra.Command{
+	Use:   "trigger:db <app> <name> <display_name>",
+	Short: "Create a database event trigger",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runNewTrigger(cmd, args, "db")
+	},
+}
+
+var newTriggerWebhookCmd = &cobra.Command{
+	Use:   "trigger:webhook <app> <name> <display_name>",
+	Short: "Create a webhook trigger",
+	Args:  cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runNewTrigger(cmd, args, "webhook")
+	},
+}
+
+func runNewTrigger(cmd *cobra.Command, args []string, triggerType string) error {
+	appID := args[0]
+	triggerName := args[1]
+	displayName := args[2]
+
+	// Common flags
+	actionName, _ := cmd.Flags().GetString("action")
+	desc, _ := cmd.Flags().GetString("desc")
+
+	// Validate name format
+	if err := validateActionName(triggerName); err != nil {
+		return err
+	}
+
+	// Prepare config
+	cfg := scaffold.TriggerConfig{
+		AppID:          appID,
+		TriggerName:    triggerName,
+		TriggerNameScl: regexp.MustCompile(`-`).ReplaceAllString(triggerName, "_"),
+		DisplayName:    displayName,
+		Description:    desc,
+		TriggerType:    triggerType,
+		ActionName:     actionName,
+	}
+
+	// Populate type-specific flags
+	switch triggerType {
+	case "timed":
+		freq, _ := cmd.Flags().GetString("frequency")
+		// Validate frequency
+		validFreqs := map[string]bool{"minutely": true, "hourly": true, "daily": true, "weekly": true, "monthly": true, "yearly": true}
+		if !validFreqs[freq] {
+			return fmt.Errorf("invalid frequency: %s", freq)
+		}
+		cfg.Frequency = freq
+
+		cfg.Interval, _ = cmd.Flags().GetInt("interval")
+		cfg.Time, _ = cmd.Flags().GetString("time")
+		cfg.Timezone, _ = cmd.Flags().GetString("timezone")
+
+		daysStr, _ := cmd.Flags().GetString("days")
+		if daysStr != "" {
+			// Convert comma-separated string to JSON string array: "MON,TUE" -> `["MON", "TUE"]`
+			// Better explicit construction
+			cfg.Days = "["
+			for i, p := range regexp.MustCompile(`,`).Split(daysStr, -1) {
+				if i > 0 {
+					cfg.Days += ", "
+				}
+				cfg.Days += fmt.Sprintf(`"%s"`, p)
+			}
+			cfg.Days += "]"
+		}
+
+		cfg.Weekdays, _ = cmd.Flags().GetBool("weekdays")
+		cfg.Weekends, _ = cmd.Flags().GetBool("weekends")
+		cfg.WeekOfMonth, _ = cmd.Flags().GetString("week-of-month")
+		cfg.StartAt, _ = cmd.Flags().GetString("start-at")
+		cfg.EndAt, _ = cmd.Flags().GetString("end-at")
+		cfg.OnOverlap, _ = cmd.Flags().GetString("on-overlap")
+
+	case "db":
+		cfg.TableName, _ = cmd.Flags().GetString("table")
+
+		opsStr, _ := cmd.Flags().GetString("ops")
+		// Convert ops to JSON array: "insert,update" -> `["insert", "update"]`
+		cfg.Operations = "["
+		for i, p := range regexp.MustCompile(`,`).Split(opsStr, -1) {
+			if i > 0 {
+				cfg.Operations += ", "
+			}
+			cfg.Operations += fmt.Sprintf(`"%s"`, p)
+		}
+		cfg.Operations += "]"
+
+		cfg.Condition, _ = cmd.Flags().GetString("condition")
+
+	case "webhook":
+		cfg.Method, _ = cmd.Flags().GetString("method")
+		cfg.IsPublic, _ = cmd.Flags().GetBool("public")
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("failed to get current working directory: %w", err)
+	}
+
+	// Verify monorepo
+	fsys := fsx.OSFileSystem{}
+	if !scaffold.PathExists(fsys, "apps") {
+		return fmt.Errorf("apps directory not found. Are you in a Simple Platform monorepo root?")
+	}
+
+	if err := scaffold.CreateTriggerStructure(fsys, scaffold.TemplatesFS, cwd, cfg); err != nil {
+		return fmt.Errorf("failed to create trigger: %w", err)
+	}
+
+	if jsonOutput {
+		return printJSON(map[string]string{
+			"status":       "success",
+			"app_id":       appID,
+			"trigger_name": triggerName,
+			"type":         triggerType,
+		})
+	}
+
+	fmt.Printf("✅ Created %s trigger %s (%s) for app %s\n", triggerType, displayName, triggerName, appID)
+	return nil
 }

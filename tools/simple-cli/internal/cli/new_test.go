@@ -162,8 +162,16 @@ func TestNewActionCmd_Success(t *testing.T) {
 		t.Error("10_actions.scl not created")
 	} else {
 		content, _ := os.ReadFile(actionsScl)
-		if !strings.Contains(string(content), "send-email") ||
-			!strings.Contains(string(content), "execution_environment server") {
+		contentStr := string(content)
+		// Check that SCL identifier uses underscores (send_email)
+		if !strings.Contains(contentStr, "set dev_simple_system.logic, send_email {") {
+			t.Error("10_actions.scl should use underscores in SCL identifier")
+		}
+		// Check that name field keeps hyphens (send-email)
+		if !strings.Contains(contentStr, `name "send-email"`) {
+			t.Error("10_actions.scl should keep hyphens in name field")
+		}
+		if !strings.Contains(contentStr, "execution_environment server") {
 			t.Error("10_actions.scl content incorrect")
 		}
 	}
@@ -291,5 +299,53 @@ func TestNewActionCmd_JSON(t *testing.T) {
 	}
 	if !strings.Contains(out, `"action_name": "json-action"`) {
 		t.Errorf("Expected action_name in output, got: %s", out)
+	}
+}
+
+func TestNewActionCmd_InvalidActionName(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+
+	oldWd, _ := os.Getwd()
+	os.Chdir(tmpDir)
+	defer os.Chdir(oldWd)
+
+	testCases := []struct {
+		name        string
+		actionName  string
+		shouldError bool
+		errorMsg    string
+	}{
+		{"uppercase", "Send-Email", true, "invalid action name"},
+		{"starts with number", "1action", true, "invalid action name"},
+		{"contains underscore", "send_email", true, "invalid action name"},
+		{"contains special char", "send@email", true, "invalid action name"},
+		{"valid lowercase", "send-email", false, ""},
+		{"valid simple", "myaction", false, ""},
+		{"valid with numbers", "action123", false, ""},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Clean up any previous action
+			os.RemoveAll(filepath.Join(appDir, "actions", tc.actionName))
+
+			args := []string{"new", "action", "com.example.test", tc.actionName, "Test Action", "--scope", "test"}
+			_, _, err := invokeCmd(args...)
+
+			if tc.shouldError {
+				if err == nil {
+					t.Errorf("Expected error for action name %q", tc.actionName)
+				} else if !strings.Contains(err.Error(), tc.errorMsg) {
+					t.Errorf("Expected error containing %q, got: %v", tc.errorMsg, err)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error for action name %q: %v", tc.actionName, err)
+				}
+			}
+		})
 	}
 }

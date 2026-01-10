@@ -1,0 +1,32 @@
+#-----------------------------------------------------
+# {{.DisplayName}} - Timed Trigger
+#-----------------------------------------------------
+
+var {{.TriggerNameScl}}_schedule {
+  value ```
+  {
+    "recurrence": {
+      "frequency": "{{.Frequency}}",
+      "timezone": "{{.Timezone}}",
+      "interval": {{.Interval}}{{if .Time}},
+      "time": "{{.Time}}"{{end}}{{if .Days}},
+      "days": {{.Days}}{{end}}{{if .Weekdays}},
+      "weekdays": true{{end}}{{if .Weekends}},
+      "weekends": true{{end}}{{if .WeekOfMonth}},
+      "week_of_month": "{{.WeekOfMonth}}"{{end}}
+    }{{if or .StartAt .EndAt}},
+    "options": {
+      {{if .StartAt}}"start_at": "{{.StartAt}}"{{end}}{{if and .StartAt .EndAt}},
+      {{end}}{{if .EndAt}}"end_at": "{{.EndAt}}"{{end}}
+    }{{end}}{{if .OnOverlap}},
+    "on_overlap": "{{.OnOverlap}}"{{end}}
+  }
+  ```
+}
+
+set dev_simple_system.trigger, {{.TriggerNameScl}} {
+  key {{.TriggerNameScl}}
+  name "{{.DisplayName}}"
+  description "{{.Description}}"
+  time_schedule `$var('{{.TriggerNameScl}}_schedule') |> $json()`
+}

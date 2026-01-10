@@ -1,0 +1,32 @@
+#-----------------------------------------------------
+# {{.DisplayName}} - Trigger-Action Link
+#-----------------------------------------------------
+
+var {{.TriggerNameScl}}_link {
+  query ```
+  query get_{{.TriggerNameScl}}_link {
+    logic: dev_simple_system__logics(
+      where: {
+        application_id: {_eq: "{{.AppID}}"},
+        name: {_eq: "{{.ActionName}}"}
+      }
+    ) {
+      id
+    }
+    trigger: dev_simple_system__app_records(
+      where: {
+        application_id: {_eq: "{{.AppID}}"},
+        target_table: {name: {_eq: "trigger"}},
+        logical_key: {_eq: "{{.TriggerNameScl}}"}
+      }
+    ) {
+      id: target_record_id
+    }
+  }
+  ```
+}
+
+set dev_simple_system.logic_trigger, {{.TriggerNameScl}} {
+  logic_id `$var('{{.TriggerNameScl}}_link') |> $jq('.logic[0].id')`
+  trigger_id `$var('{{.TriggerNameScl}}_link') |> $jq('.trigger[0].id')`
+}

@@ -123,3 +123,117 @@ func TestMockFileSystem_ReadFile(t *testing.T) {
 		t.Errorf("Expected not exist error, got: %v", err)
 	}
 }
+
+func TestMockFileSystem_Stat(t *testing.T) {
+	// Test error case
+	mock := &MockFileSystem{StatErr: os.ErrPermission}
+	_, err := mock.Stat("any")
+	if err != os.ErrPermission {
+		t.Errorf("Expected permission error, got: %v", err)
+	}
+
+	// Test default not exist
+	mock = &MockFileSystem{}
+	_, err = mock.Stat("any")
+	if !os.IsNotExist(err) {
+		t.Errorf("Expected not exist error, got: %v", err)
+	}
+}
+
+func TestMockFileSystem_WriteFile(t *testing.T) {
+	mock := &MockFileSystem{WriteFileErr: os.ErrPermission}
+	err := mock.WriteFile("any", []byte{}, 0644)
+	if err != os.ErrPermission {
+		t.Errorf("Expected permission error, got: %v", err)
+	}
+}
+
+func TestMockFileSystem_MkdirAll(t *testing.T) {
+	mock := &MockFileSystem{MkdirAllErr: os.ErrPermission}
+	err := mock.MkdirAll("any", 0755)
+	if err != os.ErrPermission {
+		t.Errorf("Expected permission error, got: %v", err)
+	}
+}
+
+func TestMockFileInfo(t *testing.T) {
+	m := &mockFileInfo{}
+	if m.Name() != "mock" {
+		t.Error("Name() incorrect")
+	}
+	if m.Size() != 0 {
+		t.Error("Size() incorrect")
+	}
+	if m.Mode() != 0755 {
+		t.Error("Mode() incorrect")
+	}
+	if !m.ModTime().IsZero() {
+		t.Error("ModTime() incorrect")
+	}
+	if !m.IsDir() {
+		t.Error("IsDir() incorrect")
+	}
+	if m.Sys() != nil {
+		t.Error("Sys() incorrect")
+	}
+}
+
+func TestMockTemplateFS(t *testing.T) {
+	// Test ReadFile error
+	mock := &MockTemplateFS{ReadFileErr: os.ErrPermission}
+	_, err := mock.ReadFile("file")
+	if err != os.ErrPermission {
+		t.Errorf("Expected permission error, got: %v", err)
+	}
+
+	// Test ReadFile specific error
+	mock = &MockTemplateFS{
+		ReadErrors: map[string]error{"file.txt": os.ErrNotExist},
+	}
+	_, err = mock.ReadFile("file.txt")
+	if !os.IsNotExist(err) {
+		t.Errorf("Expected not exist error, got: %v", err)
+	}
+
+	// Test ReadFile success (default mock)
+	_, err = mock.ReadFile("other.txt")
+	if err != nil {
+		t.Errorf("Expected success, got: %v", err)
+	}
+
+	// Test ReadDir error
+	mock = &MockTemplateFS{ReadDirErr: os.ErrPermission}
+	_, err = mock.ReadDir("dir")
+	if err != os.ErrPermission {
+		t.Errorf("Expected permission error, got: %v", err)
+	}
+
+	// Test ReadDir success
+	mock = &MockTemplateFS{}
+	entries, err := mock.ReadDir("dir")
+	if err != nil {
+		t.Errorf("Expected success, got: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "file.md" {
+		t.Error("ReadDir entries incorrect")
+	}
+
+	// Test Open (not implemented)
+	_, err = mock.Open("file")
+	if err == nil {
+		t.Error("Expected error for Open")
+	}
+
+	// Test mockDirEntry
+	entry := entries[0]
+	if entry.IsDir() {
+		t.Error("IsDir() incorrect")
+	}
+	if entry.Type() != 0 {
+		t.Error("Type() incorrect")
+	}
+	info, err := entry.Info()
+	if info != nil || err != nil {
+		t.Error("Info() incorrect")
+	}
+}
