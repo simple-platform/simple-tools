@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -149,7 +152,7 @@ jobs:
       - name: Set up Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
-          version: 0.13.0
+          version: 0.15.2
       
       - name: Install Dependencies
         run: |
@@ -173,6 +176,7 @@ jobs:
   publish_hex:
     name: Publish to Hex
     needs: [test, build_binaries, preview]
+    if: needs.preview.outputs.changed == 'true' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -200,6 +204,7 @@ jobs:
   release:
     name: GitHub Release
     needs: [test, build_binaries, preview]
+    if: needs.preview.outputs.changed == 'true' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
       contents: write
