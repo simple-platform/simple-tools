@@ -55,16 +55,13 @@ func TestRunBuild(t *testing.T) {
 			// Create temp dir for test
 			tmpDir := t.TempDir()
 			oldWd, _ := os.Getwd()
-			os.Chdir(tmpDir)
-			defer os.Chdir(oldWd)
+			_ = os.Chdir(tmpDir)
+			defer func() { _ = os.Chdir(oldWd) }()
 
 			// Create dummy targets for success cases
 			if !tt.wantErr {
 				if tt.name == "build target success" {
-					os.MkdirAll("myapp/action", 0755)
-				}
-				if tt.name == "build all success" {
-					// No specific target needed for all, but good to have env clean
+					_ = os.MkdirAll("myapp/action", 0755)
 				}
 			}
 

@@ -62,7 +62,7 @@ func TestCreateMonorepoStructure_ExistingPath(t *testing.T) {
 	existingPath := filepath.Join(tmpDir, "existing")
 
 	// Create the path first
-	os.MkdirAll(existingPath, 0755)
+	_ = os.MkdirAll(existingPath, 0755)
 
 	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, existingPath, "existing")
 	if err == nil {
@@ -129,7 +129,7 @@ func TestCreateMonorepoStructure_PermissionDenied(t *testing.T) {
 	// force a failure by passing an invalid path like "/" if running as root,
 	// but for standard user testing, read-only parent is good.
 	// Actually, chmod 0000 is safer for "permission denied" simulation.
-	os.Chmod(lockedDir, 0555) // Valid reading, no writing
+	_ = os.Chmod(lockedDir, 0555) // Valid reading, no writing
 
 	// Attempt creation
 	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, targetPath, "new-project")

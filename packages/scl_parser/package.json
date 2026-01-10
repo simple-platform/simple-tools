@@ -1,0 +1,10 @@
+{
+  "name": "@simple/scl-parser",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "mix credo --strict",
+    "test": "mix test --cover",
+    "deps": "mix deps.get"
+  }
+}

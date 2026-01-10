@@ -12,7 +12,7 @@ func TestOSFileSystem_Stat(t *testing.T) {
 	// Test existing file
 	tmpDir := t.TempDir()
 	testFile := filepath.Join(tmpDir, "test.txt")
-	os.WriteFile(testFile, []byte("content"), 0644)
+	_ = os.WriteFile(testFile, []byte("content"), 0644)
 
 	info, err := fs.Stat(testFile)
 	if err != nil {
@@ -77,7 +77,7 @@ func TestOSFileSystem_ReadFile(t *testing.T) {
 
 	// Create a test file
 	testFile := filepath.Join(tmpDir, "input.txt")
-	os.WriteFile(testFile, []byte("test content"), 0644)
+	_ = os.WriteFile(testFile, []byte("test content"), 0644)
 
 	// Test reading existing file
 	data, err := fs.ReadFile(testFile)

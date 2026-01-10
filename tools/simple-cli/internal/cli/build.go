@@ -30,7 +30,7 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 		}
 		// TODO: Implement build all
 		if jsonOutput {
-			printJSON(map[string]string{"status": "success", "target": "all", "msg": "Built all apps"})
+			_ = printJSON(map[string]string{"status": "success", "target": "all", "msg": "Built all apps"})
 		} else {
 			fmt.Println("Building all apps...")
 			fmt.Println("Build complete.")
@@ -51,7 +51,7 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 
 	// TODO: Implement build target logic (parse app/action)
 	if jsonOutput {
-		printJSON(map[string]string{"status": "success", "target": target, "msg": fmt.Sprintf("Built %s", target)})
+		_ = printJSON(map[string]string{"status": "success", "target": target, "msg": fmt.Sprintf("Built %s", target)})
 	} else {
 		fmt.Printf("Building %s...\n", target)
 		fmt.Println("Build complete.")

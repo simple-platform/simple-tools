@@ -1,4 +1,20 @@
 {
+  "elixirLS.dialyzerEnabled": true,
+  "elixirLS.signatureAfterComplete": true,
+  "elixirLS.incrementalDialyzer": true,
+  "elixirLS.fetchDeps": false,
+  "[elixir]": {
+    "editor.insertSpaces": true,
+    "editor.tabSize": 2,
+    "editor.wordBasedSuggestions": "off",
+    "editor.formatOnType": true,
+    "editor.trimAutoWhitespace": false,
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.trimFinalNewlines": true,
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "elixir-lsp.elixir-ls"
+  },
   "eslint.workingDirectories": [
     {
       "mode": "auto"
@@ -69,6 +85,9 @@
     "astro"
   ],
   "cSpell.words": [
+    "AFLAGS",
+    "bcol",
+    "bline",
     "DEVBOX",
     "Errorf",
     "Freqs",
@@ -78,17 +97,28 @@
     "golint",
     "gopls",
     "inconshreveable",
+    "ints",
     "Javy",
+    "kcol",
+    "lparen",
     "myaction",
     "myapp",
     "mycommand",
     "mycompany",
+    "ncol",
+    "nixpkgs",
     "pflag",
+    "rebar",
+    "rparen",
     "rwxr",
+    "scol",
     "simpleplatform",
+    "sline",
     "staticcheck",
     "tmpl",
     "userstamps",
-    "vitest"
+    "vcol",
+    "vitest",
+    "vline"
   ]
 }

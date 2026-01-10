@@ -1,0 +1,12 @@
+{
+  "name": "@simple/cli",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint": "golangci-lint run ./...",
+    "test": "go test -cover ./...",
+    "build": "go build -o bin/simple ./cmd/simple",
+    "tidy": "go mod tidy",
+    "deps": "go mod download"
+  }
+}
