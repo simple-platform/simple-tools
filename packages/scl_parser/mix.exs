@@ -56,8 +56,8 @@ defmodule SCLParser.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
-      {:excoveralls, "~> 0.18", only: :test},
+      {:credo, "1.7.15", only: [:dev, :test], runtime: false},
+      {:excoveralls, "0.18.5", only: :test},
       {:burrito, "~> 1.0"}
     ]
   end
