@@ -35,20 +35,31 @@ defmodule SCLParser.MixProject do
       scl_parser: [
         steps: [:assemble, &Burrito.wrap/1, &rename_builds/1],
         burrito: [
-          targets: [
-            macos: [os: :darwin, cpu: :aarch64],
-            linux: [os: :linux, cpu: :x86_64],
-            windows: [os: :windows, cpu: :x86_64]
-          ]
+          targets: get_targets()
         ]
       ]
     ]
   end
 
+  defp get_targets do
+    targets = [
+      macos: [os: :darwin, cpu: :aarch64],
+      linux: [os: :linux, cpu: :x86_64],
+      windows: [os: :windows, cpu: :x86_64]
+    ]
+
+    case System.get_env("BURRITO_TARGET") do
+      nil -> targets
+      target -> Keyword.take(targets, [String.to_atom(target)])
+    end
+  end
+
   defp package do
     [
+      name: "scl_parser",
+      organization: "simple",
       licenses: ["Apache-2.0"],
-      # Placeholder URL
+      files: ~w(lib .formatter.exs mix.exs README* LICENSE*),
       links: %{"GitHub" => "https://github.com/simple-dev/simple-tools"}
     ]
   end
