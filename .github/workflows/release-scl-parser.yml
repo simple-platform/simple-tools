@@ -257,10 +257,13 @@ jobs:
           # Update mix.exs version
           # Assuming version: "x.y.z" format
           sed -i 's/version: "[0-9]*\.[0-9]*\.[0-9]*"/version: "${{ needs.preview.outputs.version }}"/' mix.exs
+
+          # Update package.json version
+          sed -i 's/"version": "[0-9]*\.[0-9]*\.[0-9]*"/"version": "${{ needs.preview.outputs.version }}"/' package.json
           
           # Commit and Push
           git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
           git config --local user.name "Simple DevOps"
-          git add CHANGELOG.md mix.exs
+          git add CHANGELOG.md mix.exs package.json
           git commit -m "chore(scl-parser): release version ${{ needs.preview.outputs.version }} [skip ci]" || true
           git push origin HEAD:main || true
