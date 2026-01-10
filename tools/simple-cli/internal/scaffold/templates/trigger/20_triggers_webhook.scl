@@ -1,0 +1,34 @@
+#-----------------------------------------------------
+# {{.DisplayName}} - Webhook Trigger
+#-----------------------------------------------------
+
+var {{.TriggerNameScl}}_trigger {
+  query ```
+  query get_{{.TriggerNameScl}}_trigger {
+    trigger: dev_simple_system__app_records(
+      where: {
+        application_id: {_eq: "{{.AppID}}"},
+        target_table: {name: {_eq: "trigger"}},
+        logical_key: {_eq: "{{.TriggerNameScl}}"}
+      }
+    ) {
+      id: target_record_id
+    }
+  }
+  ```
+}
+
+set dev_simple_system.trigger, {{.TriggerNameScl}} {
+  key {{.TriggerNameScl}}
+  name "{{.DisplayName}}"
+  description "{{.Description}}"
+}
+
+set dev_simple_system.webhook, {{.TriggerNameScl}} {
+  name "{{.TriggerName}}"
+  display_name "{{.DisplayName}}"
+  description "{{.Description}}"
+  is_public {{.IsPublic}}
+  method {{.Method}}
+  trigger_id `$var('{{.TriggerNameScl}}_trigger') |> $jq('.trigger[0].id')`
+}

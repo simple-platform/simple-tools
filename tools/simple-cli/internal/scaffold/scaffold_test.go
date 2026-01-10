@@ -440,3 +440,93 @@ func (m *mockFileInfoSimple) Mode() os.FileMode  { return 0755 }
 func (m *mockFileInfoSimple) ModTime() time.Time { return time.Time{} }
 func (m *mockFileInfoSimple) IsDir() bool        { return true }
 func (m *mockFileInfoSimple) Sys() any           { return nil }
+
+// Trigger Tests
+
+func TestCreateTriggerStructure_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		mockFS  *mockWriteTrackingFS
+		mockTpl *fsx.MockTemplateFS
+		cfg     TriggerConfig
+		wantErr string
+	}{
+		{
+			name:    "app not exists",
+			mockFS:  &mockWriteTrackingFS{statFn: func(s string) bool { return false }},
+			cfg:     TriggerConfig{AppID: "com.test"},
+			wantErr: "app does not exist",
+		},
+		{
+			name: "records mkdir failed",
+			mockFS: &mockWriteTrackingFS{
+				statFn:   func(s string) bool { return strings.Contains(s, "apps/com.test") },
+				mkdirErr: errors.New("mkdir failed"),
+			},
+			cfg:     TriggerConfig{AppID: "com.test", TriggerType: "timed"},
+			wantErr: "failed to create records directory",
+		},
+		{
+			name:    "unknown trigger type",
+			mockFS:  &mockWriteTrackingFS{statFn: func(s string) bool { return strings.Contains(s, "apps/com.test") }},
+			cfg:     TriggerConfig{AppID: "com.test", TriggerType: "unknown"},
+			wantErr: "unknown trigger type",
+		},
+		{
+			name: "append trigger record failed",
+			mockFS: &mockWriteTrackingFS{
+				statFn:   func(s string) bool { return strings.Contains(s, "apps/com.test") },
+				writeErr: errors.New("write failed"),
+			},
+			mockTpl: &fsx.MockTemplateFS{
+				Files: map[string][]byte{"templates/trigger/20_triggers_timed.scl": []byte("template")},
+			},
+			cfg:     TriggerConfig{AppID: "com.test", TriggerType: "timed"},
+			wantErr: "failed to append trigger record",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.mockTpl == nil {
+				tt.mockTpl = &fsx.MockTemplateFS{}
+			}
+			err := CreateTriggerStructure(tt.mockFS, tt.mockTpl, "/root", tt.cfg)
+			if err == nil {
+				t.Error("Expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Error = %v, want substring %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestAppendTriggerRecord_Errors(t *testing.T) {
+	// Template read error
+	mockTpl := &fsx.MockTemplateFS{ReadFileErr: errors.New("read failed")}
+	mockFS := &mockWriteTrackingFS{}
+	err := appendTriggerRecord(mockFS, mockTpl, "path", "dst", nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to read template") {
+		t.Errorf("Expected read template error, got: %v", err)
+	}
+
+	// Parse error
+	mockTpl = &fsx.MockTemplateFS{Files: map[string][]byte{"path": []byte("{{ .Bad")}}
+	err = appendTriggerRecord(mockFS, mockTpl, "path", "dst", nil)
+	if err == nil || !strings.Contains(err.Error(), "failed to parse template") {
+		t.Errorf("Expected parse template error, got: %v", err)
+	}
+
+	// Read existing file error
+	mockTpl = &fsx.MockTemplateFS{Files: map[string][]byte{"path": []byte("content")}}
+	mockFS = &mockWriteTrackingFS{
+		statFn: func(s string) bool { return true },
+		files:  nil, // This will cause ReadFile to return error in mockWriteTrackingFS
+	}
+	err = appendTriggerRecord(mockFS, mockTpl, "path", "dst", nil)
+	// mockWriteTrackingFS.ReadFile returns "file not found" if files map is nil or key missing
+	if err == nil || !strings.Contains(err.Error(), "failed to read existing") {
+		t.Errorf("Expected read existing error, got: %v", err)
+	}
+}

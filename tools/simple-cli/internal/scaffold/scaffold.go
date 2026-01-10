@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"simple-cli/internal/fsx"
+	"strings"
 	"text/template"
 )
 
@@ -111,6 +112,161 @@ type ActionConfig struct {
 	ExecutionEnv string
 }
 
+// TriggerConfig holds usage configuration for creating a new trigger.
+type TriggerConfig struct {
+	AppID          string
+	TriggerName    string // kebab-case, e.g., "daily-sync"
+	TriggerNameScl string // underscore, e.g., "daily_sync"
+	DisplayName    string
+	Description    string
+	TriggerType    string // "timed", "db", "webhook"
+	ActionName     string // action to link to
+
+	// Timed trigger fields
+	Frequency   string
+	Interval    int
+	Time        string
+	Timezone    string
+	Days        string // JSON array string
+	Weekdays    bool
+	Weekends    bool
+	WeekOfMonth string
+	StartAt     string
+	EndAt       string
+	OnOverlap   string
+
+	// DB event fields
+	TableName  string
+	Operations string // JSON array string
+	Condition  string
+
+	// Webhook fields
+	Method   string
+	IsPublic bool
+}
+
+// CreateTriggerStructure scaffolds a new trigger inside an app.
+//
+// It creates or appends to:
+//   - records/20_triggers.scl
+//   - records/30_trigger_actions.scl
+func CreateTriggerStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string, cfg TriggerConfig) error {
+	appPath := filepath.Join(rootPath, "apps", cfg.AppID)
+
+	// Validate: app must exist
+	if !PathExists(fsys, appPath) {
+		return fmt.Errorf("app does not exist: %s", cfg.AppID)
+	}
+
+	// For validation purposes, we should ideally check if the trigger already exists in the file,
+	// but since we're appending to a shared file, we'll skip complex parsing for now.
+
+	// Determine template file based on type
+	var templateFile string
+	switch cfg.TriggerType {
+	case "timed":
+		templateFile = "templates/trigger/20_triggers_timed.scl"
+	case "db":
+		templateFile = "templates/trigger/20_triggers_db.scl"
+	case "webhook":
+		templateFile = "templates/trigger/20_triggers_webhook.scl"
+	default:
+		return fmt.Errorf("unknown trigger type: %s", cfg.TriggerType)
+	}
+
+	// Prepare data map for templates
+	data := map[string]interface{}{
+		"AppID":          cfg.AppID,
+		"TriggerName":    cfg.TriggerName,
+		"TriggerNameScl": cfg.TriggerNameScl,
+		"DisplayName":    cfg.DisplayName,
+		"Description":    cfg.Description,
+		"TriggerType":    cfg.TriggerType,
+		"ActionName":     cfg.ActionName,
+		// Timed
+		"Frequency":   cfg.Frequency,
+		"Interval":    cfg.Interval,
+		"Time":        cfg.Time,
+		"Timezone":    cfg.Timezone,
+		"Days":        cfg.Days,
+		"Weekdays":    cfg.Weekdays,
+		"Weekends":    cfg.Weekends,
+		"WeekOfMonth": cfg.WeekOfMonth,
+		"StartAt":     cfg.StartAt,
+		"EndAt":       cfg.EndAt,
+		"OnOverlap":   cfg.OnOverlap,
+		// DB
+		"TableName":  cfg.TableName,
+		"Operations": cfg.Operations,
+		"Condition":  cfg.Condition,
+		// Webhook
+		"Method":   cfg.Method,
+		"IsPublic": cfg.IsPublic,
+	}
+
+	recordsPath := filepath.Join(appPath, "records")
+	if err := fsys.MkdirAll(recordsPath, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create records directory: %w", err)
+	}
+
+	// 1. Append to 20_triggers.scl
+	triggersFile := filepath.Join(recordsPath, "20_triggers.scl")
+	if err := appendTriggerRecord(fsys, tplFS, templateFile, triggersFile, data); err != nil {
+		return fmt.Errorf("failed to append trigger record: %w", err)
+	}
+
+	// 2. Append to 30_trigger_actions.scl
+	triggerActionsFile := filepath.Join(recordsPath, "30_trigger_actions.scl")
+	if err := appendTriggerRecord(fsys, tplFS, "templates/trigger/30_trigger_actions.scl", triggerActionsFile, data); err != nil {
+		return fmt.Errorf("failed to append trigger action link: %w", err)
+	}
+
+	return nil
+}
+
+// appendTriggerRecord appends a record to a destination file using the specified template.
+func appendTriggerRecord(fsys fsx.FileSystem, tplFS fsx.TemplateFS, templatePath, dst string, data interface{}) error {
+	// Read the template
+	content, err := tplFS.ReadFile(templatePath)
+	if err != nil {
+		return fmt.Errorf("failed to read template %s: %w", templatePath, err)
+	}
+
+	tmpl, err := template.New(filepath.Base(templatePath)).Parse(string(content))
+	if err != nil {
+		return fmt.Errorf("failed to parse template %s: %w", templatePath, err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute template %s: %w", templatePath, err)
+	}
+
+	// Check if file exists and append, otherwise create
+	var existingContent []byte
+	if PathExists(fsys, dst) {
+		existingContent, err = fsys.ReadFile(dst)
+		if err != nil {
+			return fmt.Errorf("failed to read existing %s: %w", dst, err)
+		}
+	}
+
+	var finalContent []byte
+	if len(existingContent) > 0 {
+		// Append with newline separator
+		finalContent = append(existingContent, '\n')
+		finalContent = append(finalContent, buf.Bytes()...)
+	} else {
+		finalContent = buf.Bytes()
+	}
+
+	if err := fsys.WriteFile(dst, finalContent, fsx.FilePerm); err != nil {
+		return fmt.Errorf("failed to write %s: %w", dst, err)
+	}
+
+	return nil
+}
+
 // CreateActionStructure scaffolds a new action inside an app's actions/ directory.
 //
 // It creates:
@@ -148,12 +304,14 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 	}
 
 	// Template data
+	// ActionNameScl replaces hyphens with underscores for SCL identifiers
 	data := map[string]string{
-		"ActionName":   cfg.ActionName,
-		"DisplayName":  cfg.DisplayName,
-		"Description":  cfg.Description,
-		"Scope":        cfg.Scope,
-		"ExecutionEnv": cfg.ExecutionEnv,
+		"ActionName":    cfg.ActionName,
+		"ActionNameScl": strings.ReplaceAll(cfg.ActionName, "-", "_"),
+		"DisplayName":   cfg.DisplayName,
+		"Description":   cfg.Description,
+		"Scope":         cfg.Scope,
+		"ExecutionEnv":  cfg.ExecutionEnv,
 	}
 
 	// Render action files

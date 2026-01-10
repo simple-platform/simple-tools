@@ -1,4 +1,4 @@
-set logic, {{.ActionName}} {
+set dev_simple_system.logic, {{.ActionNameScl}} {
   name "{{.ActionName}}"
   display_name "{{.DisplayName}}"
   description "{{.Description}}"
