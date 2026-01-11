@@ -1,4 +1,4 @@
-name: Build and Release SCL Parser
+name: Release SCL Parser Library
 
 on:
   pull_request:
@@ -37,8 +37,8 @@ jobs:
         uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
         with:
           tag_prefix: v
-          major_pattern: '/(\(scl-parser\).*!)|BREAKING CHANGE/'
-          minor_pattern: '/feat\(scl-parser\):/'
+          major_pattern: '/(\\(scl-parser\\).*!)|BREAKING CHANGE/'
+          minor_pattern: '/feat\\(scl-parser\\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: packages/scl_parser
           namespace: scl-parser
@@ -61,8 +61,8 @@ jobs:
           # Organize commits by type
           FEATURES=$(echo "$COMMITS" | grep "feat(scl-parser):" || true)
           FIXES=$(echo "$COMMITS" | grep "fix(scl-parser):" || true)
-          BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\(scl-parser\)!:|BREAKING CHANGE" || true)
-          OTHER=$(echo "$COMMITS" | grep -v -E "feat\(scl-parser\):|fix\(scl-parser\):" || true)
+          BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\\(scl-parser\\)!:|BREAKING CHANGE" || true)
+          OTHER=$(echo "$COMMITS" | grep -v -E "feat\\(scl-parser\\):|fix\\(scl-parser\\):" || true)
 
           # Build changelog
           echo "## SCL Parser ${{ steps.version.outputs.version }}" > changelog.md
@@ -132,57 +132,9 @@ jobs:
           cd packages/scl_parser
           mix test
 
-  build_binaries:
-    name: Build Binary (${{ matrix.target }})
-    needs: preview
-    if: needs.preview.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [macos, linux, windows]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      
-      - name: Set up Elixir
-        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
-        with:
-          elixir-version: '1.18.1'
-          otp-version: '27.2'
-
-      - name: Install System Dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xz-utils
-
-      - name: Set up Zig
-        uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.15.2
-      
-      - name: Install Dependencies
-        run: |
-          cd packages/scl_parser
-          mix deps.get
-          
-      - name: Build Release
-        env:
-          BURRITO_TARGET: ${{ matrix.target }}
-          MIX_ENV: prod
-        run: |
-          cd packages/scl_parser
-          mix release --overwrite
-          
-      - name: Upload Artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: binary-${{ matrix.target }}
-          path: packages/scl_parser/burrito_out/**
-          retention-days: 1
-
   publish_hex:
     name: Publish to Hex
-    needs: [test, build_binaries, preview]
+    needs: [test, preview]
     if: needs.preview.outputs.changed == 'true' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     environment: production
@@ -210,7 +162,7 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [test, build_binaries, preview]
+    needs: [test, preview]
     if: needs.preview.outputs.changed == 'true' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     permissions:
@@ -222,18 +174,10 @@ jobs:
         with:
           fetch-depth: 0
           
-      - name: Download Artifacts
+      - name: Download Changelog
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          path: artifacts
-          
-      - name: Consolidate Artifacts
-        run: |
-          mkdir -p releases
-          find artifacts -type f -name "binary-*" -exec cp {} releases/ \;
-          # Move changelog to root for easy access
-          find artifacts -name "changelog.md" -exec cp {} . \;
-          ls -l releases/
+          name: changelog
 
       - name: Create Release
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
@@ -241,7 +185,6 @@ jobs:
           tag_name: ${{ needs.preview.outputs.version_tag }}
           name: SCL Parser ${{ needs.preview.outputs.version }}
           body_path: changelog.md
-          files: releases/*
           draft: false
           prerelease: false
 
@@ -257,21 +200,17 @@ jobs:
             echo "" >> CHANGELOG.md
           fi
           
-          # Prepend new changelog (../../changelog.md contains the snippet from preview job)
-          cat ../../changelog.md CHANGELOG.md > CHANGELOG.tmp
+          # Prepend new changelog
+          cat ../changelog.md CHANGELOG.md > CHANGELOG.tmp
           mv CHANGELOG.tmp CHANGELOG.md
           
           # Update mix.exs version
-          # Assuming version: "x.y.z" format
           sed -i 's/version: "[0-9]*\.[0-9]*\.[0-9]*"/version: "${{ needs.preview.outputs.version }}"/' mix.exs
-
-          # Update package.json version
-          sed -i 's/"version": "[0-9]*\.[0-9]*\.[0-9]*"/"version": "${{ needs.preview.outputs.version }}"/' package.json
           
           # Commit and Push
           git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
           git config --local user.name "Simple DevOps"
-          git add CHANGELOG.md mix.exs package.json
+          git add CHANGELOG.md mix.exs
           
           # Only commit and push if there are staged changes
           if git diff --cached --quiet; then
