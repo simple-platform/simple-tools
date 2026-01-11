@@ -35,7 +35,8 @@ defmodule SCLParser.MixProject do
       scl_parser: [
         steps: [:assemble, &Burrito.wrap/1, &rename_builds/1],
         burrito: [
-          targets: get_targets()
+          targets: get_targets(),
+          debug: false
         ]
       ]
     ]

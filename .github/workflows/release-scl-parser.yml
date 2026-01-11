@@ -168,6 +168,7 @@ jobs:
       - name: Build Release
         env:
           BURRITO_TARGET: ${{ matrix.target }}
+          MIX_ENV: prod
         run: |
           cd packages/scl_parser
           mix release --overwrite
