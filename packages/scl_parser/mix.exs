@@ -31,7 +31,6 @@ defmodule SCLParser.MixProject do
   defp package do
     [
       name: "scl_parser",
-      organization: "simple",
       licenses: ["Apache-2.0"],
       files: ~w(lib .formatter.exs mix.exs README* LICENSE*),
       links: %{"GitHub" => "https://github.com/simple-dev/simple-tools"}
@@ -42,7 +41,8 @@ defmodule SCLParser.MixProject do
   defp deps do
     [
       {:credo, "1.7.15", only: [:dev, :test], runtime: false},
-      {:excoveralls, "0.18.5", only: :test}
+      {:excoveralls, "0.18.5", only: :test},
+      {:ex_doc, ">= 0.0.0", only: :dev, runtime: false}
     ]
   end
 end
