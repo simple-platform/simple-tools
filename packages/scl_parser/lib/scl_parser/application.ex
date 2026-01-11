@@ -4,13 +4,15 @@ defmodule SCLParser.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      # Starts a worker by calling: SCLParser.Worker.start_link(arg)
-      # {SCLParser.Worker, arg}
-    ]
+    # Get CLI args from Burrito wrapper
+    args = Burrito.Util.Args.argv()
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
+    # Run the CLI with the args
+    SCLParser.CLI.main(args)
+
+    # The CLI calls System.halt, so we won't reach here in normal operation
+    # But we need to return a valid supervisor for Application behavior
+    children = []
     opts = [strategy: :one_for_one, name: SCLParser.Supervisor]
     Supervisor.start_link(children, opts)
   end
