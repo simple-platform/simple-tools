@@ -188,8 +188,16 @@ jobs:
           draft: false
           prerelease: false
 
-      - name: Update Repository
+      - name: Create Release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VERSION="${{ needs.preview.outputs.version }}"
+          BRANCH="release/scl-parser-v${VERSION}"
+          
+          # Create and checkout new branch
+          git checkout -b "$BRANCH"
+          
           cd packages/scl_parser
           
           # Update CHANGELOG.md
@@ -201,21 +209,42 @@ jobs:
           fi
           
           # Prepend new changelog
-          cat ../changelog.md CHANGELOG.md > CHANGELOG.tmp
+          cat $GITHUB_WORKSPACE/changelog.md CHANGELOG.md > CHANGELOG.tmp
           mv CHANGELOG.tmp CHANGELOG.md
           
           # Update mix.exs version
-          sed -i 's/version: "[0-9]*\.[0-9]*\.[0-9]*"/version: "${{ needs.preview.outputs.version }}"/' mix.exs
+          sed -i 's/version: "[0-9]*\.[0-9]*\.[0-9]*"/version: "'"${VERSION}"'"/' mix.exs
           
-          # Commit and Push
+          # Commit changes
           git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
           git config --local user.name "Simple DevOps"
           git add CHANGELOG.md mix.exs
           
-          # Only commit and push if there are staged changes
+          # Only create PR if there are staged changes
           if git diff --cached --quiet; then
-            echo "No changes to commit; skipping commit and push."
+            echo "No changes to commit; skipping PR creation."
           else
-            git commit -m "chore(scl-parser): release version ${{ needs.preview.outputs.version }} [skip ci]"
-            git push origin HEAD:main
+            git commit -m "chore(scl-parser): release version ${VERSION} [skip ci]"
+            git push origin "$BRANCH"
+            
+            # Create PR body file
+            cat > /tmp/pr-body.md << 'EOF'
+          ## Automated Release PR
+
+          This PR was automatically created by the release workflow.
+
+          ### Changes
+          - Updated `mix.exs` version
+          - Updated `CHANGELOG.md` with release notes
+
+          ### Note
+          This PR contains `[skip ci]` to prevent recursive workflow triggers.
+          EOF
+            
+            # Create PR
+            gh pr create \
+              --title "chore(scl-parser): release version ${VERSION} [skip ci]" \
+              --body-file /tmp/pr-body.md \
+              --base main \
+              --head "$BRANCH"
           fi
