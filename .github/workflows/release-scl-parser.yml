@@ -201,7 +201,7 @@ jobs:
           fi
           
           # Prepend new changelog
-          cat ../changelog.md CHANGELOG.md > CHANGELOG.tmp
+          cat $GITHUB_WORKSPACE/changelog.md CHANGELOG.md > CHANGELOG.tmp
           mv CHANGELOG.tmp CHANGELOG.md
           
           # Update mix.exs version
