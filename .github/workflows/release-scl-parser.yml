@@ -4,9 +4,15 @@ on:
   pull_request:
     branches:
       - main
+    paths:
+      - 'packages/scl_parser/**'
+      - '.github/workflows/release-scl-parser.yml'
   push:
     branches:
       - main
+    paths:
+      - 'packages/scl_parser/**'
+      - '.github/workflows/release-scl-parser.yml'
   workflow_dispatch:
 
 permissions:
