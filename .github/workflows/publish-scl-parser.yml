@@ -21,9 +21,9 @@ jobs:
     steps:
       - name: Check Commit Message
         id: check
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          COMMIT_MSG="${{ github.event.head_commit.message }}"
-          
           # Check if this is a release commit from our workflow
           if echo "$COMMIT_MSG" | grep -qE "^chore\(scl-parser\): release version [0-9]+\.[0-9]+\.[0-9]+"; then
             VERSION=$(echo "$COMMIT_MSG" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
