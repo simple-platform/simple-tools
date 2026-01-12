@@ -40,7 +40,6 @@
     "pre-commit": "pnpm lint-staged"
   },
   "lint-staged": {
-    "*.{json,ts,js,yml,yaml}": "eslint --fix",
-    "*.go": "golangci-lint run"
+    "*": "pnpm lint"
   }
 }
