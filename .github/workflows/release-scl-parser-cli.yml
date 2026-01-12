@@ -63,7 +63,7 @@ jobs:
       - name: Compile
         run: |
           cd tools/scl_parser_cli
-          mix compile --warnings-as-errors
+          MIX_ENV=prod mix compile --warnings-as-errors
 
   # Binary builds - only runs on manual trigger for releases
   build_binaries:
