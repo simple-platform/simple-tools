@@ -4,16 +4,16 @@ defmodule SCLParserCLI.Application do
 
   @impl true
   def start(_type, _args) do
-    # Only run CLI if we're in a Burrito release (not during tests or IEx)
-    if function_exported?(Burrito.Util.Args, :argv, 0) do
+    # Only run CLI in a compiled prod release (not during tests, dev, or iex)
+    # Burrito sets __BURRITO_IS_PROD env var during prod builds
+    if Mix.env() == :prod and Code.ensure_loaded?(Burrito.Util.Args) do
       case Burrito.Util.Args.argv() do
-        [] ->
-          # No args from Burrito means we're likely not in a release context
-          :ok
-
-        [_ | _] = args ->
-          # We have args from Burrito, run the CLI
+        # Empty or nil means not running from Burrito wrapper
+        args when is_list(args) and args != [] ->
           SCLParserCLI.main(args)
+
+        _ ->
+          :ok
       end
     end
 
@@ -21,5 +21,8 @@ defmodule SCLParserCLI.Application do
     children = []
     opts = [strategy: :one_for_one, name: SCLParserCLI.Supervisor]
     Supervisor.start_link(children, opts)
+  rescue
+    # If anything goes wrong (e.g., Burrito not available), just start normally
+    _ -> Supervisor.start_link([], strategy: :one_for_one, name: SCLParserCLI.Supervisor)
   end
 end

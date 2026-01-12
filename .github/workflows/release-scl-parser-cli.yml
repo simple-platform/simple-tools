@@ -42,8 +42,34 @@ jobs:
           cd tools/scl_parser_cli
           mix test
 
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd tools/scl_parser_cli
+          mix deps.get
+          
+      - name: Compile
+        run: |
+          cd tools/scl_parser_cli
+          mix compile --warnings-as-errors
+
+  # Binary builds - only runs on manual trigger for releases
   build_binaries:
     name: Build Binary (${{ matrix.target }})
+    needs: [test, build]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_release == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -87,12 +113,12 @@ jobs:
         with:
           name: binary-${{ matrix.target }}
           path: tools/scl_parser_cli/burrito_out/*
-          retention-days: 7
+          retention-days: 30
 
   # Release PR creation - only runs on manual trigger
   create_release_pr:
     name: Create Release PR
-    needs: [test, build_binaries]
+    needs: [test, build, build_binaries]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_release == 'true'
     runs-on: ubuntu-latest
     permissions:
