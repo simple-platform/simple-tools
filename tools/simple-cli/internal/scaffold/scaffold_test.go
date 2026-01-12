@@ -464,6 +464,10 @@ func (m *mockWriteTrackingFS) ReadFile(name string) ([]byte, error) {
 	return nil, errors.New("file not found")
 }
 
+func (m *mockWriteTrackingFS) ReadDir(name string) ([]os.DirEntry, error) {
+	return []os.DirEntry{}, nil
+}
+
 type mockFileInfoSimple struct{}
 
 func (m *mockFileInfoSimple) Name() string       { return "mock" }

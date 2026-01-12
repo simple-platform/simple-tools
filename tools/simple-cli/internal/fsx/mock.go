@@ -42,6 +42,10 @@ func (m *MockFileSystem) ReadFile(name string) ([]byte, error) {
 	return nil, os.ErrNotExist
 }
 
+func (m *MockFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
+	return []os.DirEntry{}, nil
+}
+
 // mockFileInfo implements fs.FileInfo
 type mockFileInfo struct{}
 
