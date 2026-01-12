@@ -110,6 +110,7 @@
     "nixpkgs",
     "paulhatch",
     "pflag",
+    "PREOF",
     "rebar",
     "rparen",
     "rwxr",
