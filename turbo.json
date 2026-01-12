@@ -2,7 +2,7 @@
   "$schema": "https://turborepo.com/schema.json",
   "tasks": {
     "build": {
-      "outputs": ["bin/**", "burrito_out/**"]
+      "outputs": ["bin/**", "_build/**", "burrito_out/**"]
     },
     "lint": {},
     "test": {},
