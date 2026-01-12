@@ -74,7 +74,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [macos, linux, windows]
+        target: [macos, macos_silicon, linux, linux_arm, windows]
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -290,8 +290,10 @@ jobs:
             echo ""
             echo "### Build Artifacts"
             echo "The following binaries were built and are ready for release:"
-            echo "- \`scl-parser-cli-macos\` (macOS ARM64)"
+            echo "- \`scl-parser-cli-macos\` (macOS x86_64)"
+            echo "- \`scl-parser-cli-macos-silicon\` (macOS ARM64)"
             echo "- \`scl-parser-cli-linux\` (Linux x86_64)"
+            echo "- \`scl-parser-cli-linux-arm\` (Linux ARM64)"
             echo "- \`scl-parser-cli-windows.exe\` (Windows x86_64)"
             echo ""
             echo "---"
