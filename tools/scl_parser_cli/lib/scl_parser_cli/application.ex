@@ -7,7 +7,9 @@ defmodule SCLParserCLI.Application do
     # Get mode from Application env (defined in mix.exs, overridden by config/test.exs)
     mode = Application.get_env(:scl_parser_cli, :mode)
 
-    if mode == :cli do
+    # Inverted Logic: Default to CLI execution unless explicitly in :test mode.
+    # This ensures that releases (where config might be missing/nil) ALWAYS run.
+    if mode != :test do
       # Robustly fetch args
       args =
         if Code.ensure_loaded?(Burrito.Util.Args) do
