@@ -76,9 +76,9 @@ jobs:
       matrix:
         include:
           - target: macos
-            os: macos-13
+            os: macos-latest-intel
           - target: macos_silicon
-            os: macos-14
+            os: macos-latest
           - target: linux
             os: ubuntu-latest
           - target: linux_arm
