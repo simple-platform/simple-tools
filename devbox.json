@@ -11,7 +11,8 @@
     "elixir":                   "1.18.1",
     "beam27Packages.elixir-ls": "0.30.0",
     "zig":                      "0.15.2",
-    "p7zip":                    "17.05"
+    "p7zip":                    "17.05",
+    "act":                      "0.2.83"
   },
   "env": {
     "COREPACK_INTEGRITY_KEYS": "0",

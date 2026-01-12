@@ -23,6 +23,7 @@ defmodule SCLParserCLI.MixProject do
   def application do
     [
       extra_applications: [:logger],
+      env: [mode: :cli],
       mod: {SCLParserCLI.Application, []}
     ]
   end
