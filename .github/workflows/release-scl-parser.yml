@@ -182,8 +182,18 @@ jobs:
             echo "" >> CHANGELOG.md
           fi
           
-          # Prepend new changelog section to existing CHANGELOG.md
-          cat /tmp/changelog_section.md CHANGELOG.md > CHANGELOG.tmp
+          # Insert new changelog section after the header block
+          # The header is: # Changelog + blank line + description + blank line
+          # We want to insert after that, before any ## sections
+          awk -v section="$(cat /tmp/changelog_section.md)" '
+            /^## / && !inserted {
+              print section
+              print ""
+              inserted=1
+            }
+            { print }
+            END { if (!inserted) print section }
+          ' CHANGELOG.md > CHANGELOG.tmp
           mv CHANGELOG.tmp CHANGELOG.md
           
           # Update mix.exs version
@@ -198,7 +208,7 @@ jobs:
             exit 0
           fi
           
-          git commit -m "chore(scl-parser): release version ${VERSION} [skip ci]"
+          git commit -m "chore(scl-parser): release version ${VERSION}"
           git push origin "$BRANCH"
           
           # Build PR body with version info and full changelog
