@@ -18,7 +18,7 @@ defmodule SCLParserCLI.Application do
       SCLParserCLI.main(args)
     end
 
-    # Return a minimal supervisor (won't reach here in prod due to System.halt)
+    # Return a minimal supervisor (in prod, this is typically not reached if the CLI terminates the VM)
     children = []
     opts = [strategy: :one_for_one, name: SCLParserCLI.Supervisor]
     Supervisor.start_link(children, opts)
