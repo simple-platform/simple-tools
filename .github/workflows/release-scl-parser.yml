@@ -118,7 +118,7 @@ jobs:
           FEATURES=$(echo "$COMMITS" | grep "feat(scl-parser):" || true)
           FIXES=$(echo "$COMMITS" | grep "fix(scl-parser):" || true)
           BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\(scl-parser\)!:|BREAKING CHANGE" || true)
-          OTHER=$(echo "$COMMITS" | grep -v -E "feat\(scl-parser\):|fix\(scl-parser\):" | grep -v "^$" || true)
+          OTHER=$(echo "$COMMITS" | grep -v -E "feat\(scl-parser\):|fix\(scl-parser\):|ci\(scl-parser\):" | grep -v "^$" || true)
 
           # Build changelog content - store in /tmp for reuse
           {
