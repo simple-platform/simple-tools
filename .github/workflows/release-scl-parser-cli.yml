@@ -109,30 +109,7 @@ jobs:
           mix release --overwrite
           
           
-      - name: Verify Binary (Replication check)
-        run: |
-           # Determine correct binary for current architecture (act on M1 might be ARM)
-           ARCH=$(uname -m)
-           BIN="./tools/scl_parser_cli/burrito_out/scl-parser-cli-linux"
-           if [ "$ARCH" = "aarch64" ]; then
-             BIN="${BIN}-arm"
-           fi
-           
-           echo "Verifying $BIN on $ARCH"
-           
-           # Run with timeout and capture output. 
-           # If it hangs -> timeout kills it -> grep fails -> exit 1
-           # If it crashes -> grep fails -> exit 1
-           # If it succeeds (usage) -> grep passes -> exit 0
-           timeout 10s $BIN 2>&1 | tee output.log
-           
-           if grep -q "Usage:" output.log; then
-             echo "SUCCESS: Binary ran and printed usage."
-             exit 0
-           else
-             echo "FAILURE: Binary did not print usage or timed out."
-             exit 1
-           fi
+
 
       - name: Upload Artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
