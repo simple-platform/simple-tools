@@ -40,8 +40,10 @@ defmodule SCLParserCLI.MixProject do
 
   defp get_targets do
     targets = [
-      macos: [os: :darwin, cpu: :aarch64],
+      macos: [os: :darwin, cpu: :x86_64],
+      macos_silicon: [os: :darwin, cpu: :aarch64],
       linux: [os: :linux, cpu: :x86_64],
+      linux_arm: [os: :linux, cpu: :aarch64],
       windows: [os: :windows, cpu: :x86_64]
     ]
 
