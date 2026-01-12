@@ -70,11 +70,21 @@ jobs:
     name: Build Binary (${{ matrix.target }})
     needs: [test, build]
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_release == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        target: [macos, macos_silicon, linux, linux_arm, windows]
+        include:
+          - target: macos
+            os: macos-13
+          - target: macos_silicon
+            os: macos-14
+          - target: linux
+            os: ubuntu-latest
+          - target: linux_arm
+            os: ubuntu-latest
+          - target: windows
+            os: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -85,7 +95,8 @@ jobs:
           elixir-version: '1.18.1'
           otp-version: '27.2'
 
-      - name: Install System Dependencies
+      - name: Install System Dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y xz-utils
