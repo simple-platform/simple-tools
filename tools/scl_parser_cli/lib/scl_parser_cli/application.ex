@@ -4,26 +4,29 @@ defmodule SCLParserCLI.Application do
 
   @impl true
   def start(_type, _args) do
-    # Get mode from Application env (defined in mix.exs, overridden by config/test.exs)
-    mode = Application.get_env(:scl_parser_cli, :mode)
+    # Runtime Check for Test Environment
+    # If ExUnit is loaded, we are testing. Start Supervisor.
+    # If ExUnit is NOT loaded, we are a Release. Run Script & Halt.
+    if Code.ensure_loaded?(ExUnit) do
+      children = []
+      opts = [strategy: :one_for_one, name: SCLParserCLI.Supervisor]
+      Supervisor.start_link(children, opts)
+    else
+      # Burrito CLI Mode
 
-    # Inverted Logic: Default to CLI execution unless explicitly in :test mode.
-    # This ensures that releases (where config might be missing/nil) ALWAYS run.
-    if mode != :test do
-      # Robustly fetch args
-      args =
+      # 1. Fetch Arguments safely
+      argv =
         if Code.ensure_loaded?(Burrito.Util.Args) do
-          Burrito.Util.Args.argv()
+          Burrito.Util.Args.get_arguments()
         else
           :init.get_plain_arguments() |> Enum.map(&List.to_string/1)
         end
 
-      SCLParserCLI.main(args)
-    end
+      # 2. Execute Main Logic
+      SCLParserCLI.main(argv)
 
-    # Return supervisor
-    children = []
-    opts = [strategy: :one_for_one, name: SCLParserCLI.Supervisor]
-    Supervisor.start_link(children, opts)
+      # 3. Explicit Halt (if main hasn't already halted)
+      System.halt(0)
+    end
   end
 end
