@@ -1,0 +1,314 @@
+name: SCL Parser CLI CI
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'tools/scl_parser_cli/**'
+      - '.github/workflows/release-scl-parser-cli.yml'
+  workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: 'Create a release PR with version bump and changelog'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd tools/scl_parser_cli
+          mix deps.get
+          
+      - name: Run Tests
+        run: |
+          cd tools/scl_parser_cli
+          mix test --no-start
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd tools/scl_parser_cli
+          mix deps.get
+          
+      - name: Compile
+        run: |
+          cd tools/scl_parser_cli
+          MIX_ENV=prod mix compile --warnings-as-errors
+
+  # Binary builds - only runs on manual trigger for releases
+  build_binaries:
+    name: Build Binary (${{ matrix.target }})
+    needs: [test, build]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [macos, macos_silicon, linux, linux_arm, windows]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+      
+      - name: Install Dependencies
+        run: |
+          cd tools/scl_parser_cli
+          mix deps.get
+          
+      - name: Build Release
+        env:
+          BURRITO_TARGET: ${{ matrix.target }}
+          MIX_ENV: prod
+        run: |
+          cd tools/scl_parser_cli
+          mix release --overwrite
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: tools/scl_parser_cli/burrito_out/*
+          retention-days: 30
+
+  # Release PR creation - only runs on manual trigger
+  create_release_pr:
+    name: Create Release PR
+    needs: [test, build, build_binaries]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Version
+        id: version
+        uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
+        with:
+          tag_prefix: v
+          major_pattern: '/(\\(scl-parser-cli\\).*!)|BREAKING CHANGE/'
+          minor_pattern: '/feat\\(scl-parser-cli\\):/'
+          version_format: '${major}.${minor}.${patch}'
+          change_path: tools/scl_parser_cli
+          namespace: scl-parser-cli
+          bump_each_commit: false
+          search_commit_body: true
+          enable_prerelease_mode: false
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Generate Changelog
+        id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_TAG: ${{ steps.version.outputs.version_tag }}
+        run: |
+          # Get the previous tag for this package
+          PREV_TAG=$(git tag -l "v*-scl-parser-cli" --sort=-version:refname | head -n 1)
+
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"* %s (%h)" --grep="(scl-parser-cli)" -- tools/scl_parser_cli)
+          else
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --grep="(scl-parser-cli)" -- tools/scl_parser_cli)
+          fi
+
+          # Organize commits by type
+          FEATURES=$(echo "$COMMITS" | grep "feat(scl-parser-cli):" || true)
+          FIXES=$(echo "$COMMITS" | grep "fix(scl-parser-cli):" || true)
+          BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\(scl-parser-cli\)!:|BREAKING CHANGE" || true)
+          OTHER=$(echo "$COMMITS" | grep -v -E "feat\(scl-parser-cli\):|fix\(scl-parser-cli\):" | grep -v "^$" || true)
+
+          # Build changelog content
+          {
+            echo "## SCL Parser CLI ${VERSION}"
+            echo ""
+            
+            if [ -n "$BREAKING" ]; then
+              echo "### ⚠️ Breaking Changes"
+              echo "$BREAKING"
+              echo ""
+            fi
+
+            if [ -n "$FEATURES" ]; then
+              echo "### ✨ Features"
+              echo "$FEATURES"
+              echo ""
+            fi
+
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+            
+            if [ -n "$OTHER" ]; then
+              echo "### 📝 Other Changes"
+              echo "$OTHER"
+              echo ""
+            fi
+          } > /tmp/changelog_section.md
+
+          # Output to Step Summary
+          echo "## 🚀 Release Version: ${VERSION}" >> $GITHUB_STEP_SUMMARY
+          echo "Tag: ${VERSION_TAG}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Changelog Preview" >> $GITHUB_STEP_SUMMARY
+          cat /tmp/changelog_section.md >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Artifacts" >> $GITHUB_STEP_SUMMARY
+          ls -la artifacts/ >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload Binaries for Publish Workflow
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-binaries-${{ steps.version.outputs.version }}
+          path: artifacts/*
+          retention-days: 30
+
+      - name: Create Release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_TAG: ${{ steps.version.outputs.version_tag }}
+        run: |
+          BRANCH="release/scl-parser-cli-v${VERSION}"
+          
+          # Configure git
+          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
+          git config --local user.name "Simple DevOps"
+          
+          # Create and checkout new branch
+          git checkout -b "$BRANCH"
+          
+          cd tools/scl_parser_cli
+          
+          # Create CHANGELOG.md if it doesn't exist
+          if [ ! -f CHANGELOG.md ]; then
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "All notable changes to SCL Parser CLI will be documented in this file." >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+          fi
+          
+          # Insert new changelog section
+          awk -v section="$(cat /tmp/changelog_section.md)" '
+            /^## / && !inserted {
+              print section
+              print ""
+              inserted=1
+            }
+            { print }
+            END { if (!inserted) print section }
+          ' CHANGELOG.md > CHANGELOG.tmp
+          mv CHANGELOG.tmp CHANGELOG.md
+          
+          # Update mix.exs version
+          sed -i "s/version: \"[0-9]*\.[0-9]*\.[0-9]*\"/version: \"${VERSION}\"/" mix.exs
+          
+          # Update package.json version
+          sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${VERSION}\"/" package.json
+          
+          # Stage changes
+          git add CHANGELOG.md mix.exs package.json
+          
+          # Only create PR if there are staged changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit; skipping PR creation."
+            exit 0
+          fi
+          
+          git commit -m "chore(scl-parser-cli): release version ${VERSION}"
+          git push origin "$BRANCH"
+          
+          # Build PR body
+          {
+            echo "## 🚀 Release SCL Parser CLI v${VERSION}"
+            echo ""
+            echo "This PR was automatically created by the release workflow."
+            echo ""
+            echo "### Version Info"
+            echo "- **New Version**: ${VERSION}"
+            echo "- **Tag**: ${VERSION_TAG}"
+            echo ""
+            echo "### Changelog"
+            echo ""
+            cat /tmp/changelog_section.md
+            echo ""
+            echo "### Build Artifacts"
+            echo "The following binaries were built and are ready for release:"
+            echo "- \`scl-parser-cli-macos\` (macOS x86_64)"
+            echo "- \`scl-parser-cli-macos-silicon\` (macOS ARM64)"
+            echo "- \`scl-parser-cli-linux\` (Linux x86_64)"
+            echo "- \`scl-parser-cli-linux-arm\` (Linux ARM64)"
+            echo "- \`scl-parser-cli-windows.exe\` (Windows x86_64)"
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Files Changed"
+            echo "- \`mix.exs\` - version bump to ${VERSION}"
+            echo "- \`package.json\` - version bump to ${VERSION}"
+            echo "- \`CHANGELOG.md\` - release notes added"
+            echo ""
+            echo "> **Note**: Merging this PR will trigger the publish workflow to create the tag and GitHub release with binaries."
+          } > /tmp/pr-body.md
+          
+          # Create PR
+          gh pr create \
+            --title "chore(scl-parser-cli): release version ${VERSION}" \
+            --body-file /tmp/pr-body.md \
+            --base main \
+            --head "$BRANCH"

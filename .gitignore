@@ -3,6 +3,7 @@
 .turbo
 .nix-*
 *.out
+*.log
 _build
 tmp
 simple
