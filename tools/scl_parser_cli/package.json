@@ -1,6 +1,6 @@
 {
   "name": "@simple/scl-parser-cli",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "lint": "mix credo",

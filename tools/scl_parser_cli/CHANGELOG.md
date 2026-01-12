@@ -1,0 +1,14 @@
+# Changelog
+
+All notable changes to SCL Parser CLI will be documented in this file.
+
+## SCL Parser CLI 1.0.0
+
+### ✨ Features
+* feat(scl-parser-cli): add cli for scl parser (#26) (f1de010)
+
+### 📝 Other Changes
+* chore(scl-parser-cli): add proper debug statements to the cli (#34) (b68fdf8)
+* refactor(scl-parser-cli): resolve binary execution issue (#32) (6487f5b)
+* refactor(scl-parser-cli): resolve cli execution env issues (#30) (0dbece8)
+* refactor(scl-parser-cli): resolve binary execution issues (#28) (88d274e)
