@@ -1,0 +1,128 @@
+name: Publish SCL Parser CLI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/scl_parser_cli/mix.exs'
+      - 'tools/scl_parser_cli/CHANGELOG.md'
+
+permissions:
+  contents: read
+
+jobs:
+  check_release:
+    name: Check if Release Commit
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Check Commit Message
+        id: check
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          if echo "$COMMIT_MSG" | grep -qE "^chore\(scl-parser-cli\): release version [0-9]+\.[0-9]+\.[0-9]+$"; then
+            VERSION=$(echo "$COMMIT_MSG" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            echo "✅ This is a release commit for version $VERSION"
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Not a release commit, skipping"
+          fi
+
+  publish:
+    name: Publish Release
+    needs: check_release
+    if: needs.check_release.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils
+
+      - name: Set up Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.15.2
+      
+      - name: Install Dependencies
+        run: |
+          cd tools/scl_parser_cli
+          mix deps.get
+
+      - name: Build All Binaries
+        env:
+          MIX_ENV: prod
+        run: |
+          cd tools/scl_parser_cli
+          
+          # Build macOS
+          BURRITO_TARGET=macos mix release --overwrite
+          
+          # Build Linux  
+          BURRITO_TARGET=linux mix release --overwrite
+          
+          # Build Windows
+          BURRITO_TARGET=windows mix release --overwrite
+          
+          ls -la burrito_out/
+
+      - name: Extract Changelog Section
+        id: changelog
+        env:
+          VERSION: ${{ needs.check_release.outputs.version }}
+        run: |
+          cd tools/scl_parser_cli
+          
+          # Extract the changelog section for this version
+          awk -v ver="## SCL Parser CLI ${VERSION}" '
+            $0 ~ ver { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release_notes.md
+          
+          echo "Release notes:"
+          cat /tmp/release_notes.md
+
+      - name: Create Tag
+        env:
+          VERSION: ${{ needs.check_release.outputs.version }}
+        run: |
+          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
+          git config --local user.name "Simple DevOps"
+          
+          TAG="v${VERSION}-scl-parser-cli"
+          git tag -a "$TAG" -m "SCL Parser CLI v${VERSION}"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          tag_name: v${{ needs.check_release.outputs.version }}-scl-parser-cli
+          name: SCL Parser CLI ${{ needs.check_release.outputs.version }}
+          body_path: /tmp/release_notes.md
+          files: |
+            tools/scl_parser_cli/burrito_out/*
+          draft: false
+          prerelease: false
