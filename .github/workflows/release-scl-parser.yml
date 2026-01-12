@@ -1,4 +1,4 @@
-name: Release SCL Parser Library
+name: SCL Parser CI
 
 on:
   pull_request:
@@ -7,25 +7,81 @@ on:
     paths:
       - 'packages/scl_parser/**'
       - '.github/workflows/release-scl-parser.yml'
-  push:
-    branches:
-      - main
-    paths:
-      - 'packages/scl_parser/**'
-      - '.github/workflows/release-scl-parser.yml'
   workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: 'Create a release PR with version bump and changelog'
+        required: true
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 jobs:
-  preview:
-    name: Preview Version & Changelog
+  test:
+    name: Test
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd packages/scl_parser
+          mix deps.get
+          
+      - name: Run Tests
+        run: |
+          cd packages/scl_parser
+          mix test
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd packages/scl_parser
+          mix deps.get
+          
+      - name: Compile
+        run: |
+          cd packages/scl_parser
+          mix compile --warnings-as-errors
+
+      - name: Build Hex Package
+        run: |
+          cd packages/scl_parser
+          mix hex.build
+
+  # Release PR creation - only runs on manual trigger
+  create_release_pr:
+    name: Create Release PR
+    needs: [test, build]
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.confirm_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       version_tag: ${{ steps.version.outputs.version_tag }}
-      changed: ${{ steps.version.outputs.changed }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -47,8 +103,10 @@ jobs:
           enable_prerelease_mode: false
 
       - name: Generate Changelog
-        if: steps.version.outputs.changed == 'true'
+        id: changelog
         run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          
           # Get the previous tag for this package
           PREV_TAG=$(git tag -l "v*-scl-parser" --sort=-version:refname | head -n 1)
 
@@ -64,8 +122,8 @@ jobs:
           BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\\(scl-parser\\)!:|BREAKING CHANGE" || true)
           OTHER=$(echo "$COMMITS" | grep -v -E "feat\\(scl-parser\\):|fix\\(scl-parser\\):" || true)
 
-          # Build changelog
-          echo "## SCL Parser ${{ steps.version.outputs.version }}" > changelog.md
+          # Build changelog file
+          echo "## SCL Parser ${VERSION}" > changelog.md
           echo "" >> changelog.md
 
           if [ -n "$BREAKING" ]; then
@@ -93,107 +151,22 @@ jobs:
           fi
 
           # Output to Step Summary
-          echo "## 🚀 Next Version: ${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 🚀 Release Version: ${VERSION}" >> $GITHUB_STEP_SUMMARY
           echo "Tag: ${{ steps.version.outputs.version_tag }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Changelog Preview" >> $GITHUB_STEP_SUMMARY
+          echo "### Changelog" >> $GITHUB_STEP_SUMMARY
           cat changelog.md >> $GITHUB_STEP_SUMMARY
-
-      - name: Upload Changelog
-        if: steps.version.outputs.changed == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: changelog
-          path: changelog.md
-          retention-days: 1
-
-  test:
-    name: Run Tests
-    needs: preview
-    if: needs.preview.outputs.changed == 'true' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      
-      - name: Set up Elixir
-        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
-        with:
-          elixir-version: '1.18.1'
-          otp-version: '27.2'
-      
-      - name: Install Dependencies
-        run: |
-          cd packages/scl_parser
-          mix deps.get
-          
-      - name: Run Tests
-        run: |
-          cd packages/scl_parser
-          mix test
-
-  publish_hex:
-    name: Publish to Hex
-    needs: [test, preview]
-    if: needs.preview.outputs.changed == 'true' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
-    environment: production
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      
-      - name: Set up Elixir
-        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
-        with:
-          elixir-version: '1.18.1'
-          otp-version: '27.2'
-      
-      - name: Install Dependencies
-        run: |
-          cd packages/scl_parser
-          mix deps.get
-          
-      - name: Publish to Hex
-        env:
-          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
-        run: |
-          cd packages/scl_parser
-          mix hex.publish --yes
-
-  release:
-    name: GitHub Release
-    needs: [test, preview]
-    if: needs.preview.outputs.changed == 'true' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    environment: production
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
-          
-      - name: Download Changelog
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: changelog
-
-      - name: Create Release
-        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
-        with:
-          tag_name: ${{ needs.preview.outputs.version_tag }}
-          name: SCL Parser ${{ needs.preview.outputs.version }}
-          body_path: changelog.md
-          draft: false
-          prerelease: false
 
       - name: Create Release PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          VERSION="${{ needs.preview.outputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
           BRANCH="release/scl-parser-v${VERSION}"
+          
+          # Configure git
+          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
+          git config --local user.name "Simple DevOps"
           
           # Create and checkout new branch
           git checkout -b "$BRANCH"
@@ -215,36 +188,51 @@ jobs:
           # Update mix.exs version
           sed -i 's/version: "[0-9]*\.[0-9]*\.[0-9]*"/version: "'"${VERSION}"'"/' mix.exs
           
-          # Commit changes
-          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
-          git config --local user.name "Simple DevOps"
+          # Stage changes
           git add CHANGELOG.md mix.exs
           
           # Only create PR if there are staged changes
           if git diff --cached --quiet; then
             echo "No changes to commit; skipping PR creation."
-          else
-            git commit -m "chore(scl-parser): release version ${VERSION} [skip ci]"
-            git push origin "$BRANCH"
-            
-            # Create PR body file
-            cat > /tmp/pr-body.md << 'EOF'
-          ## Automated Release PR
+            exit 0
+          fi
+          
+          git commit -m "chore(scl-parser): release version ${VERSION} [skip ci]"
+          git push origin "$BRANCH"
+          
+          # Build PR body with version info and changelog
+          cat > /tmp/pr-body.md << 'PREOF'
+          ## 🚀 Release SCL Parser v${VERSION}
 
           This PR was automatically created by the release workflow.
 
-          ### Changes
-          - Updated `mix.exs` version
-          - Updated `CHANGELOG.md` with release notes
+          ### Version Info
+          - **New Version**: ${VERSION}
+          - **Tag**: ${{ steps.version.outputs.version_tag }}
 
-          ### Note
-          This PR contains `[skip ci]` to prevent recursive workflow triggers.
-          EOF
-            
-            # Create PR
-            gh pr create \
-              --title "chore(scl-parser): release version ${VERSION} [skip ci]" \
-              --body-file /tmp/pr-body.md \
-              --base main \
-              --head "$BRANCH"
-          fi
+          ### Changelog
+          PREOF
+          
+          # Append changelog content
+          cat $GITHUB_WORKSPACE/changelog.md >> /tmp/pr-body.md
+          
+          cat >> /tmp/pr-body.md << 'PREOF'
+
+          ---
+
+          ### Files Changed
+          - `mix.exs` - version bump
+          - `CHANGELOG.md` - release notes
+
+          > **Note**: Merging this PR will trigger the publish workflow to create the tag, publish to Hex, and create a GitHub release.
+          PREOF
+          
+          # Replace ${VERSION} placeholder in PR body
+          sed -i "s/\${VERSION}/${VERSION}/g" /tmp/pr-body.md
+          
+          # Create PR
+          gh pr create \
+            --title "chore(scl-parser): release version ${VERSION}" \
+            --body-file /tmp/pr-body.md \
+            --base main \
+            --head "$BRANCH"

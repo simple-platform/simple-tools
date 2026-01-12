@@ -1,0 +1,109 @@
+name: Publish SCL Parser
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/scl_parser/mix.exs'
+      - 'packages/scl_parser/CHANGELOG.md'
+
+permissions:
+  contents: read
+
+jobs:
+  check_release_commit:
+    name: Check Release Commit
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Check Commit Message
+        id: check
+        run: |
+          COMMIT_MSG="${{ github.event.head_commit.message }}"
+          
+          # Check if this is a release commit from our workflow
+          if echo "$COMMIT_MSG" | grep -qE "^chore\(scl-parser\): release version [0-9]+\.[0-9]+\.[0-9]+"; then
+            VERSION=$(echo "$COMMIT_MSG" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+" | head -1)
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "version=${VERSION}" >> $GITHUB_OUTPUT
+            echo "✅ Release commit detected: v${VERSION}"
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+            echo "⏭️ Not a release commit, skipping publish"
+          fi
+
+  publish:
+    name: Tag, Publish & Release
+    needs: check_release_commit
+    if: needs.check_release_commit.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Create Tag
+        run: |
+          VERSION="${{ needs.check_release_commit.outputs.version }}"
+          TAG="v${VERSION}-scl-parser"
+          
+          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
+          git config --local user.name "Simple DevOps"
+          
+          git tag -a "$TAG" -m "SCL Parser v${VERSION}"
+          git push origin "$TAG"
+          
+          echo "## 🏷️ Created Tag: ${TAG}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
+        with:
+          elixir-version: '1.18.1'
+          otp-version: '27.2'
+      
+      - name: Install Dependencies
+        run: |
+          cd packages/scl_parser
+          mix deps.get
+          
+      - name: Publish to Hex
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          cd packages/scl_parser
+          mix hex.publish --yes
+          echo "## 📦 Published to Hex.pm" >> $GITHUB_STEP_SUMMARY
+
+      - name: Extract Changelog for Release
+        id: changelog
+        run: |
+          VERSION="${{ needs.check_release_commit.outputs.version }}"
+          
+          cd packages/scl_parser
+          
+          # Extract just this version's changelog section
+          # Find the section starting with "## SCL Parser <version>" and stop at next "## "
+          awk '/^## SCL Parser '"${VERSION}"'$/,/^## /' CHANGELOG.md | head -n -1 > /tmp/release-notes.md
+          
+          # If extraction failed, use a simple message
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "## SCL Parser ${VERSION}" > /tmp/release-notes.md
+            echo "" >> /tmp/release-notes.md
+            echo "See [CHANGELOG.md](https://github.com/simple-platform/simple-tools/blob/main/packages/scl_parser/CHANGELOG.md) for details." >> /tmp/release-notes.md
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          tag_name: v${{ needs.check_release_commit.outputs.version }}-scl-parser
+          name: SCL Parser ${{ needs.check_release_commit.outputs.version }}
+          body_path: /tmp/release-notes.md
+          draft: false
+          prerelease: false
