@@ -7,6 +7,7 @@ on:
     paths:
       - 'tools/scl_parser_cli/mix.exs'
       - 'tools/scl_parser_cli/CHANGELOG.md'
+  workflow_dispatch:
 
 permissions:
   contents: read
