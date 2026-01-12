@@ -21,13 +21,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
 
       - name: Check Commit Message
         id: check
         run: |
+          # Use git log to get the full message of the HEAD commit
           COMMIT_MSG=$(git log -1 --pretty=%B)
-          if echo "$COMMIT_MSG" | grep -qE "^chore\(scl-parser-cli\): release version [0-9]+\.[0-9]+\.[0-9]+$"; then
-            VERSION=$(echo "$COMMIT_MSG" | grep -oE "[0-9]+\.[0-9]+\.[0-9]+")
+          echo "Commit Message: $COMMIT_MSG"
+          
+          # Looser regex to match index of merge commits
+          if echo "$COMMIT_MSG" | grep -q "chore(scl-parser-cli): release version"; then
+            VERSION=$(echo "$COMMIT_MSG" | grep -oE "version [0-9]+\.[0-9]+\.[0-9]+" | head -n1 | cut -d' ' -f2)
             echo "is_release=true" >> $GITHUB_OUTPUT
             echo "version=$VERSION" >> $GITHUB_OUTPUT
             echo "✅ This is a release commit for version $VERSION"
@@ -36,19 +42,28 @@ jobs:
             echo "⏭️ Not a release commit, skipping"
           fi
 
-  publish:
-    name: Publish Release
+  build_binaries:
+    name: Build Binary (${{ matrix.target }})
     needs: check_release
     if: needs.check_release.outputs.is_release == 'true'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    environment: production
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            os: macos-13
+          - target: macos_silicon
+            os: macos-14
+          - target: linux
+            os: ubuntu-latest
+          - target: linux_arm
+            os: ubuntu-latest
+          - target: windows
+            os: windows-latest
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          fetch-depth: 0
       
       - name: Set up Elixir
         uses: erlef/setup-beam@e6d7c94229049569db56a7ad5a540c051a010af9 # v1
@@ -56,7 +71,8 @@ jobs:
           elixir-version: '1.18.1'
           otp-version: '27.2'
 
-      - name: Install System Dependencies
+      - name: Install System Dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y xz-utils
@@ -70,29 +86,42 @@ jobs:
         run: |
           cd tools/scl_parser_cli
           mix deps.get
-
-      - name: Build All Binaries
+          
+      - name: Build Release
         env:
+          BURRITO_TARGET: ${{ matrix.target }}
           MIX_ENV: prod
         run: |
           cd tools/scl_parser_cli
+          mix release --overwrite
           
-          # Build macOS (Intel)
-          BURRITO_TARGET=macos mix release --overwrite
+      - name: Upload Artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: tools/scl_parser_cli/burrito_out/*
+          retention-days: 1
 
-          # Build macOS (Apple Silicon)
-          BURRITO_TARGET=macos_silicon mix release --overwrite
-          
-          # Build Linux (x86_64)
-          BURRITO_TARGET=linux mix release --overwrite
-
-          # Build Linux (ARM64)
-          BURRITO_TARGET=linux_arm mix release --overwrite
-          
-          # Build Windows
-          BURRITO_TARGET=windows mix release --overwrite
-          
-          ls -la burrito_out/
+  publish:
+    name: Publish Release
+    needs: [check_release, build_binaries]
+    if: needs.check_release.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    environment: production
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      
+      - name: Download All Artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: true
 
       - name: Extract Changelog Section
         id: changelog
@@ -119,6 +148,13 @@ jobs:
           git config --local user.name "Simple DevOps"
           
           TAG="v${VERSION}-scl-parser-cli"
+          
+          # Check if tag exists, deletes if so (re-release support)
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+             git tag -d "$TAG"
+             git push origin :refs/tags/"$TAG"
+          fi
+          
           git tag -a "$TAG" -m "SCL Parser CLI v${VERSION}"
           git push origin "$TAG"
 
@@ -129,6 +165,6 @@ jobs:
           name: SCL Parser CLI ${{ needs.check_release.outputs.version }}
           body_path: /tmp/release_notes.md
           files: |
-            tools/scl_parser_cli/burrito_out/*
+            artifacts/*
           draft: false
           prerelease: false
