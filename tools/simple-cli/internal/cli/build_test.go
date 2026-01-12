@@ -2,12 +2,44 @@ package cli
 
 import (
 	"os"
+	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"strings"
 	"testing"
 )
 
 func TestRunBuild(t *testing.T) {
+	// Global Mocks for Build Package
+	origDeps := build.EnsureDependenciesFunc
+	origBundle := build.BundleActionFunc
+	origCompile := build.CompileToWasmFunc
+	origOpt := build.OptimizeWasmFunc
+
+	defer func() {
+		build.EnsureDependenciesFunc = origDeps
+		build.BundleActionFunc = origBundle
+		build.CompileToWasmFunc = origCompile
+		build.OptimizeWasmFunc = origOpt
+	}()
+
+	// No-op mocks
+	build.EnsureDependenciesFunc = func(dir string) error { return nil }
+	build.BundleActionFunc = func(dir string) (string, error) { return "main.js", nil }
+	build.CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
+	build.OptimizeWasmFunc = func(opt, in, out string, async bool) error { return nil }
+	// Also mock tools ensuring
+	origSCL := build.EnsureSCLParserFunc
+	origJavy := build.EnsureJavyFunc
+	origWasm := build.EnsureWasmOptFunc
+	defer func() {
+		build.EnsureSCLParserFunc = origSCL
+		build.EnsureJavyFunc = origJavy
+		build.EnsureWasmOptFunc = origWasm
+	}()
+	build.EnsureSCLParserFunc = func(f func(string)) (string, error) { return "scl", nil }
+	build.EnsureJavyFunc = func(f func(string)) (string, error) { return "javy", nil }
+	build.EnsureWasmOptFunc = func(f func(string)) (string, error) { return "wasm-opt", nil }
+
 	tests := []struct {
 		name     string
 		args     []string
@@ -50,9 +82,11 @@ func TestRunBuild(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Setup
-			buildAll = tt.buildAll // Set global flag (in a real app, passing this via config is better)
-
-			// Create temp dir for test
+			buildAll = tt.buildAll
+			// Bypass UI in tests to avoid TTY error
+			oldJSON := jsonOutput
+			jsonOutput = true
+			defer func() { jsonOutput = oldJSON }()
 			tmpDir := t.TempDir()
 			oldWd, _ := os.Getwd()
 			_ = os.Chdir(tmpDir)
@@ -62,13 +96,15 @@ func TestRunBuild(t *testing.T) {
 			if !tt.wantErr {
 				if tt.name == "build target success" {
 					_ = os.MkdirAll("myapp/action", 0755)
+					_ = os.WriteFile("myapp/action/action.scl", []byte{}, 0644)
+				}
+				if tt.name == "build all success" {
+					_ = os.MkdirAll("apps/myapp/action", 0755)
+					_ = os.WriteFile("apps/myapp/action/action.scl", []byte{}, 0644)
 				}
 			}
 
 			// Capture output
-			// (If we wanted to capture stdout, we'd need to redirect os.Stdout or inject a Writer,
-			// but for now we just check errors)
-
 			err := runBuild(fsx.OSFileSystem{}, tt.args)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("runBuild() error = %v, wantErr %v", err, tt.wantErr)
