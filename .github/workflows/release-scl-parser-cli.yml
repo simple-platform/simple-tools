@@ -40,7 +40,7 @@ jobs:
       - name: Run Tests
         run: |
           cd tools/scl_parser_cli
-          mix test
+          mix test --no-start
 
   build:
     name: Build
