@@ -94,14 +94,16 @@ jobs:
           # Use awk to extract the section properly
           
           awk -v ver="$VERSION" '
-            BEGIN { found=0; printing=0 }
+            BEGIN { printing=0 }
             /^## SCL Parser / {
               if (printing) exit
-              if ($0 ~ "## SCL Parser " ver "$") {
-                found=1
+              if ($0 == "## SCL Parser " ver) {
                 printing=1
+                print
+                next
               }
             }
+            /^## / && printing { exit }
             printing { print }
           ' CHANGELOG.md > /tmp/release-notes.md
           
