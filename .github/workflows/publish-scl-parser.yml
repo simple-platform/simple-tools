@@ -50,8 +50,9 @@ jobs:
           fetch-depth: 0
 
       - name: Create Tag
+        env:
+          VERSION: ${{ needs.check_release_commit.outputs.version }}
         run: |
-          VERSION="${{ needs.check_release_commit.outputs.version }}"
           TAG="v${VERSION}-scl-parser"
           
           git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
@@ -83,23 +84,75 @@ jobs:
 
       - name: Extract Changelog for Release
         id: changelog
+        env:
+          VERSION: ${{ needs.check_release_commit.outputs.version }}
         run: |
-          VERSION="${{ needs.check_release_commit.outputs.version }}"
-          
           cd packages/scl_parser
           
-          # Extract just this version's changelog section
-          # Find the section starting with "## SCL Parser <version>" and stop at next "## "
-          awk '/^## SCL Parser '"${VERSION}"'$/,/^## /' CHANGELOG.md | head -n -1 > /tmp/release-notes.md
+          # Extract this version's changelog section from CHANGELOG.md
+          # The section starts with "## SCL Parser X.Y.Z" and ends before the next "## " or EOF
+          # Use awk to extract the section properly
           
-          # If extraction failed, use a simple message
+          awk -v ver="$VERSION" '
+            BEGIN { found=0; printing=0 }
+            /^## SCL Parser / {
+              if (printing) exit
+              if ($0 ~ "## SCL Parser " ver "$") {
+                found=1
+                printing=1
+              }
+            }
+            printing { print }
+          ' CHANGELOG.md > /tmp/release-notes.md
+          
+          # Check if we got content
           if [ ! -s /tmp/release-notes.md ]; then
-            echo "## SCL Parser ${VERSION}" > /tmp/release-notes.md
-            echo "" >> /tmp/release-notes.md
-            echo "See [CHANGELOG.md](https://github.com/simple-platform/simple-tools/blob/main/packages/scl_parser/CHANGELOG.md) for details." >> /tmp/release-notes.md
+            echo "Warning: Could not extract changelog section, generating from git log"
+            
+            # Fallback: generate release notes from recent commits
+            PREV_TAG=$(git tag -l "v*-scl-parser" --sort=-version:refname | grep -v "v${VERSION}-scl-parser" | head -n 1)
+            
+            {
+              echo "## SCL Parser ${VERSION}"
+              echo ""
+              
+              if [ -z "$PREV_TAG" ]; then
+                COMMITS=$(git log --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- . | head -20)
+              else
+                COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- . | head -20)
+              fi
+              
+              FEATURES=$(echo "$COMMITS" | grep "feat(scl-parser):" || true)
+              FIXES=$(echo "$COMMITS" | grep "fix(scl-parser):" || true)
+              OTHER=$(echo "$COMMITS" | grep -v -E "feat\(scl-parser\):|fix\(scl-parser\):" | grep -v "^$" || true)
+              
+              if [ -n "$FEATURES" ]; then
+                echo "### ✨ Features"
+                echo "$FEATURES"
+                echo ""
+              fi
+              
+              if [ -n "$FIXES" ]; then
+                echo "### 🐛 Bug Fixes"
+                echo "$FIXES"
+                echo ""
+              fi
+              
+              if [ -n "$OTHER" ]; then
+                echo "### 📝 Other Changes"
+                echo "$OTHER"
+                echo ""
+              fi
+            } > /tmp/release-notes.md
           fi
+          
+          # Show what we're using for release notes
+          echo "### 📋 Release Notes Preview" >> $GITHUB_STEP_SUMMARY
+          cat /tmp/release-notes.md >> $GITHUB_STEP_SUMMARY
 
       - name: Create GitHub Release
+        env:
+          VERSION: ${{ needs.check_release_commit.outputs.version }}
         uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
         with:
           tag_name: v${{ needs.check_release_commit.outputs.version }}-scl-parser

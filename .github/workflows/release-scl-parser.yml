@@ -79,9 +79,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      version_tag: ${{ steps.version.outputs.version_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -104,64 +101,68 @@ jobs:
 
       - name: Generate Changelog
         id: changelog
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_TAG: ${{ steps.version.outputs.version_tag }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          
           # Get the previous tag for this package
           PREV_TAG=$(git tag -l "v*-scl-parser" --sort=-version:refname | head -n 1)
 
           if [ -z "$PREV_TAG" ]; then
             COMMITS=$(git log --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- packages/scl_parser)
           else
-            COMMITS=$(git log ${PREV_TAG}..HEAD --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- packages/scl_parser)
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- packages/scl_parser)
           fi
 
           # Organize commits by type
           FEATURES=$(echo "$COMMITS" | grep "feat(scl-parser):" || true)
           FIXES=$(echo "$COMMITS" | grep "fix(scl-parser):" || true)
-          BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\\(scl-parser\\)!:|BREAKING CHANGE" || true)
-          OTHER=$(echo "$COMMITS" | grep -v -E "feat\\(scl-parser\\):|fix\\(scl-parser\\):" || true)
+          BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\(scl-parser\)!:|BREAKING CHANGE" || true)
+          OTHER=$(echo "$COMMITS" | grep -v -E "feat\(scl-parser\):|fix\(scl-parser\):" | grep -v "^$" || true)
 
-          # Build changelog file
-          echo "## SCL Parser ${VERSION}" > changelog.md
-          echo "" >> changelog.md
+          # Build changelog content - store in /tmp for reuse
+          {
+            echo "## SCL Parser ${VERSION}"
+            echo ""
+            
+            if [ -n "$BREAKING" ]; then
+              echo "### ⚠️ Breaking Changes"
+              echo "$BREAKING"
+              echo ""
+            fi
 
-          if [ -n "$BREAKING" ]; then
-            echo "### ⚠️ Breaking Changes" >> changelog.md
-            echo "$BREAKING" >> changelog.md
-            echo "" >> changelog.md
-          fi
+            if [ -n "$FEATURES" ]; then
+              echo "### ✨ Features"
+              echo "$FEATURES"
+              echo ""
+            fi
 
-          if [ -n "$FEATURES" ]; then
-            echo "### ✨ Features" >> changelog.md
-            echo "$FEATURES" >> changelog.md
-            echo "" >> changelog.md
-          fi
-
-          if [ -n "$FIXES" ]; then
-            echo "### 🐛 Bug Fixes" >> changelog.md
-            echo "$FIXES" >> changelog.md
-            echo "" >> changelog.md
-          fi
-          
-          if [ -n "$OTHER" ]; then
-            echo "### 📝 Other Changes" >> changelog.md
-            echo "$OTHER" >> changelog.md
-            echo "" >> changelog.md
-          fi
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+            
+            if [ -n "$OTHER" ]; then
+              echo "### 📝 Other Changes"
+              echo "$OTHER"
+              echo ""
+            fi
+          } > /tmp/changelog_section.md
 
           # Output to Step Summary
           echo "## 🚀 Release Version: ${VERSION}" >> $GITHUB_STEP_SUMMARY
-          echo "Tag: ${{ steps.version.outputs.version_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "Tag: ${VERSION_TAG}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Changelog" >> $GITHUB_STEP_SUMMARY
-          cat changelog.md >> $GITHUB_STEP_SUMMARY
+          echo "### Changelog Preview" >> $GITHUB_STEP_SUMMARY
+          cat /tmp/changelog_section.md >> $GITHUB_STEP_SUMMARY
 
       - name: Create Release PR
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+          VERSION_TAG: ${{ steps.version.outputs.version_tag }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           BRANCH="release/scl-parser-v${VERSION}"
           
           # Configure git
@@ -173,7 +174,7 @@ jobs:
           
           cd packages/scl_parser
           
-          # Update CHANGELOG.md
+          # Create CHANGELOG.md if it doesn't exist
           if [ ! -f CHANGELOG.md ]; then
             echo "# Changelog" > CHANGELOG.md
             echo "" >> CHANGELOG.md
@@ -181,12 +182,12 @@ jobs:
             echo "" >> CHANGELOG.md
           fi
           
-          # Prepend new changelog
-          cat $GITHUB_WORKSPACE/changelog.md CHANGELOG.md > CHANGELOG.tmp
+          # Prepend new changelog section to existing CHANGELOG.md
+          cat /tmp/changelog_section.md CHANGELOG.md > CHANGELOG.tmp
           mv CHANGELOG.tmp CHANGELOG.md
           
           # Update mix.exs version
-          sed -i 's/version: "[0-9]*\.[0-9]*\.[0-9]*"/version: "'"${VERSION}"'"/' mix.exs
+          sed -i "s/version: \"[0-9]*\.[0-9]*\.[0-9]*\"/version: \"${VERSION}\"/" mix.exs
           
           # Stage changes
           git add CHANGELOG.md mix.exs
@@ -200,35 +201,28 @@ jobs:
           git commit -m "chore(scl-parser): release version ${VERSION} [skip ci]"
           git push origin "$BRANCH"
           
-          # Build PR body with version info and changelog
-          cat > /tmp/pr-body.md << 'PREOF'
-          ## 🚀 Release SCL Parser v${VERSION}
-
-          This PR was automatically created by the release workflow.
-
-          ### Version Info
-          - **New Version**: ${VERSION}
-          - **Tag**: ${{ steps.version.outputs.version_tag }}
-
-          ### Changelog
-          PREOF
-          
-          # Append changelog content
-          cat $GITHUB_WORKSPACE/changelog.md >> /tmp/pr-body.md
-          
-          cat >> /tmp/pr-body.md << 'PREOF'
-
-          ---
-
-          ### Files Changed
-          - `mix.exs` - version bump
-          - `CHANGELOG.md` - release notes
-
-          > **Note**: Merging this PR will trigger the publish workflow to create the tag, publish to Hex, and create a GitHub release.
-          PREOF
-          
-          # Replace ${VERSION} placeholder in PR body
-          sed -i "s/\${VERSION}/${VERSION}/g" /tmp/pr-body.md
+          # Build PR body with version info and full changelog
+          {
+            echo "## 🚀 Release SCL Parser v${VERSION}"
+            echo ""
+            echo "This PR was automatically created by the release workflow."
+            echo ""
+            echo "### Version Info"
+            echo "- **New Version**: ${VERSION}"
+            echo "- **Tag**: ${VERSION_TAG}"
+            echo ""
+            echo "### Changelog"
+            echo ""
+            cat /tmp/changelog_section.md
+            echo ""
+            echo "---"
+            echo ""
+            echo "### Files Changed"
+            echo "- \`mix.exs\` - version bump to ${VERSION}"
+            echo "- \`CHANGELOG.md\` - release notes added"
+            echo ""
+            echo "> **Note**: Merging this PR will trigger the publish workflow to create the tag, publish to Hex, and create a GitHub release."
+          } > /tmp/pr-body.md
           
           # Create PR
           gh pr create \
