@@ -43,12 +43,14 @@ func TestEnsureTool_Download(t *testing.T) {
 	}))
 	defer server.Close()
 
+	downloadCount := 0
 	def := ToolDef{
 		Name: "test-tool",
 		CheckVersionFn: func() (string, error) {
 			return "2.0.0", nil
 		},
 		DownloadURLFn: func(version string) string {
+			downloadCount++
 			return server.URL
 		},
 	}
@@ -63,6 +65,10 @@ func TestEnsureTool_Download(t *testing.T) {
 		t.Error("Tool binary not found")
 	}
 
+	if downloadCount != 1 {
+		t.Errorf("Expected 1 download, got %d", downloadCount)
+	}
+
 	// Verify manifest
 	manifest, _ := LoadManifest()
 	if manifest["test-tool"].Version != "2.0.0" {
@@ -70,19 +76,24 @@ func TestEnsureTool_Download(t *testing.T) {
 	}
 
 	// Second run: should use cached
-	// We can't easily mock fileExists inside EnsureTool (it's not a var),
-	// but we can check if CheckVersionFn is called if we wanted, or trust logic.
-	// Logic says: if exists and !needsCheck, return path.
+	// We verify this by ensuring DownloadURLFn is NOT called again,
+	// because version check (2.0.0) matches manifest version (2.0.0).
 
-	// Let's modify manifest to force check
+	// Force check by setting LastCheck to old
 	manifest["test-tool"] = ToolInfo{
 		Version:   "2.0.0",
-		LastCheck: time.Now().Add(-48 * time.Hour), // Older than 24h
+		LastCheck: time.Now().Add(-48 * time.Hour),
 	}
 	SaveManifest(manifest)
 
-	// It should check version (Mock returns 2.0.0), logic sees version match, no download.
-	// If version changed to 2.1.0, it would download.
+	_, err = EnsureTool(def)
+	if err != nil {
+		t.Fatalf("EnsureTool() second run error = %v", err)
+	}
+
+	if downloadCount != 1 {
+		t.Errorf("Expected 1 download after second run (cached), got %d", downloadCount)
+	}
 }
 
 func TestEnsureTool_HTTPError(t *testing.T) {

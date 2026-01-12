@@ -18,7 +18,7 @@ func FindActions(rootDir string) ([]string, error) {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			path := filepath.Join(rootDir, entry.Name())
-			if isActionDir(path) {
+			if IsActionDir(path) {
 				actions = append(actions, path)
 			}
 		}
@@ -27,7 +27,7 @@ func FindActions(rootDir string) ([]string, error) {
 	return actions, nil
 }
 
-func isActionDir(path string) bool {
+func IsActionDir(path string) bool {
 	// Check for action.scl
 	if _, err := os.Stat(filepath.Join(path, "action.scl")); err == nil {
 		return true

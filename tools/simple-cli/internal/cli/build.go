@@ -142,7 +142,7 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 	}
 
 	// Check if it's an action dir (has action.scl)
-	if isActionDir(targetPath) {
+	if build.IsActionDir(targetPath) {
 		return runBuildActions(manager, []string{targetPath})
 	}
 
@@ -157,17 +157,6 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 	}
 
 	return runBuildActions(manager, actionDirs)
-}
-
-func isActionDir(path string) bool {
-	// Basic check, duplication of build.actions.go logic but using scaffold.PathExists might be better
-	// But since we are allowed to import build, we can't use build.isActionDir if it's private.
-	// I'll leave it to FindActions to handle app dirs.
-	// For single action target, I need to know if it is one.
-	// Let's use scaffold.PathExists on action.scl
-	fs := fsx.OSFileSystem{}
-	return scaffold.PathExists(fs, filepath.Join(path, "action.scl")) ||
-		scaffold.PathExists(fs, filepath.Join(path, "package.json"))
 }
 
 func runBuildActions(manager *build.BuildManager, actionDirs []string) error {

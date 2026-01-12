@@ -65,20 +65,20 @@ func TestIsActionDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	createFile(t, filepath.Join(tmpDir, "action.scl"))
-	if !isActionDir(tmpDir) {
-		t.Error("isActionDir() = false for dir with action.scl")
+	if !IsActionDir(tmpDir) {
+		t.Error("IsActionDir() = false for dir with action.scl")
 	}
 
 	tmpDir2 := t.TempDir()
 	createFile(t, filepath.Join(tmpDir2, "package.json"))
-	if !isActionDir(tmpDir2) {
-		t.Error("isActionDir() = false for dir with package.json")
+	if !IsActionDir(tmpDir2) {
+		t.Error("IsActionDir() = false for dir with package.json")
 	}
 
 	tmpDir3 := t.TempDir()
 	createFile(t, filepath.Join(tmpDir3, "other.txt"))
-	if isActionDir(tmpDir3) {
-		t.Error("isActionDir() = true for dir without action files")
+	if IsActionDir(tmpDir3) {
+		t.Error("IsActionDir() = true for dir without action files")
 	}
 }
 

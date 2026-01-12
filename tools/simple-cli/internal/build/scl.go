@@ -1,11 +1,9 @@
 package build
 
 import (
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os/exec"
 	"regexp"
 	"strings"
 )
@@ -18,13 +16,6 @@ const (
 var (
 	SCLParserMixExsURL = "https://raw.githubusercontent.com/simple-platform/simple-tools/main/tools/scl_parser_cli/mix.exs"
 )
-
-type ActionConfig struct {
-	Name                 string `json:"name"`
-	ExecutionEnvironment string `json:"execution_environment"`
-	Language             string `json:"language"`
-	Timeout              int    `json:"timeout,omitempty"`
-}
 
 func EnsureSCLParser(onStatus func(string)) (string, error) {
 	def := ToolDef{
@@ -89,30 +80,6 @@ func mapSCLPlatform(platform, arch string) string {
 	default:
 		return platform
 	}
-}
-
-func ParseActionSCL(parserPath, sclFilePath string) (*ActionConfig, error) {
-	cmd := exec.Command(parserPath, "parse", "--file", sclFilePath, "--format", "json")
-	output, err := cmd.Output()
-	if err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("parser failed: %s", string(exitErr.Stderr))
-		}
-		return nil, fmt.Errorf("failed to run parser: %w", err)
-	}
-
-	var config ActionConfig
-	if err := json.Unmarshal(output, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse parser output: %w", err)
-	}
-
-	return &config, nil
-}
-
-func FindActionSCLFile(appDir, actionName string) (string, error) {
-	// Placeholder until strict structure is enforced or search implemented
-	// For now assume standard location if needed, but this was a TODO
-	return "", fmt.Errorf("SCL file discovery not yet implemented")
 }
 
 func NormalizeActionName(dirName string) string {
