@@ -46,21 +46,11 @@ jobs:
     name: Build Binary (${{ matrix.target }})
     needs: check_release
     if: needs.check_release.outputs.is_release == 'true'
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: macos
-            os: macos-13
-          - target: macos_silicon
-            os: macos-14
-          - target: linux
-            os: ubuntu-latest
-          - target: linux_arm
-            os: ubuntu-latest
-          - target: windows
-            os: windows-latest
+        target: [macos, macos_silicon, linux, linux_arm, windows]
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
