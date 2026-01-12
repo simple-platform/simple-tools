@@ -16,6 +16,10 @@ defmodule SCLParserCLI do
   @doc false
   def run(args) do
     case parse_args(args) do
+      {:ok, :help} ->
+        print_help()
+        :ok
+
       {:ok, filename} ->
         process_file(filename)
 
@@ -25,8 +29,19 @@ defmodule SCLParserCLI do
     end
   end
 
+  defp parse_args(["--help"]), do: {:ok, :help}
+  defp parse_args(["-h"]), do: {:ok, :help}
   defp parse_args([filename]), do: {:ok, filename}
   defp parse_args(_), do: {:error, "Usage: scl-parser <file.scl>"}
+
+  defp print_help do
+    IO.puts("""
+    Usage: scl-parser <file.scl>
+           scl-parser --help | -h
+
+    Parses a Simple Configuration Language (SCL) file and outputs the AST as JSON.
+    """)
+  end
 
   defp process_file(filename) do
     case File.read(filename) do
