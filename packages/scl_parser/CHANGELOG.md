@@ -2,6 +2,13 @@
 
 All notable changes to SCL Parser will be documented in this file.
 
+## SCL Parser 2.0.0
+
+### 📝 Other Changes
+* chore(scl-parser): release version 1.0.1 (#25) (3e6205e)
+* chore(scl-parser): release version 1.0.1 [skip ci] (#22) (ed3b22e)
+* chore(deps): pin dependency ex_doc to 0.39.3 - abandoned (#17) (f680e99)
+
 ## SCL Parser 1.0.1
 
 ### 📝 Other Changes
