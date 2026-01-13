@@ -26,7 +26,10 @@ type sclChild struct {
 func ParseExecutionEnvironment(sclParserPath, actionDir string) (string, error) {
 	// SCL file is at apps/<app>/records/10_actions.scl
 	// actionDir is apps/<app>/actions/<action>/
-	sclPath := filepath.Join(actionDir, "..", "..", "records", "10_actions.scl")
+	// SCL file is at apps/<app>/records/10_actions.scl
+	// actionDir is apps/<app>/actions/<action>/
+	appDir := filepath.Dir(filepath.Dir(actionDir))
+	sclPath := filepath.Join(appDir, "records", "10_actions.scl")
 	if _, err := os.Stat(sclPath); os.IsNotExist(err) {
 		return "server", nil // default
 	}

@@ -36,7 +36,8 @@ defmodule SCLParserCLI do
     if File.exists?(filename) do
       {:ok, filename}
     else
-      {:error, "File not found: #{filename}"}
+      {:error,
+       "File not found: #{filename}. Please check the file path and ensure the file exists."}
     end
   end
 

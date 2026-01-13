@@ -59,5 +59,6 @@ defmodule SCLParserCLITest do
       end)
 
     assert stderr =~ "File not found"
+    assert stderr =~ "Please check the file path"
   end
 end

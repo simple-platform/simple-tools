@@ -39,7 +39,19 @@ func ExtractTarGz(srcPath, destDir string, stripComponents int) error {
 			continue
 		}
 		relPath := filepath.Join(parts[stripComponents:]...)
+
+		// Zip Slip protection
+		if strings.Contains(relPath, "..") || strings.HasPrefix(relPath, "/") || strings.HasPrefix(relPath, "\\") {
+			continue
+		}
+
 		target := filepath.Join(destDir, relPath)
+		// Check that target is within destDir (or is destDir itself)
+		cleanDest := filepath.Clean(destDir)
+		cleanTarget := filepath.Clean(target)
+		if cleanTarget != cleanDest && !strings.HasPrefix(cleanTarget, cleanDest+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path: %s", target)
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:

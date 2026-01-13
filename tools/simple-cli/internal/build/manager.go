@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"simple-cli/internal/runtime"
+	"runtime"
+	internalRuntime "simple-cli/internal/runtime"
 	"sync"
 )
 
@@ -56,7 +57,7 @@ type ToolPaths struct {
 
 func NewBuildManager(opts BuildOptions) *BuildManager {
 	if opts.Concurrency <= 0 {
-		opts.Concurrency = 4 // Default to 4 workers if not specified or invalid
+		opts.Concurrency = runtime.NumCPU() // Default to number of CPUs for optimal parallelization
 	}
 	return &BuildManager{
 		options: opts,
@@ -124,14 +125,14 @@ func (m *BuildManager) EnsureTools(onProgress ProgressReporter) error {
 			return
 		}
 
-		pluginPathSync, err := runtime.EnsurePlugin(runtimeDir, false)
+		pluginPathSync, err := internalRuntime.EnsurePlugin(runtimeDir, false)
 		if err != nil {
 			m.toolsErr = fmt.Errorf("failed to extract sync runtime plugin: %w", err)
 			return
 		}
 		m.tools.RuntimePluginSync = pluginPathSync
 
-		pluginPathAsync, err := runtime.EnsurePlugin(runtimeDir, true)
+		pluginPathAsync, err := internalRuntime.EnsurePlugin(runtimeDir, true)
 		if err != nil {
 			m.toolsErr = fmt.Errorf("failed to extract async runtime plugin: %w", err)
 			return
@@ -287,7 +288,11 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 			report("Optimizing (Async)...")
 			asyncOptErr = OptimizeWasmFunc(m.tools.WasmOpt, asyncWasmOri,
 				filepath.Join(actionDir, "build", "release.async.wasm"),
-				[]string{"-Oz", "--disable-gc", "--asyncify", "--pass-arg=asyncify-imports@simple.__call"})
+				[]string{"-Oz", "--disable-gc", "--asyncify",
+					// Enable asyncify for the async build. The asyncify-imports argument declares
+					// simple.__call as a host import that can suspend/resume execution, so wasm-opt
+					// treats calls through this import as async boundaries when transforming the module.
+					"--pass-arg=asyncify-imports@simple.__call"})
 		}()
 	}
 	wg.Wait()
