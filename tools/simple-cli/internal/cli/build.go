@@ -113,7 +113,13 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 			if err != nil {
 				continue
 			}
-			allActionDirs = append(allActionDirs, actionDirs...)
+			for _, actionDir := range actionDirs {
+				absDir, err := filepath.Abs(actionDir)
+				if err != nil {
+					continue
+				}
+				allActionDirs = append(allActionDirs, absDir)
+			}
 		}
 	}
 
@@ -140,6 +146,13 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 	if !scaffold.PathExists(fsys, targetPath) {
 		return fmt.Errorf("build target '%s' not found", target)
 	}
+
+	// Convert to absolute path to ensure tools (like esbuild) have correct working directory context
+	absPath, err := filepath.Abs(targetPath)
+	if err != nil {
+		return fmt.Errorf("failed to get absolute path for %s: %w", targetPath, err)
+	}
+	targetPath = absPath
 
 	// Check if it's an action dir (has action.scl)
 	if build.IsActionDir(targetPath) {
@@ -194,12 +207,20 @@ func runBuildActions(manager *build.BuildManager, actionDirs []string) error {
 	}
 
 	if jsonOutput {
+		// Include error details for each failed action
+		errors := make(map[string]string)
+		for _, result := range results {
+			if result.Error != nil {
+				errors[result.ActionName] = result.Error.Error()
+			}
+		}
 		return printJSON(map[string]interface{}{
 			"status":   "complete",
 			"total":    len(results),
 			"success":  successes,
 			"failed":   failures,
 			"failures": failedActions,
+			"errors":   errors,
 		})
 	}
 

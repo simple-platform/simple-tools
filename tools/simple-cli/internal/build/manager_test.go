@@ -3,11 +3,15 @@ package build
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 )
 
 func TestEnsureTools(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	// Save original functions and restore after test
 	origVerify := EnsureSCLParserFunc
 	origJavy := EnsureJavyFunc
@@ -44,6 +48,7 @@ func TestEnsureTools(t *testing.T) {
 }
 
 func TestEnsureTools_Error(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 	// Save original functions
 	origVerify := EnsureSCLParserFunc
 	origJavy := EnsureJavyFunc
@@ -69,26 +74,49 @@ func TestEnsureTools_Error(t *testing.T) {
 func TestBuildActions_Concurrency(t *testing.T) {
 	// Mock dependencies
 	origDeps := EnsureDependenciesFunc
-	origBundle := BundleActionFunc
+	origBundle := BundleJSFunc
+	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
+	origValidate := ValidateLanguageFunc
+	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
-		BundleActionFunc = origBundle
+		BundleJSFunc = origBundle
+		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
+		ValidateLanguageFunc = origValidate
+		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
 	EnsureDependenciesFunc = func(dir string) error { return nil }
-	BundleActionFunc = func(dir string) (string, error) { return "bundle.js", nil }
+	BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
+	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
-	OptimizeWasmFunc = func(opt, in, out string, async bool) error { return nil }
+	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
+	ValidateLanguageFunc = func(dir string) error { return nil }
+	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(BuildOptions{Concurrency: 2})
 	m.tools.Javy = "javy"
 	m.tools.WasmOpt = "wasm-opt"
 
-	actions := []string{"dir1", "dir2", "dir3", "dir4"}
+	tmpDir := t.TempDir()
+	actions := []string{
+		filepath.Join(tmpDir, "dir1"),
+		filepath.Join(tmpDir, "dir2"),
+		filepath.Join(tmpDir, "dir3"),
+		filepath.Join(tmpDir, "dir4"),
+	}
+
+	for _, d := range actions {
+		// Mock creation is enough as we mock functions, but BuildAction creates 'build' dir inside.
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	results := m.BuildActions(context.Background(), actions, nil)
 
 	if len(results) != 4 {

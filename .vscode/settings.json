@@ -126,6 +126,7 @@
     "softprops",
     "staticcheck",
     "tmpl",
+    "Typeflag",
     "userstamps",
     "vcol",
     "vitest",

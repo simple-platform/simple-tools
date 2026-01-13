@@ -3,11 +3,12 @@ package build
 import (
 	"fmt"
 	"os/exec"
+	"path/filepath"
 )
 
 const (
 	JavyName               = "javy"
-	JavyVersion            = "8.0.0"
+	JavyVersion            = "5.0.3"
 	JavyReleaseURLTemplate = "https://github.com/bytecodealliance/javy/releases/download/v%s/javy-%s-%s-v%s.gz"
 
 	WasmOptName               = "wasm-opt"
@@ -112,37 +113,37 @@ func mapWasmOptArchOS(arch, platform string) archOSPair {
 }
 
 func extractWasmOpt(srcPath, destPath string) error {
-	return ExtractTarGzFile(srcPath, destPath, "bin/wasm-opt")
+	// destPath is .../bin/wasm-opt via EnsureTool -> GetToolsBinDir
+	// We want to extract to .../ (the root tools dir) so that bin/wasm-opt and lib/ land in correct places.
+	// destPath = ~/.simple/bin/wasm-opt
+	// filepath.Dir(destPath) = ~/.simple/bin
+	// filepath.Dir(filepath.Dir(destPath)) = ~/.simple
+
+	rootDir := filepath.Dir(filepath.Dir(destPath))
+	return ExtractTarGz(srcPath, rootDir, 1)
 }
 
 func CompileToWasm(javyPath, jsPath, pluginPath, outputPath string) error {
 	args := []string{
-		"compile",
+		"build",
 		jsPath,
 		"-o", outputPath,
 	}
 	if pluginPath != "" {
-		args = append(args, "-C", pluginPath)
+		args = append(args, "-C", fmt.Sprintf("plugin=%s", pluginPath))
 	}
 
 	cmd := exec.Command(javyPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("javy compile failed: %s: %w", string(output), err)
+		return fmt.Errorf("javy build failed: %s: %w", string(output), err)
 	}
 	return nil
 }
 
-func OptimizeWasm(wasmOptPath, inputPath, outputPath string, asyncify bool) error {
-	args := []string{
-		"-O3",
-		inputPath,
-		"-o", outputPath,
-	}
-
-	if asyncify {
-		args = append(args, "--asyncify")
-	}
+func OptimizeWasm(wasmOptPath, inputPath, outputPath string, flags []string) error {
+	args := append([]string{}, flags...)
+	args = append(args, inputPath, "-o", outputPath)
 
 	cmd := exec.Command(wasmOptPath, args...)
 	output, err := cmd.CombinedOutput()

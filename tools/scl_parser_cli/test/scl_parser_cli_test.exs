@@ -58,6 +58,6 @@ defmodule SCLParserCLITest do
         assert {:error, _} = result
       end)
 
-    assert stderr =~ "Error reading file"
+    assert stderr =~ "File not found"
   end
 end

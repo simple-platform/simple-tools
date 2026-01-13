@@ -96,3 +96,82 @@ func TestExtractTarGzFile(t *testing.T) {
 		t.Error("Expected error for missing file")
 	}
 }
+
+func TestExtractTarGz(t *testing.T) {
+	tmpDir := t.TempDir()
+	tgzPath := filepath.Join(tmpDir, "test.tar.gz")
+	destDir := filepath.Join(tmpDir, "output")
+
+	// Create dummy tarball with structure:
+	// root/
+	//   bin/
+	//     exec
+	//   lib/
+	//     data.txt
+	f, err := os.Create(tgzPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	gw := gzip.NewWriter(f)
+	tw := tar.NewWriter(gw)
+
+	files := map[string]string{
+		"root/bin/exec":     "executable content",
+		"root/lib/data.txt": "library content",
+	}
+
+	for name, content := range files {
+		hdr := &tar.Header{
+			Name: name,
+			Mode: 0755,
+			Size: int64(len(content)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Make sure to add directories too if needed, but file paths implicitly create them in logic
+	// But let's add root dir explicitly to test that too
+	hdr := &tar.Header{
+		Name:     "root/",
+		Typeflag: tar.TypeDir,
+		Mode:     0755,
+	}
+	tw.WriteHeader(hdr)
+
+	tw.Close()
+	gw.Close()
+	f.Close()
+
+	// Test extraction with stripping 1 component
+	if err := ExtractTarGz(tgzPath, destDir, 1); err != nil {
+		t.Fatalf("ExtractTarGz() error = %v", err)
+	}
+
+	// Verify bin/exec exists in output
+	execPath := filepath.Join(destDir, "bin", "exec")
+	content, err := os.ReadFile(execPath)
+	if err != nil {
+		t.Errorf("failed to read extracted file: %v", err)
+	}
+	if string(content) != "executable content" {
+		t.Errorf("content mismatch")
+	}
+
+	// Verify lib/data.txt
+	libPath := filepath.Join(destDir, "lib", "data.txt")
+	if _, err := os.Stat(libPath); os.IsNotExist(err) {
+		t.Errorf("library file missing")
+	}
+
+	// Verify root/ was stripped (should not exist)
+	rootPath := filepath.Join(destDir, "root")
+	if _, err := os.Stat(rootPath); err == nil {
+		t.Errorf("root directory was not stripped")
+	}
+}

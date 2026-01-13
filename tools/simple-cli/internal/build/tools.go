@@ -90,10 +90,22 @@ func SaveManifest(manifest ToolManifest) error {
 
 var manifestMu sync.Mutex
 
-func EnsureTool(def ToolDef) (string, error) {
+func GetToolsBinDir() (string, error) {
 	toolsDir, err := GetToolsDir()
 	if err != nil {
 		return "", err
+	}
+	return filepath.Join(toolsDir, "bin"), nil
+}
+
+func EnsureTool(def ToolDef) (string, error) {
+	binDir, err := GetToolsBinDir()
+	if err != nil {
+		return "", err
+	}
+
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create bin directory: %w", err)
 	}
 
 	manifestMu.Lock()
@@ -103,7 +115,7 @@ func EnsureTool(def ToolDef) (string, error) {
 		return "", err
 	}
 
-	toolPath := filepath.Join(toolsDir, def.Name)
+	toolPath := filepath.Join(binDir, def.Name)
 	info, exists := manifest[def.Name]
 	manifestMu.Unlock()
 
