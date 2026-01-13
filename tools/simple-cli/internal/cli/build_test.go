@@ -11,22 +11,25 @@ import (
 func TestRunBuild(t *testing.T) {
 	// Global Mocks for Build Package
 	origDeps := build.EnsureDependenciesFunc
-	origBundle := build.BundleActionFunc
+	origBundle := build.BundleJSFunc
+	origAsync := build.BundleAsyncFunc
 	origCompile := build.CompileToWasmFunc
 	origOpt := build.OptimizeWasmFunc
 
 	defer func() {
 		build.EnsureDependenciesFunc = origDeps
-		build.BundleActionFunc = origBundle
+		build.BundleJSFunc = origBundle
+		build.BundleAsyncFunc = origAsync
 		build.CompileToWasmFunc = origCompile
 		build.OptimizeWasmFunc = origOpt
 	}()
 
 	// No-op mocks
 	build.EnsureDependenciesFunc = func(dir string) error { return nil }
-	build.BundleActionFunc = func(dir string) (string, error) { return "main.js", nil }
+	build.BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
+	build.BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	build.CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
-	build.OptimizeWasmFunc = func(opt, in, out string, async bool) error { return nil }
+	build.OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
 	// Also mock tools ensuring
 	origSCL := build.EnsureSCLParserFunc
 	origJavy := build.EnsureJavyFunc

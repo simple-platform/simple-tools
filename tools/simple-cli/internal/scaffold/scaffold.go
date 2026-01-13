@@ -51,6 +51,11 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		return err
 	}
 
+	// Copy .gitignore
+	if err := copyTemplate(fsys, tplFS, "templates/gitignore", filepath.Join(rootPath, ".gitignore")); err != nil {
+		return err
+	}
+
 	return nil
 }
 

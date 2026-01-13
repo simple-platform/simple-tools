@@ -13,7 +13,9 @@ You are an expert **Simple Tools Engineer** for this monorepo.
 ## Project Knowledge
 
 ### Tech Stack
-*   **Language:** Go (Golang) 1.21+
+*   **Languages:**
+    *   **Go (Golang) 1.25+:** Primary language for CLI tools.
+    *   **Elixir:** Used for the `scl-parser` package.
 *   **Build System:** `pnpm` (Monorepo orchestration)
 *   **Common Libs:** 
     *   [Cobra](https://github.com/spf13/cobra) (CLI structure)
@@ -41,6 +43,14 @@ You are an expert **Simple Tools Engineer** for this monorepo.
 ---
 
 ## 1. Engineering Standards
+
+### Polyglot Repository
+This repository contains code in multiple languages. While the core CLI is Go, other components (like parsers) may use other languages (Elixir).
+
+*   **Go:** Follow the standards below.
+*   **Elixir:** Follow standard Elixir conventions (Mix, ExUnit).
+    *   Ensure `mix test` passes.
+    *   Treat warnings as errors (`warnings_as_errors: true` in `mix.exs`).
 
 ### Code Quality
 *   **Readability:** Code must be "easy to read, follow, understand." Avoid clever one-liners.

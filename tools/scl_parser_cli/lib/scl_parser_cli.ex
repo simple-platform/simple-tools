@@ -31,8 +31,19 @@ defmodule SCLParserCLI do
 
   defp parse_args(["--help"]), do: {:ok, :help}
   defp parse_args(["-h"]), do: {:ok, :help}
-  defp parse_args([filename]), do: {:ok, filename}
-  defp parse_args(_), do: {:error, "Usage: scl-parser <file.scl>"}
+
+  defp parse_args([filename]) do
+    if File.exists?(filename) do
+      {:ok, filename}
+    else
+      {:error,
+       "File not found: #{filename}. Please check the file path and ensure the file exists."}
+    end
+  end
+
+  defp parse_args([]), do: {:error, "Missing filename.\nUsage: scl-parser <file.scl>"}
+
+  defp parse_args(_), do: {:error, "Invalid arguments.\nUsage: scl-parser <file.scl>"}
 
   defp print_help do
     IO.puts("""

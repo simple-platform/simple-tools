@@ -7,13 +7,14 @@ import (
 )
 
 func TestFindActions(t *testing.T) {
-	tmpDir := t.TempDir()
+	appDir := t.TempDir()
+	actionsDir := filepath.Join(appDir, "actions")
 
 	// Structure:
-	// - action1/action.scl
-	// - action2/package.json
-	// - not_action/file.txt
-	// - nested/action3/action.scl (should be ignored by current FindActions if it's not recursive)
+	// - actions/action1/action.scl
+	// - actions/action2/package.json
+	// - actions/not_action/file.txt
+	// - actions/nested/action3/action.scl (should be ignored by current FindActions which is not recursive)
 
 	dirs := []string{
 		"action1",
@@ -23,24 +24,24 @@ func TestFindActions(t *testing.T) {
 	}
 
 	for _, d := range dirs {
-		if err := os.MkdirAll(filepath.Join(tmpDir, d), 0755); err != nil {
+		if err := os.MkdirAll(filepath.Join(actionsDir, d), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
 
-	createFile(t, filepath.Join(tmpDir, "action1", "action.scl"))
-	createFile(t, filepath.Join(tmpDir, "action2", "package.json"))
-	createFile(t, filepath.Join(tmpDir, "not_action", "file.txt"))
-	createFile(t, filepath.Join(tmpDir, "nested", "action3", "action.scl"))
+	createFile(t, filepath.Join(actionsDir, "action1", "action.scl"))
+	createFile(t, filepath.Join(actionsDir, "action2", "package.json"))
+	createFile(t, filepath.Join(actionsDir, "not_action", "file.txt"))
+	createFile(t, filepath.Join(actionsDir, "nested", "action3", "action.scl"))
 
-	actions, err := FindActions(tmpDir)
+	actions, err := FindActions(appDir)
 	if err != nil {
 		t.Fatalf("FindActions() error = %v", err)
 	}
 
 	expected := []string{
-		filepath.Join(tmpDir, "action1"),
-		filepath.Join(tmpDir, "action2"),
+		filepath.Join(actionsDir, "action1"),
+		filepath.Join(actionsDir, "action2"),
 	}
 
 	// FindActions returns absolute paths (or joined paths).

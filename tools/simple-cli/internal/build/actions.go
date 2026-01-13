@@ -5,19 +5,24 @@ import (
 	"path/filepath"
 )
 
-// FindActions searches for action directories within a root directory.
-// It looks for directories containing 'action.scl' or 'package.json'.
-func FindActions(rootDir string) ([]string, error) {
+// FindActions searches for action directories within an app directory.
+// It looks for directories containing 'action.scl' or 'package.json' inside the 'actions' subdirectory.
+func FindActions(appDir string) ([]string, error) {
 	var actions []string
+	actionsDir := filepath.Join(appDir, "actions")
 
-	entries, err := os.ReadDir(rootDir)
+	if _, err := os.Stat(actionsDir); os.IsNotExist(err) {
+		return nil, nil
+	}
+
+	entries, err := os.ReadDir(actionsDir)
 	if err != nil {
 		return nil, err
 	}
 
 	for _, entry := range entries {
 		if entry.IsDir() {
-			path := filepath.Join(rootDir, entry.Name())
+			path := filepath.Join(actionsDir, entry.Name())
 			if IsActionDir(path) {
 				actions = append(actions, path)
 			}
