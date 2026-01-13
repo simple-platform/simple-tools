@@ -119,8 +119,6 @@
     "PREOF",
     "rebar",
     "rparen",
-    "rustc",
-    "rustup",
     "rwxr",
     "scol",
     "simpleplatform",
@@ -131,7 +129,6 @@
     "userstamps",
     "vcol",
     "vitest",
-    "vline",
-    "wasip"
+    "vline"
   ]
 }

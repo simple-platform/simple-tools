@@ -4,22 +4,19 @@
     "commit": "11cb3517b3af6af300dd6c055aeda73c9bf52c48"
   },
   "packages": {
-    "nodejs": "25.2.1",
-    "go": "1.25.5",
-    "golangci-lint": "2.7.2",
-    "erlang": "27.2",
-    "elixir": "1.18.1",
+    "nodejs":                   "25.2.1",
+    "go":                       "1.25.5",
+    "golangci-lint":            "2.7.2",
+    "erlang":                   "27.2",
+    "elixir":                   "1.18.1",
     "beam27Packages.elixir-ls": "0.30.0",
-    "zig": "0.15.2",
-    "p7zip": "17.05",
-    "act": "0.2.83",
-    "rustup": "1.28.2"
+    "zig":                      "0.15.2",
+    "p7zip":                    "17.05",
+    "act":                      "0.2.83"
   },
   "env": {
     "COREPACK_INTEGRITY_KEYS": "0",
-    "DEVBOX_COREPACK_ENABLED": "true",
-    "RUST_VERSION": "1.92.0",
-    "RUST_BACKTRACE": "full"
+    "DEVBOX_COREPACK_ENABLED": "true"
   },
   "shell": {
     "init_hook": [
@@ -29,15 +26,7 @@
       "export HEX_HOME=$PWD/.nix-hex",
       "export ERL_AFLAGS='-kernel shell_history enabled'",
       "mix local.hex --force > /dev/null",
-      "mix local.rebar --force > /dev/null",
-      "projectDir=$(dirname $(readlink -f \"$0\"))",
-      "rustupHomeDir=\"$projectDir\"/.rustup",
-      "mkdir -p $rustupHomeDir",
-      "export RUSTUP_HOME=$rustupHomeDir",
-      "export LIBRARY_PATH=$LIBRARY_PATH:\"$projectDir/nix/profile/default/lib\"",
-      "if ! rustc --version | grep -q \"${RUST_VERSION}\"; then rustup install ${RUST_VERSION} && rustup default ${RUST_VERSION}; fi",
-      "rustup component add rust-analyzer",
-      "rustup target add wasm32-wasip1"
+      "mix local.rebar --force > /dev/null"
     ]
   }
 }
