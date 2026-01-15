@@ -6,7 +6,7 @@
   "packages": {
     "nodejs":                   "25.2.1",
     "go":                       "1.25.5",
-    "golangci-lint":            "2.7.2",
+    "golangci-lint":            "2.8.0",
     "erlang":                   "27.2",
     "elixir":                   "1.18.1",
     "beam27Packages.elixir-ls": "0.30.0",
