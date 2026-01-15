@@ -28,8 +28,9 @@ This repository contains the official developer tools to build, test, and deploy
 
 | Tool | Description | Documentation |
 |------|-------------|---------------|
-| **[Simple CLI](./tools/simple-cli/)** | Command-line interface for scaffolding applications and actions | [📖 Full Documentation](./tools/simple-cli/README.md) |
-| **[SCL Parser](./packages/scl_parser/)** | Elixir library and CLI for SCL parsing | [📖 Full Documentation](./packages/scl_parser/README.md) |
+| **[Simple CLI](./tools/simple-cli/)** | Command-line interface for scaffolding and building applications | [📖 Full Documentation](./tools/simple-cli/README.md) |
+| **[SCL Parser CLI](./tools/scl_parser_cli/)** | Standalone CLI for parsing SCL files to JSON | [📖 Full Documentation](./tools/scl_parser_cli/README.md) |
+| **[SCL Parser](./packages/scl_parser/)** | Elixir library for SCL parsing | [📖 Full Documentation](./packages/scl_parser/README.md) |
 
 ---
 
@@ -49,8 +50,8 @@ This project is configured with [Devbox](https://www.jetify.com/devbox) to ensur
 git clone https://github.com/simple-platform/simple-tools.git
 cd simple-tools
 
-# Build Simple CLI
-pnpm go:build
+# Build all tools (Simple CLI, SCL Parser CLI)
+pnpm build
 
 # Verify installation
 ./tools/simple-cli/simple --help
@@ -80,11 +81,10 @@ Run these from the monorepo root:
 
 | Command | Description |
 |---------|-------------|
-| `pnpm go:build` | Build Simple CLI binary |
-| `pnpm go:tidy` | Tidy Go module dependencies |
-| `pnpm test:go` | Run Go tests with coverage |
-| `pnpm lint:go` | Lint Go code with golangci-lint |
-| `pnpm lint` | Run all linters (JS + Go) |
+| `pnpm build` | Build all tools (JS/Go/Elixir) via Turbo |
+| `pnpm test` | Run all tests (Go/Elixir) via Turbo |
+| `pnpm lint` | Run all linters (JS/Go/Elixir) via Turbo |
+| `pnpm tidy` | Tidy dependencies |
 
 ---
 
@@ -93,8 +93,10 @@ Run these from the monorepo root:
 ```
 simple-tools/
 ├── tools/
-│   └── simple-cli/            # Go CLI application
-│       └── README.md          # CLI documentation
+│   ├── simple-cli/            # Go CLI application
+│   └── scl_parser_cli/        # Elixir CLI for SCL Parser
+├── packages/
+│   └── scl_parser/            # Elixir parser library
 ├── AGENTS.md                  # AI coding guidelines
 ├── package.json               # Monorepo scripts
 └── pnpm-workspace.yaml        # Workspace config

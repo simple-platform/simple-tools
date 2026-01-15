@@ -78,6 +78,38 @@ simple new action com.mycompany.crm send-email "Send Email" \
 
 ---
 
+### `simple build`
+
+Build all actions within an application.
+
+**Usage:**
+```bash
+simple build [app-path] [flags]
+```
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `app-path` | No | Path to the application directory. Defaults to current directory. |
+
+**Flags:**
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--concurrency` | `-c` | `NumCPU` | Number of concurrent build workers. |
+| `--verbose` | `-v` | `true` | Enable verbose output. |
+| `--json` | | `false` | Output build results in JSON. |
+
+**Examples:**
+```bash
+# Build current app
+simple build
+
+# Build specific app with custom concurrency
+simple build apps/com.company.crm --concurrency 8
+```
+
+---
+
 ### `simple init`
 
 Initialize a new Simple Platform workspace.

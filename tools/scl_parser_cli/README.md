@@ -1,6 +1,6 @@
 # SCL Parser CLI
 
-A command-line interface for parsing SCL (Simple Configuration Language) files and outputting JSON.
+A command-line interface for parsing SCL (Simple Configuration Language) files and outputting JSON. Built on top of the **[scl_parser](../../packages/scl_parser/)** library.
 
 ## Installation
 
