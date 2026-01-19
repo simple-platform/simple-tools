@@ -15,6 +15,12 @@ import (
 //go:embed templates
 var TemplatesFS embed.FS
 
+// MonorepoConfig holds configuration for creating a new monorepo.
+type MonorepoConfig struct {
+	ProjectName string
+	TenantName  string
+}
+
 // CreateMonorepoStructure creates all directories and files for a new monorepo.
 //
 // It creates:
@@ -22,9 +28,10 @@ var TemplatesFS embed.FS
 //   - .simple/context/ directory with documentation files
 //   - AGENTS.md at root
 //   - README.md at root (templated with project name)
+//   - simple.scl (templated with tenant name)
 //
 // Returns an error if the target path already exists.
-func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath, projectName string) error {
+func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string, cfg MonorepoConfig) error {
 	// Validate: path must not exist
 	if PathExists(fsys, rootPath) {
 		return fmt.Errorf("path already exists: %s", rootPath)
@@ -46,7 +53,7 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 	}
 
 	// Generate README.md with project name
-	data := map[string]string{"ProjectName": projectName}
+	data := map[string]string{"ProjectName": cfg.ProjectName}
 	if err := renderTemplate(fsys, tplFS, "templates/README.md", filepath.Join(rootPath, "README.md"), data); err != nil {
 		return err
 	}
@@ -56,7 +63,37 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		return err
 	}
 
+	// Generate simple.scl with tenant configuration
+	simpleSCL := generateSimpleSCL(cfg.TenantName)
+	if err := fsys.WriteFile(filepath.Join(rootPath, "simple.scl"), []byte(simpleSCL), fsx.FilePerm); err != nil {
+		return fmt.Errorf("failed to write simple.scl: %w", err)
+	}
+
 	return nil
+}
+
+// generateSimpleSCL creates the simple.scl content with proper endpoint URLs.
+// URL structure:
+//   - Non-prod: <tenant>-<env>.on.simple.dev
+//   - Prod: <tenant>.on.simple.dev
+func generateSimpleSCL(tenant string) string {
+	return fmt.Sprintf(`tenant %s
+
+env dev {
+  endpoint %s-dev.on.simple.dev
+  api_key $SIMPLE_DEV_API_KEY
+}
+
+env staging {
+  endpoint %s-staging.on.simple.dev
+  api_key $SIMPLE_STAGING_API_KEY
+}
+
+env prod {
+  endpoint %s.on.simple.dev
+  api_key $SIMPLE_PROD_API_KEY
+}
+`, tenant, tenant, tenant, tenant)
 }
 
 // CreateAppStructure scaffolds a new application inside the apps/ directory.

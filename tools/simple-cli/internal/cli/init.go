@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var tenantName string
+
 // initCmd represents the init command.
 var initCmd = &cobra.Command{
 	Use:   "init <path>",
@@ -19,17 +21,24 @@ var initCmd = &cobra.Command{
   - AGENTS.md: Universal AI coding guidelines
   - .simple/context/: Documentation for AI context
   - apps/: Directory for Simple Platform apps
+  - simple.scl: Deployment configuration
+
+The --tenant flag is required and sets up environment configurations.
 
 Example:
-	simple init .
-  simple init my-project
-  simple init /path/to/my-project`,
+  simple init . --tenant acme
+  simple init my-project --tenant mycompany`,
 	Args: cobra.ExactArgs(1),
 	RunE: runInit,
 }
 
 // runInit executes the init command logic.
 func runInit(cmd *cobra.Command, args []string) error {
+	// Validate tenant flag
+	if tenantName == "" {
+		return fmt.Errorf("--tenant flag is required")
+	}
+
 	// Resolve target path to absolute
 	targetPath, err := filepath.Abs(args[0])
 	if err != nil {
@@ -40,7 +49,11 @@ func runInit(cmd *cobra.Command, args []string) error {
 	projectName := filepath.Base(targetPath)
 
 	// Create the monorepo structure
-	if err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, targetPath, projectName); err != nil {
+	cfg := scaffold.MonorepoConfig{
+		ProjectName: projectName,
+		TenantName:  tenantName,
+	}
+	if err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, targetPath, cfg); err != nil {
 		return fmt.Errorf("failed to create monorepo: %w", err)
 	}
 
@@ -50,6 +63,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 			"status":  "success",
 			"path":    targetPath,
 			"project": projectName,
+			"tenant":  tenantName,
 		})
 	} else {
 		fmt.Printf("✅ Initialized Simple Platform monorepo at %s\n\n", targetPath)
@@ -63,4 +77,6 @@ func runInit(cmd *cobra.Command, args []string) error {
 
 func init() {
 	RootCmd.AddCommand(initCmd)
+	initCmd.Flags().StringVar(&tenantName, "tenant", "", "tenant name for deployment configuration (required)")
+	_ = initCmd.MarkFlagRequired("tenant")
 }

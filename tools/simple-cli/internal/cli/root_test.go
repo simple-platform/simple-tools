@@ -53,8 +53,8 @@ func invokeCmd(args ...string) (string, string, error) {
 func TestInitCmd_Integration(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Test 1: Normal initialization
-	args := []string{"init", tmpDir + "/proj1"}
+	// Test 1: Normal initialization with --tenant flag
+	args := []string{"init", tmpDir + "/proj1", "--tenant", "acme"}
 	out, _, err := invokeCmd(args...)
 	if err != nil {
 		t.Fatalf("Init failed: %v", err)
@@ -68,8 +68,13 @@ func TestInitCmd_Integration(t *testing.T) {
 		t.Error("AGENTS.md not created")
 	}
 
+	// Verify simple.scl was created with tenant
+	if _, err := os.Stat(tmpDir + "/proj1/simple.scl"); os.IsNotExist(err) {
+		t.Error("simple.scl not created")
+	}
+
 	// Test 2: JSON Output
-	args = []string{"init", tmpDir + "/proj2", "--json"}
+	args = []string{"init", tmpDir + "/proj2", "--tenant", "myco", "--json"}
 	out, _, err = invokeCmd(args...)
 	if err != nil {
 		t.Fatalf("Init JSON failed: %v", err)
@@ -85,14 +90,17 @@ func TestInitCmd_Integration(t *testing.T) {
 	if result["project"] != "proj2" { // filepath.Base(path)
 		t.Errorf("Expected project=proj2, got %v", result["project"])
 	}
+	if result["tenant"] != "myco" {
+		t.Errorf("Expected tenant=myco, got %v", result["tenant"])
+	}
 }
 
 func TestInitCmd_ErrorIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
 	_ = os.Mkdir(tmpDir+"/exists", 0755)
 
-	// Test 1: Error Normal
-	args := []string{"init", tmpDir + "/exists"}
+	// Test 1: Error Normal (path already exists)
+	args := []string{"init", tmpDir + "/exists", "--tenant", "test"}
 	_, _, err := invokeCmd(args...)
 	if err == nil {
 		t.Error("Expected error for existing path")

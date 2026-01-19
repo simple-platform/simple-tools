@@ -2,46 +2,139 @@ package cli
 
 import (
 	"os"
+	"path/filepath"
 	"simple-cli/internal/fsx"
 	"testing"
 )
 
 func TestRunDeploy(t *testing.T) {
+	// Save original flag values
+	origEnv := deployEnv
+	origBump := deployBump
+	origDryRun := deployDryRun
+	defer func() {
+		deployEnv = origEnv
+		deployBump = origBump
+		deployDryRun = origDryRun
+	}()
+
 	tests := []struct {
-		name    string
-		args    []string
-		wantErr bool
+		name        string
+		args        []string
+		env         string
+		bump        string
+		dryRun      bool
+		setupDir    func(t *testing.T, dir string)
+		wantErr     bool
+		errContains string
 	}{
 		{
-			name:    "deploy success",
-			args:    []string{"myapp"},
-			wantErr: false,
+			name:        "missing env flag",
+			args:        []string{"apps/myapp"},
+			env:         "", // Missing --env
+			wantErr:     true,
+			errContains: "--env flag is required",
 		},
-		// Deploy command args are checked by Cobra (ExactArgs(1)) before calling RunE,
-		// but since we call runDeploy directly we should rely on the slice passed to us.
-		// However, runDeploy assumes args[0] exists so we should match that expectation
-		// or handle panic if args is empty (though Cobra guarantees it won't be if wired correctly).
-		// For unit testing the function, we should pass valid args.
+		{
+			name:        "app not found",
+			args:        []string{"apps/nonexistent"},
+			env:         "dev",
+			wantErr:     true,
+			errContains: "not found",
+		},
+		{
+			name: "scl-parser not found",
+			args: []string{"apps/myapp"},
+			env:  "dev",
+			bump: "patch",
+			setupDir: func(t *testing.T, dir string) {
+				// Create app directory but no simple.scl
+				appDir := filepath.Join(dir, "apps", "myapp")
+				_ = os.MkdirAll(appDir, 0755)
+				_ = os.WriteFile(filepath.Join(appDir, "app.scl"), []byte("id test\nversion 1.0.0"), 0644)
+			},
+			wantErr:     true,
+			errContains: "scl-parser", // Will fail because scl-parser is not available
+		},
+		{
+			name:   "dry run",
+			args:   []string{"apps/myapp"},
+			env:    "dev",
+			bump:   "patch",
+			dryRun: true,
+			setupDir: func(t *testing.T, dir string) {
+				// Create app directory
+				appDir := filepath.Join(dir, "apps", "myapp")
+				_ = os.MkdirAll(appDir, 0755)
+				_ = os.WriteFile(filepath.Join(appDir, "app.scl"), []byte("id test\nversion 1.0.0"), 0644)
+
+				// Create simple.scl - but this will fail because scl-parser won't be available
+				sclContent := `env dev {
+  endpoint devops.test.simple.lcl
+  api_key $TEST_API_KEY
+}`
+				_ = os.WriteFile(filepath.Join(dir, "simple.scl"), []byte(sclContent), 0644)
+			},
+			wantErr:     true, // Will fail because scl-parser is not available in test
+			errContains: "scl-parser",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-
-			// Setup fs
+			// Setup directory
 			tmpDir := t.TempDir()
 			oldWd, _ := os.Getwd()
 			_ = os.Chdir(tmpDir)
 			defer func() { _ = os.Chdir(oldWd) }()
 
-			if !tt.wantErr {
-				// Create app dir
-				_ = os.MkdirAll("apps/"+tt.args[0], 0755)
+			// Set flags
+			deployEnv = tt.env
+			deployBump = tt.bump
+			deployDryRun = tt.dryRun
+
+			// Run setup if provided
+			if tt.setupDir != nil {
+				tt.setupDir(t, tmpDir)
 			}
 
 			err := runDeploy(fsx.OSFileSystem{}, tt.args)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("runDeploy() error = %v, wantErr %v", err, tt.wantErr)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("runDeploy() expected error, got nil")
+					return
+				}
+				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+					t.Errorf("runDeploy() error = %v, want containing %q", err, tt.errContains)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("runDeploy() unexpected error = %v", err)
 			}
 		})
 	}
+}
+
+func TestFindSCLParser_NotFound(t *testing.T) {
+	// Clear PATH to ensure scl-parser is not found
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", "")
+	defer func() { _ = os.Setenv("PATH", oldPath) }()
+
+	_, err := findSCLParser()
+	if err == nil {
+		t.Error("findSCLParser() expected error when not in PATH")
+	}
+}
+
+func containsString(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

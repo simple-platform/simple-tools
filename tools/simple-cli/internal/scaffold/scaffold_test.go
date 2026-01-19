@@ -59,7 +59,7 @@ func TestCreateMonorepoStructure_Errors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := CreateMonorepoStructure(tt.mockFS, tt.mockTpl, "/path/to/project", "project")
+			err := CreateMonorepoStructure(tt.mockFS, tt.mockTpl, "/path/to/project", MonorepoConfig{ProjectName: "project", TenantName: "test"})
 			if err == nil {
 				t.Error("Expected error, got nil")
 			}
