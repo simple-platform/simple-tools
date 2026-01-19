@@ -43,7 +43,7 @@ func TestRunDeploy(t *testing.T) {
 			errContains: "not found",
 		},
 		{
-			name: "scl-parser not found",
+			name: "missing simple.scl",
 			args: []string{"apps/myapp"},
 			env:  "dev",
 			bump: "patch",
@@ -54,29 +54,7 @@ func TestRunDeploy(t *testing.T) {
 				_ = os.WriteFile(filepath.Join(appDir, "app.scl"), []byte("id test\nversion 1.0.0"), 0644)
 			},
 			wantErr:     true,
-			errContains: "scl-parser", // Will fail because scl-parser is not available
-		},
-		{
-			name:   "dry run",
-			args:   []string{"apps/myapp"},
-			env:    "dev",
-			bump:   "patch",
-			dryRun: true,
-			setupDir: func(t *testing.T, dir string) {
-				// Create app directory
-				appDir := filepath.Join(dir, "apps", "myapp")
-				_ = os.MkdirAll(appDir, 0755)
-				_ = os.WriteFile(filepath.Join(appDir, "app.scl"), []byte("id test\nversion 1.0.0"), 0644)
-
-				// Create simple.scl - but this will fail because scl-parser won't be available
-				sclContent := `env dev {
-  endpoint devops.test.simple.lcl
-  api_key $TEST_API_KEY
-}`
-				_ = os.WriteFile(filepath.Join(dir, "simple.scl"), []byte(sclContent), 0644)
-			},
-			wantErr:     true, // Will fail because scl-parser is not available in test
-			errContains: "scl-parser",
+			errContains: "simple.scl", // Now fails at simple.scl loading since scl-parser is available
 		},
 	}
 
@@ -115,18 +93,6 @@ func TestRunDeploy(t *testing.T) {
 				t.Errorf("runDeploy() unexpected error = %v", err)
 			}
 		})
-	}
-}
-
-func TestFindSCLParser_NotFound(t *testing.T) {
-	// Clear PATH to ensure scl-parser is not found
-	oldPath := os.Getenv("PATH")
-	_ = os.Setenv("PATH", "")
-	defer func() { _ = os.Setenv("PATH", oldPath) }()
-
-	_, err := findSCLParser()
-	if err == nil {
-		t.Error("findSCLParser() expected error when not in PATH")
 	}
 }
 

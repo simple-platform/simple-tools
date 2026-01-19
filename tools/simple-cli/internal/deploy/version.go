@@ -47,15 +47,9 @@ type DefaultSCLParser struct {
 type SCLBlock struct {
 	Type     string     `json:"type"`
 	Key      string     `json:"key"`
-	Name     []string   `json:"name"`
-	Children []SCLChild `json:"children"`
-}
-
-// SCLChild represents a child element in the SCL AST.
-type SCLChild struct {
-	Type  string `json:"type"`
-	Key   string `json:"key"`
-	Value any    `json:"value"`
+	Name     string     `json:"name"`
+	Value    any        `json:"value"`
+	Children []SCLBlock `json:"children"`
 }
 
 // Parse executes scl-parser CLI and returns the AST.
@@ -110,42 +104,8 @@ func (vm *VersionManager) ParseAppSCL(appPath string) (*AppSCL, error) {
 
 	app := &AppSCL{}
 
-	// Extract top-level key-value pairs from the AST
-	for _, block := range blocks {
-		// The scl-parser returns key-value pairs as blocks with type "property"
-		// or as direct key/value fields
-		switch block.Key {
-		case "id":
-			if len(block.Name) > 0 {
-				app.ID = block.Name[0]
-			}
-		case "version":
-			if len(block.Name) > 0 {
-				app.Version = block.Name[0]
-			}
-		}
-
-		// Also check children for key-value style
-		for _, child := range block.Children {
-			switch child.Key {
-			case "id":
-				if s, ok := child.Value.(string); ok {
-					app.ID = s
-				}
-			case "version":
-				if s, ok := child.Value.(string); ok {
-					app.Version = s
-				}
-			}
-		}
-	}
-
-	// The parser might return the structure differently - let's also try to handle
-	// top-level properties
-	if app.ID == "" || app.Version == "" {
-		// Try parsing as direct properties (scl-parser output varies)
-		app.ID, app.Version = extractFromBlocks(blocks)
-	}
+	// Extract properties via helper
+	app.ID, app.Version = extractFromBlocks(blocks)
 
 	if app.ID == "" {
 		return nil, fmt.Errorf("id not found in app.scl")
@@ -160,15 +120,17 @@ func (vm *VersionManager) ParseAppSCL(appPath string) (*AppSCL, error) {
 // extractFromBlocks handles the scl-parser's actual output format
 func extractFromBlocks(blocks []SCLBlock) (id, version string) {
 	for _, block := range blocks {
-		// scl-parser outputs properties with key and name array
-		switch block.Key {
-		case "id":
-			if len(block.Name) > 0 {
-				id = block.Name[0]
-			}
-		case "version":
-			if len(block.Name) > 0 {
-				version = block.Name[0]
+		// Handle KV properties
+		if block.Type == "kv" {
+			switch block.Key {
+			case "id":
+				if s, ok := block.Value.(string); ok {
+					id = s
+				}
+			case "version":
+				if s, ok := block.Value.(string); ok {
+					version = s
+				}
 			}
 		}
 	}

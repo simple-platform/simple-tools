@@ -41,32 +41,32 @@ func TestLoader_LoadSimpleSCL(t *testing.T) {
 			},
 			parser: &MockSCLParser{
 				Result: []SCLBlock{
+					{Type: "kv", Key: "tenant", Value: "acme"},
 					{
-						Key:  "tenant",
-						Name: []string{"acme"},
-					},
-					{
+						Type: "block",
 						Key:  "env",
-						Name: []string{"dev"},
-						Children: []SCLChild{
-							{Key: "endpoint", Value: "acme-dev.on.simple.dev"},
-							{Key: "api_key", Value: "$SIMPLE_DEV_API_KEY"},
+						Name: "dev",
+						Children: []SCLBlock{
+							{Type: "kv", Key: "endpoint", Value: "acme-dev.on.simple.dev"},
+							{Type: "kv", Key: "api_key", Value: "$SIMPLE_DEV_API_KEY"},
 						},
 					},
 					{
+						Type: "block",
 						Key:  "env",
-						Name: []string{"staging"},
-						Children: []SCLChild{
-							{Key: "endpoint", Value: "acme-staging.on.simple.dev"},
-							{Key: "api_key", Value: "$SIMPLE_STAGING_API_KEY"},
+						Name: "staging",
+						Children: []SCLBlock{
+							{Type: "kv", Key: "endpoint", Value: "acme-staging.on.simple.dev"},
+							{Type: "kv", Key: "api_key", Value: "$SIMPLE_STAGING_API_KEY"},
 						},
 					},
 					{
+						Type: "block",
 						Key:  "env",
-						Name: []string{"prod"},
-						Children: []SCLChild{
-							{Key: "endpoint", Value: "acme.on.simple.dev"},
-							{Key: "api_key", Value: "$SIMPLE_PROD_API_KEY"},
+						Name: "prod",
+						Children: []SCLBlock{
+							{Type: "kv", Key: "endpoint", Value: "acme.on.simple.dev"},
+							{Type: "kv", Key: "api_key", Value: "$SIMPLE_PROD_API_KEY"},
 						},
 					},
 				},
@@ -111,12 +111,13 @@ func TestLoader_LoadSimpleSCL(t *testing.T) {
 			},
 			parser: &MockSCLParser{
 				Result: []SCLBlock{
-					{Key: "tenant", Name: []string{"test"}},
+					{Type: "kv", Key: "tenant", Value: "test"},
 					{
+						Type: "block",
 						Key:  "env",
-						Name: []string{"dev"},
-						Children: []SCLChild{
-							{Key: "api_key", Value: "$SIMPLE_DEV_API_KEY"},
+						Name: "dev",
+						Children: []SCLBlock{
+							{Type: "kv", Key: "api_key", Value: "$SIMPLE_DEV_API_KEY"},
 							// Missing endpoint
 						},
 					},
@@ -137,12 +138,13 @@ func TestLoader_LoadSimpleSCL(t *testing.T) {
 			},
 			parser: &MockSCLParser{
 				Result: []SCLBlock{
-					{Key: "tenant", Name: []string{"test"}},
+					{Type: "kv", Key: "tenant", Value: "test"},
 					{
+						Type: "block",
 						Key:  "env",
-						Name: []string{"dev"},
-						Children: []SCLChild{
-							{Key: "endpoint", Value: "test-dev.on.simple.dev"},
+						Name: "dev",
+						Children: []SCLBlock{
+							{Type: "kv", Key: "endpoint", Value: "test-dev.on.simple.dev"},
 							// Missing api_key
 						},
 					},
@@ -163,7 +165,7 @@ func TestLoader_LoadSimpleSCL(t *testing.T) {
 			},
 			parser: &MockSCLParser{
 				Result: []SCLBlock{
-					{Key: "other_block", Name: []string{"something"}},
+					{Type: "kv", Key: "other_block", Value: "something"},
 				},
 			},
 			wantErr:     true,
@@ -181,13 +183,14 @@ func TestLoader_LoadSimpleSCL(t *testing.T) {
 			},
 			parser: &MockSCLParser{
 				Result: []SCLBlock{
-					{Key: "tenant", Name: []string{"test"}},
+					{Type: "kv", Key: "tenant", Value: "test"},
 					{
+						Type: "block",
 						Key:  "env",
-						Name: []string{}, // Empty name
-						Children: []SCLChild{
-							{Key: "endpoint", Value: "test-dev.on.simple.dev"},
-							{Key: "api_key", Value: "$SIMPLE_DEV_API_KEY"},
+						Name: "", // Empty name
+						Children: []SCLBlock{
+							{Type: "kv", Key: "endpoint", Value: "test-dev.on.simple.dev"},
+							{Type: "kv", Key: "api_key", Value: "$SIMPLE_DEV_API_KEY"},
 						},
 					},
 				},
@@ -422,21 +425,23 @@ func TestExtractEnvironments(t *testing.T) {
 		{
 			name: "multiple environments with tenant",
 			blocks: []SCLBlock{
-				{Key: "tenant", Name: []string{"acme"}},
+				{Type: "kv", Key: "tenant", Value: "acme"},
 				{
+					Type: "block",
 					Key:  "env",
-					Name: []string{"dev"},
-					Children: []SCLChild{
-						{Key: "endpoint", Value: "acme-dev.on.simple.dev"},
-						{Key: "api_key", Value: "key1"},
+					Name: "dev",
+					Children: []SCLBlock{
+						{Type: "kv", Key: "endpoint", Value: "acme-dev.on.simple.dev"},
+						{Type: "kv", Key: "api_key", Value: "key1"},
 					},
 				},
 				{
+					Type: "block",
 					Key:  "env",
-					Name: []string{"prod"},
-					Children: []SCLChild{
-						{Key: "endpoint", Value: "acme.on.simple.dev"},
-						{Key: "api_key", Value: "key2"},
+					Name: "prod",
+					Children: []SCLBlock{
+						{Type: "kv", Key: "endpoint", Value: "acme.on.simple.dev"},
+						{Type: "kv", Key: "api_key", Value: "key2"},
 					},
 				},
 			},
@@ -447,14 +452,15 @@ func TestExtractEnvironments(t *testing.T) {
 		{
 			name: "ignores non-env blocks",
 			blocks: []SCLBlock{
-				{Key: "tenant", Name: []string{"test"}},
-				{Key: "other", Name: []string{"something"}},
+				{Type: "kv", Key: "tenant", Value: "test"},
+				{Type: "kv", Key: "other", Value: "something"},
 				{
+					Type: "block",
 					Key:  "env",
-					Name: []string{"dev"},
-					Children: []SCLChild{
-						{Key: "endpoint", Value: "dev.example.com"},
-						{Key: "api_key", Value: "key1"},
+					Name: "dev",
+					Children: []SCLBlock{
+						{Type: "kv", Key: "endpoint", Value: "dev.example.com"},
+						{Type: "kv", Key: "api_key", Value: "key1"},
 					},
 				},
 			},
@@ -471,14 +477,15 @@ func TestExtractEnvironments(t *testing.T) {
 		{
 			name: "handles non-string values gracefully",
 			blocks: []SCLBlock{
-				{Key: "tenant", Name: []string{"myco"}},
+				{Type: "kv", Key: "tenant", Value: "myco"},
 				{
+					Type: "block",
 					Key:  "env",
-					Name: []string{"dev"},
-					Children: []SCLChild{
-						{Key: "endpoint", Value: "dev.example.com"},
-						{Key: "api_key", Value: "key1"},
-						{Key: "extra", Value: 123}, // Non-string value
+					Name: "dev",
+					Children: []SCLBlock{
+						{Type: "kv", Key: "endpoint", Value: "dev.example.com"},
+						{Type: "kv", Key: "api_key", Value: "key1"},
+						{Type: "kv", Key: "extra", Value: 123}, // Non-string value
 					},
 				},
 			},

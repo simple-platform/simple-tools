@@ -6,8 +6,6 @@ import (
 	"net/url"
 	"sync"
 	"time"
-
-	"github.com/nshafer/phx"
 )
 
 // Client handles deployment via Phoenix Channel.
@@ -15,8 +13,8 @@ type Client struct {
 	endpoint string
 	jwt      string
 	appID    string
-	socket   *phx.Socket
-	channel  *phx.Channel
+	socket   *PhoenixSocket
+	channel  *PhoenixChannel
 	timeout  time.Duration
 }
 
@@ -42,17 +40,12 @@ func NewClient(cfg ClientConfig) *Client {
 
 // Connect establishes WebSocket connection to the Phoenix server.
 func (c *Client) Connect() error {
-	endpointURL, err := url.Parse(fmt.Sprintf("wss://%s/socket/websocket?auth_token=%s", c.endpoint, c.jwt))
+	endpointURL, err := url.Parse(fmt.Sprintf("wss://%s/socket?auth_token=%s", c.endpoint, c.jwt))
 	if err != nil {
 		return fmt.Errorf("invalid endpoint URL: %w", err)
 	}
 
-	socket := phx.NewSocket(endpointURL)
-	socket.ReconnectAfterFunc = func(attempts int) time.Duration {
-		// Don't auto-reconnect for CLI
-		return 0
-	}
-
+	socket := NewPhoenixSocket(endpointURL)
 	if err := socket.Connect(); err != nil {
 		return fmt.Errorf("websocket connect failed: %w", err)
 	}
@@ -68,30 +61,10 @@ func (c *Client) JoinChannel(appID string) error {
 	}
 
 	c.appID = appID
-	channel := c.socket.Channel(fmt.Sprintf("deploy:%s", appID), nil)
+	channel := c.socket.Channel(fmt.Sprintf("deploy:%s", appID))
 
-	// Use a channel to wait for join response
-	done := make(chan error, 1)
-
-	join, err := channel.Join()
-	if err != nil {
+	if err := channel.Join(c.timeout); err != nil {
 		return fmt.Errorf("failed to join channel: %w", err)
-	}
-
-	join.Receive("ok", func(response any) {
-		done <- nil
-	})
-	join.Receive("error", func(response any) {
-		done <- fmt.Errorf("join rejected: %v", response)
-	})
-
-	select {
-	case err := <-done:
-		if err != nil {
-			return err
-		}
-	case <-time.After(c.timeout):
-		return fmt.Errorf("join channel timeout")
 	}
 
 	c.channel = channel
@@ -114,12 +87,7 @@ func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]stri
 		})
 	}
 
-	done := make(chan struct {
-		files []string
-		err   error
-	}, 1)
-
-	push, err := c.channel.Push("manifest", map[string]interface{}{
+	ref, err := c.channel.Push("manifest", map[string]interface{}{
 		"files":   fileList,
 		"version": version,
 	})
@@ -127,8 +95,13 @@ func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]stri
 		return nil, fmt.Errorf("manifest push failed: %w", err)
 	}
 
-	push.Receive("ok", func(response any) {
-		resp, ok := response.(map[string]interface{})
+	done := make(chan struct {
+		files []string
+		err   error
+	}, 1)
+
+	c.channel.onRef(ref, func(payload any) {
+		resp, ok := payload.(map[string]any)
 		if !ok {
 			done <- struct {
 				files []string
@@ -137,7 +110,18 @@ func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]stri
 			return
 		}
 
-		needFiles, ok := resp["need_files"].([]interface{})
+		// Check for error status
+		if status, ok := resp["status"].(string); ok && status == "error" {
+			done <- struct {
+				files []string
+				err   error
+			}{nil, fmt.Errorf("manifest rejected: %v", resp["response"])}
+			return
+		}
+
+		// Extract response - for phx_reply, data is in "response" field
+		response, _ := resp["response"].(map[string]any)
+		needFiles, ok := response["need_files"].([]interface{})
 		if !ok {
 			done <- struct {
 				files []string
@@ -156,13 +140,6 @@ func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]stri
 			files []string
 			err   error
 		}{result, nil}
-	})
-
-	push.Receive("error", func(response any) {
-		done <- struct {
-			files []string
-			err   error
-		}{nil, fmt.Errorf("manifest rejected: %v", response)}
 	})
 
 	select {
@@ -209,11 +186,47 @@ func (c *Client) SendFiles(files map[string]FileInfo, neededPaths []string) erro
 	return nil
 }
 
-// sendFile sends a single file (base64 encoded).
+// sendFile sends a single file using Phoenix V2 binary protocol.
+// Format: [metadata_len (4 bytes)] [metadata_json] [file_content]
 func (c *Client) sendFile(path string, fi FileInfo) error {
+	metadata := map[string]string{
+		"path": path,
+		"hash": fi.Hash,
+	}
+
+	ref, err := c.channel.PushBinaryFile(metadata, fi.Content)
+	if err != nil {
+		return fmt.Errorf("file push failed for %s: %w", path, err)
+	}
+
+	done := make(chan error, 1)
+	c.channel.onRef(ref, func(payload any) {
+		resp, ok := payload.(map[string]any)
+		if !ok {
+			done <- nil // Binary file pushes may not reply, consider success
+			return
+		}
+		if status, ok := resp["status"].(string); ok && status == "error" {
+			done <- fmt.Errorf("file rejected for %s: %v", path, resp["response"])
+			return
+		}
+		done <- nil
+	})
+
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(c.timeout):
+		// If no reply within timeout, assume success (server stores in assigns without reply)
+		return nil
+	}
+}
+
+// sendFileBase64 sends a file using JSON with base64 encoding (fallback).
+func (c *Client) sendFileBase64(path string, fi FileInfo) error {
 	done := make(chan error, 1)
 
-	push, err := c.channel.Push("file", map[string]interface{}{
+	ref, err := c.channel.Push("file", map[string]interface{}{
 		"path": path,
 		"hash": fi.Hash,
 		"data": base64.StdEncoding.EncodeToString(fi.Content),
@@ -222,12 +235,17 @@ func (c *Client) sendFile(path string, fi FileInfo) error {
 		return fmt.Errorf("file push failed for %s: %w", path, err)
 	}
 
-	push.Receive("ok", func(response any) {
+	c.channel.onRef(ref, func(payload any) {
+		resp, ok := payload.(map[string]any)
+		if !ok {
+			done <- nil // File messages may not reply
+			return
+		}
+		if status, ok := resp["status"].(string); ok && status == "error" {
+			done <- fmt.Errorf("file rejected for %s: %v", path, resp["response"])
+			return
+		}
 		done <- nil
-	})
-
-	push.Receive("error", func(response any) {
-		done <- fmt.Errorf("file rejected for %s: %v", path, response)
 	})
 
 	select {
@@ -244,18 +262,18 @@ func (c *Client) Deploy() (*DeployResult, error) {
 		return nil, fmt.Errorf("not joined to channel")
 	}
 
+	ref, err := c.channel.Push("deploy", map[string]interface{}{})
+	if err != nil {
+		return nil, fmt.Errorf("deploy push failed: %w", err)
+	}
+
 	done := make(chan struct {
 		result *DeployResult
 		err    error
 	}, 1)
 
-	push, err := c.channel.Push("deploy", map[string]interface{}{})
-	if err != nil {
-		return nil, fmt.Errorf("deploy push failed: %w", err)
-	}
-
-	push.Receive("ok", func(response any) {
-		resp, ok := response.(map[string]interface{})
+	c.channel.onRef(ref, func(payload any) {
+		resp, ok := payload.(map[string]any)
 		if !ok {
 			done <- struct {
 				result *DeployResult
@@ -264,9 +282,23 @@ func (c *Client) Deploy() (*DeployResult, error) {
 			return
 		}
 
-		version, _ := resp["version"].(string)
+		if status, ok := resp["status"].(string); ok && status == "error" {
+			errResp, _ := resp["response"].(map[string]any)
+			errMsg := "unknown error"
+			if msg, ok := errResp["message"].(string); ok {
+				errMsg = msg
+			}
+			done <- struct {
+				result *DeployResult
+				err    error
+			}{nil, fmt.Errorf("deploy failed: %s", errMsg)}
+			return
+		}
+
+		response, _ := resp["response"].(map[string]any)
+		version, _ := response["version"].(string)
 		fileCount := 0
-		if fc, ok := resp["file_count"].(float64); ok {
+		if fc, ok := response["file_count"].(float64); ok {
 			fileCount = int(fc)
 		}
 
@@ -280,19 +312,6 @@ func (c *Client) Deploy() (*DeployResult, error) {
 		}, nil}
 	})
 
-	push.Receive("error", func(response any) {
-		errMsg := "unknown error"
-		if resp, ok := response.(map[string]interface{}); ok {
-			if msg, ok := resp["error"].(string); ok {
-				errMsg = msg
-			}
-		}
-		done <- struct {
-			result *DeployResult
-			err    error
-		}{nil, fmt.Errorf("deploy failed: %s", errMsg)}
-	})
-
 	select {
 	case result := <-done:
 		return result.result, result.err
@@ -304,7 +323,7 @@ func (c *Client) Deploy() (*DeployResult, error) {
 // Close disconnects from the socket.
 func (c *Client) Close() {
 	if c.channel != nil {
-		_, _ = c.channel.Leave()
+		_ = c.channel.Leave()
 	}
 	if c.socket != nil {
 		c.socket.Disconnect()

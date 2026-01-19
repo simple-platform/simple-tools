@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -93,6 +94,11 @@ func (a *Authenticator) GetJWT(endpoint, apiKey, env string) (string, error) {
 		return "", err
 	}
 
+	// Verify JWT Signature (Debugging step)
+	if err := a.VerifyJWT(endpoint, token); err != nil {
+		return "", fmt.Errorf("JWT verification failed: %w", err)
+	}
+
 	// Extract expiry from JWT's exp claim
 	expiresAt, err := a.Decoder.DecodeExpiry(token)
 	if err != nil {
@@ -116,14 +122,15 @@ func (a *Authenticator) GetJWT(endpoint, apiKey, env string) (string, error) {
 
 // exchangeAPIKeyForJWT calls the identity endpoint to exchange API key for JWT.
 func (a *Authenticator) exchangeAPIKeyForJWT(endpoint, apiKey string) (string, error) {
-	url := fmt.Sprintf("https://%s/api/auth/token", endpoint)
+	url := fmt.Sprintf("https://%s/auth/login", endpoint)
 
-	req, err := http.NewRequest("POST", url, bytes.NewReader([]byte("{}")))
+	// Request body with api_key
+	body := fmt.Sprintf(`{"api_key":"%s"}`, apiKey)
+	req, err := http.NewRequest("POST", url, bytes.NewReader([]byte(body)))
 	if err != nil {
 		return "", fmt.Errorf("failed to create auth request: %w", err)
 	}
 
-	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.Client.Do(req)
@@ -132,19 +139,19 @@ func (a *Authenticator) exchangeAPIKeyForJWT(endpoint, apiKey string) (string, e
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("failed to read auth response: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("authentication failed: status %d, body: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("authentication failed: status %d, body: %s", resp.StatusCode, string(respBody))
 	}
 
 	var result struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.Unmarshal(body, &result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return "", fmt.Errorf("failed to parse auth response: %w", err)
 	}
 
@@ -153,6 +160,104 @@ func (a *Authenticator) exchangeAPIKeyForJWT(endpoint, apiKey string) (string, e
 	}
 
 	return result.AccessToken, nil
+}
+
+// VerifyJWT checks the JWT signature against the Identity service's JWKS.
+func (a *Authenticator) VerifyJWT(endpoint, token string) error {
+	// Fetch JWKS
+	jwksURL := fmt.Sprintf("https://%s/.well-known/jwks.json", endpoint)
+	req, err := http.NewRequest("GET", jwksURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create JWKS request: %w", err)
+	}
+
+	resp, err := a.Client.Do(req)
+	if err != nil {
+		return fmt.Errorf("JWKS request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("failed to fetch JWKS from %s: status %d", jwksURL, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read JWKS response: %w", err)
+	}
+
+	var jwks struct {
+		Keys []struct {
+			Kty string `json:"kty"`
+			Kid string `json:"kid"`
+			Crv string `json:"crv"`
+			X   string `json:"x"`
+		} `json:"keys"`
+	}
+	if err := json.Unmarshal(body, &jwks); err != nil {
+		return fmt.Errorf("failed to parse JWKS: %w", err)
+	}
+
+	// Parse Token Header to find kid
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return fmt.Errorf("invalid JWT format")
+	}
+
+	headerBytes, err := base64URLDecode(parts[0])
+	if err != nil {
+		return fmt.Errorf("failed to decode JWT header: %w", err)
+	}
+
+	var header struct {
+		Kid string `json:"kid"`
+		Alg string `json:"alg"`
+	}
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return fmt.Errorf("failed to parse JWT header: %w", err)
+	}
+
+	if header.Alg != "EdDSA" {
+		return fmt.Errorf("unsupported algorithm: %s", header.Alg)
+	}
+
+	// Find matching key
+	var pubKeyBytes []byte
+	for _, key := range jwks.Keys {
+		if key.Kid == header.Kid && key.Kty == "OKP" && key.Crv == "Ed25519" {
+			pubKeyBytes, err = base64URLDecode(key.X)
+			if err != nil {
+				return fmt.Errorf("invalid public key in JWKS: %w", err)
+			}
+			break
+		}
+	}
+
+	if pubKeyBytes == nil {
+		return fmt.Errorf("matching public key not found in JWKS for kid %s", header.Kid)
+	}
+
+	// Verify Signature
+	message := []byte(parts[0] + "." + parts[1])
+	signature, err := base64URLDecode(parts[2])
+	if err != nil {
+		return fmt.Errorf("failed to decode JWT signature: %w", err)
+	}
+
+	if len(pubKeyBytes) != 32 {
+		return fmt.Errorf("invalid Ed25519 public key length: %d", len(pubKeyBytes))
+	}
+
+	if !VerifyEd25519(pubKeyBytes, message, signature) {
+		return fmt.Errorf("invalid JWT signature")
+	}
+
+	return nil
+}
+
+// VerifyEd25519 verifies the signature using crypto/ed25519.
+var VerifyEd25519 = func(publicKey []byte, message, signature []byte) bool {
+	return ed25519.Verify(publicKey, message, signature)
 }
 
 // ClearCache removes cached token for an environment.

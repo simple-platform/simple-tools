@@ -46,19 +46,16 @@ type DefaultSCLParser struct {
 	ParserPath string
 }
 
-// SCLBlock represents a block in the SCL AST.
+// SCLBlock represents an element in the SCL AST.
+// The scl-parser outputs two types:
+//   - "kv" (key-value): has Key and Value fields
+//   - "block": has Key, Name (string), and Children
 type SCLBlock struct {
-	Type     string     `json:"type"`
-	Key      string     `json:"key"`
-	Name     []string   `json:"name"`
-	Children []SCLChild `json:"children"`
-}
-
-// SCLChild represents a child element in the SCL AST.
-type SCLChild struct {
-	Type  string `json:"type"`
-	Key   string `json:"key"`
-	Value any    `json:"value"`
+	Type     string     `json:"type"`     // "kv" or "block"
+	Key      string     `json:"key"`      // e.g., "tenant", "env"
+	Name     string     `json:"name"`     // For blocks: the block name (e.g., "dev")
+	Value    any        `json:"value"`    // For kv: the value
+	Children []SCLBlock `json:"children"` // For blocks: child elements
 }
 
 // Parse executes scl-parser CLI and returns the AST.
@@ -156,25 +153,27 @@ func extractConfig(blocks []SCLBlock) (*SimpleSCL, error) {
 	for _, block := range blocks {
 		switch block.Key {
 		case "tenant":
-			// Extract tenant name
-			if len(block.Name) > 0 {
-				cfg.Tenant = block.Name[0]
+			// tenant is a KV, so Value contains the tenant name
+			if s, ok := block.Value.(string); ok {
+				cfg.Tenant = s
 			}
 		case "env":
-			// Extract environment block
-			if len(block.Name) > 0 {
-				envName := block.Name[0]
+			// env is a block with Name and Children
+			if block.Name != "" {
+				envName := block.Name
 				env := &Environment{Name: envName}
 
 				for _, child := range block.Children {
-					switch child.Key {
-					case "endpoint":
-						if s, ok := child.Value.(string); ok {
-							env.Endpoint = s
-						}
-					case "api_key":
-						if s, ok := child.Value.(string); ok {
-							env.APIKey = s
+					if child.Type == "kv" {
+						switch child.Key {
+						case "endpoint":
+							if s, ok := child.Value.(string); ok {
+								env.Endpoint = s
+							}
+						case "api_key":
+							if s, ok := child.Value.(string); ok {
+								env.APIKey = s
+							}
 						}
 					}
 				}

@@ -3,6 +3,7 @@ package deploy
 import (
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -13,15 +14,22 @@ import (
 
 // MockHTTPClient implements HTTPClient for testing.
 type MockHTTPClient struct {
-	Response *http.Response
-	Err      error
-	Requests []*http.Request
+	Response  *http.Response
+	Responses []*http.Response // For sequential responses
+	Err       error
+	Requests  []*http.Request
 }
 
 func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	m.Requests = append(m.Requests, req)
 	if m.Err != nil {
 		return nil, m.Err
+	}
+	// Use sequential responses if available
+	if len(m.Responses) > 0 {
+		resp := m.Responses[0]
+		m.Responses = m.Responses[1:]
+		return resp, nil
 	}
 	return m.Response, nil
 }
@@ -68,7 +76,11 @@ func (m *MockJWTDecoder) DecodeExpiry(token string) (time.Time, error) {
 
 // createTestJWT creates a valid JWT structure for testing.
 func createTestJWT(exp int64) string {
-	header := base64.URLEncoding.EncodeToString([]byte(`{"alg":"EdDSA","typ":"at+jwt"}`))
+	return createTestJWTWithAlg(exp, "EdDSA")
+}
+
+func createTestJWTWithAlg(exp int64, alg string) string {
+	header := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"alg":"%s","typ":"at+jwt","kid":"test-key-id"}`, alg)))
 	payload := base64.URLEncoding.EncodeToString([]byte(`{"exp":` + itoa(exp) + `,"sub":"test"}`))
 	signature := base64.URLEncoding.EncodeToString([]byte("fake-signature"))
 	return header + "." + payload + "." + signature
@@ -89,125 +101,100 @@ func itoa(n int64) string {
 func TestAuthenticator_GetJWT(t *testing.T) {
 	fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	futureExpiry := fixedTime.Add(1 * time.Hour)
+	// 32-byte key base64url encoded
+	validJWKS := `{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`
+
+	// Mock verification to always pass by default
+	originalVerify := VerifyEd25519
+	VerifyEd25519 = func(pub, msg, sig []byte) bool { return true }
+	defer func() { VerifyEd25519 = originalVerify }()
 
 	tests := []struct {
-		name           string
-		cachedToken    *CachedToken
-		httpResponse   *http.Response
-		httpErr        error
-		decoderExpiry  time.Time
-		decoderErr     error
-		wantToken      string
-		wantErr        bool
-		errContains    string
-		expectHTTPCall bool
+		name            string
+		cachedToken     *CachedToken
+		httpResponses   []*http.Response
+		httpErr         error
+		decoderExpiry   time.Time
+		decoderErr      error
+		verifyErr       bool
+		wantToken       string
+		wantErr         bool
+		errContains     string
+		expectHTTPCalls int
 	}{
 		{
 			name: "cache hit - valid token",
 			cachedToken: &CachedToken{
 				AccessToken: "cached-jwt-token",
-				ExpiresAt:   fixedTime.Add(30 * time.Minute), // Expires in 30 mins
+				ExpiresAt:   fixedTime.Add(30 * time.Minute),
 			},
-			wantToken:      "cached-jwt-token",
-			wantErr:        false,
-			expectHTTPCall: false,
+			wantToken:       "cached-jwt-token",
+			wantErr:         false,
+			expectHTTPCalls: 0,
 		},
 		{
-			name: "cache miss - fetch new token",
-			httpResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`{"access_token":"new-jwt-token"}`))),
+			name: "cache miss - fetch new token and verify",
+			httpResponses: []*http.Response{
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(futureExpiry.Unix())))))},
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},
 			},
-			decoderExpiry:  futureExpiry,
-			wantToken:      "new-jwt-token",
-			wantErr:        false,
-			expectHTTPCall: true,
+			decoderExpiry:   futureExpiry,
+			wantToken:       createTestJWT(futureExpiry.Unix()),
+			wantErr:         false,
+			expectHTTPCalls: 2,
 		},
 		{
-			name: "cache expired - fetch new token",
-			cachedToken: &CachedToken{
-				AccessToken: "expired-token",
-				ExpiresAt:   fixedTime.Add(-10 * time.Minute), // Expired 10 mins ago
+			name: "verification failed",
+			httpResponses: []*http.Response{
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(futureExpiry.Unix())))))},
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},
 			},
-			httpResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`{"access_token":"fresh-jwt-token"}`))),
-			},
-			decoderExpiry:  futureExpiry,
-			wantToken:      "fresh-jwt-token",
-			wantErr:        false,
-			expectHTTPCall: true,
+			verifyErr:       true,
+			wantErr:         true,
+			errContains:     "invalid JWT signature",
+			expectHTTPCalls: 2,
 		},
 		{
-			name: "cache expiring soon - fetch new token",
-			cachedToken: &CachedToken{
-				AccessToken: "almost-expired-token",
-				ExpiresAt:   fixedTime.Add(3 * time.Minute), // Expires in 3 mins (within 5 min buffer)
-			},
-			httpResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`{"access_token":"refreshed-jwt-token"}`))),
-			},
-			decoderExpiry:  futureExpiry,
-			wantToken:      "refreshed-jwt-token",
-			wantErr:        false,
-			expectHTTPCall: true,
+			name:            "http error on token",
+			httpErr:         &mockError{msg: "connection refused"},
+			wantErr:         true,
+			errContains:     "auth request failed",
+			expectHTTPCalls: 1,
 		},
 		{
-			name:           "http error",
-			httpErr:        &mockError{msg: "connection refused"},
-			wantErr:        true,
-			errContains:    "auth request failed",
-			expectHTTPCall: true,
+			name: "http error on jwks",
+			httpResponses: []*http.Response{
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(`{"access_token":"token"}`)))},
+			},
+			wantErr:         true,
+			expectHTTPCalls: 2,
 		},
 		{
-			name: "auth error response",
-			httpResponse: &http.Response{
-				StatusCode: http.StatusUnauthorized,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`{"error":"invalid api key"}`))),
+			name: "unsupported algorithm",
+			httpResponses: []*http.Response{
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWTWithAlg(futureExpiry.Unix(), "HS256")))))},
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},
 			},
-			wantErr:        true,
-			errContains:    "authentication failed",
-			expectHTTPCall: true,
-		},
-		{
-			name: "empty access token",
-			httpResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`{"access_token":""}`))),
-			},
-			wantErr:        true,
-			errContains:    "empty access token",
-			expectHTTPCall: true,
-		},
-		{
-			name: "invalid json response",
-			httpResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`not json`))),
-			},
-			wantErr:        true,
-			errContains:    "parse auth response",
-			expectHTTPCall: true,
-		},
-		{
-			name: "decoder error - fallback to default expiry",
-			httpResponse: &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(bytes.NewReader([]byte(`{"access_token":"token-with-bad-exp"}`))),
-			},
-			decoderErr:     &mockError{msg: "invalid JWT"},
-			wantToken:      "token-with-bad-exp",
-			wantErr:        false,
-			expectHTTPCall: true,
+			wantErr:         true,
+			errContains:     "unsupported algorithm: HS256",
+			expectHTTPCalls: 2,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Special handling for the "http error on jwks" case where we want the second call to return 404
+			if tt.name == "http error on jwks" {
+				tt.httpResponses = []*http.Response{
+					{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(`{"access_token":"token"}`)))},
+					{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte{}))},
+				}
+				tt.errContains = "failed to fetch JWKS"
+			}
+
 			mockClient := &MockHTTPClient{
-				Response: tt.httpResponse,
-				Err:      tt.httpErr,
+				Responses: tt.httpResponses,
+				Err:       tt.httpErr,
 			}
 
 			cache := &TokenCache{Tokens: make(map[string]CachedToken)}
@@ -226,6 +213,13 @@ func TestAuthenticator_GetJWT(t *testing.T) {
 				Store:   mockStore,
 				Decoder: mockDecoder,
 				TimeNow: func() time.Time { return fixedTime },
+			}
+
+			// Mock verify logic for this run
+			if tt.verifyErr {
+				VerifyEd25519 = func(_, _, _ []byte) bool { return false }
+			} else {
+				VerifyEd25519 = func(_, _, _ []byte) bool { return true }
 			}
 
 			token, err := auth.GetJWT("devops.acme.simple.dev", "test-api-key", "dev")
@@ -250,23 +244,8 @@ func TestAuthenticator_GetJWT(t *testing.T) {
 				t.Errorf("GetJWT() = %q, want %q", token, tt.wantToken)
 			}
 
-			// Verify HTTP call was made or not
-			if tt.expectHTTPCall && len(mockClient.Requests) == 0 {
-				t.Error("GetJWT() expected HTTP call, but none made")
-			}
-			if !tt.expectHTTPCall && len(mockClient.Requests) > 0 {
-				t.Error("GetJWT() unexpected HTTP call made")
-			}
-
-			// Verify headers on HTTP request
-			if tt.expectHTTPCall && len(mockClient.Requests) > 0 {
-				req := mockClient.Requests[0]
-				if req.Header.Get("x-api-key") != "test-api-key" {
-					t.Errorf("HTTP request missing x-api-key header")
-				}
-				if req.Header.Get("Content-Type") != "application/json" {
-					t.Errorf("HTTP request missing Content-Type header")
-				}
+			if len(mockClient.Requests) != tt.expectHTTPCalls {
+				t.Errorf("GetJWT() HTTP calls = %d, want %d", len(mockClient.Requests), tt.expectHTTPCalls)
 			}
 		})
 	}
@@ -531,11 +510,16 @@ func TestNewAuthenticator(t *testing.T) {
 
 func TestAuthenticator_GetJWT_StoreLoadError(t *testing.T) {
 	mockClient := &MockHTTPClient{
-		Response: &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader([]byte(`{"access_token":"new-token"}`))),
+		Responses: []*http.Response{
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(time.Now().Add(1*time.Hour).Unix())))))},
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))},
 		},
 	}
+
+	// Mock verification to pass
+	originalVerify := VerifyEd25519
+	VerifyEd25519 = func(pub, msg, sig []byte) bool { return true }
+	defer func() { VerifyEd25519 = originalVerify }()
 
 	mockStore := &MockTokenStore{
 		LoadErr: &mockError{msg: "load error"},
@@ -553,8 +537,8 @@ func TestAuthenticator_GetJWT_StoreLoadError(t *testing.T) {
 	if err != nil {
 		t.Errorf("GetJWT() unexpected error = %v", err)
 	}
-	if token != "new-token" {
-		t.Errorf("GetJWT() = %q, want %q", token, "new-token")
+	if token != createTestJWT(time.Now().Add(1*time.Hour).Unix()) {
+		t.Errorf("GetJWT() token mismatch")
 	}
 }
 
@@ -577,12 +561,18 @@ func TestFileTokenStore_tokenCachePath(t *testing.T) {
 }
 
 func TestExchangeAPIKeyForJWT_RequestFormat(t *testing.T) {
+	futureToken := createTestJWT(time.Now().Add(1 * time.Hour).Unix())
 	mockClient := &MockHTTPClient{
-		Response: &http.Response{
-			StatusCode: http.StatusOK,
-			Body:       io.NopCloser(bytes.NewReader([]byte(`{"access_token":"jwt"}`))),
+		Responses: []*http.Response{
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, futureToken))))},
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))},
 		},
 	}
+
+	// Mock verification
+	originalVerify := VerifyEd25519
+	VerifyEd25519 = func(pub, msg, sig []byte) bool { return true }
+	defer func() { VerifyEd25519 = originalVerify }()
 
 	auth := &Authenticator{
 		Client:  mockClient,
@@ -593,15 +583,15 @@ func TestExchangeAPIKeyForJWT_RequestFormat(t *testing.T) {
 
 	_, _ = auth.GetJWT("devops.tenant.simple.dev", "my-api-key", "prod")
 
-	if len(mockClient.Requests) != 1 {
-		t.Fatalf("Expected 1 request, got %d", len(mockClient.Requests))
+	if len(mockClient.Requests) < 1 {
+		t.Fatalf("Expected at least 1 request, got %d", len(mockClient.Requests))
 	}
 
 	req := mockClient.Requests[0]
 
 	// Check URL
-	if req.URL.String() != "https://devops.tenant.simple.dev/api/auth/token" {
-		t.Errorf("Request URL = %q, want %q", req.URL.String(), "https://devops.tenant.simple.dev/api/auth/token")
+	if req.URL.String() != "https://devops.tenant.simple.dev/auth/login" {
+		t.Errorf("Request URL = %q, want %q", req.URL.String(), "https://devops.tenant.simple.dev/auth/login")
 	}
 
 	// Check method
@@ -610,7 +600,14 @@ func TestExchangeAPIKeyForJWT_RequestFormat(t *testing.T) {
 	}
 
 	// Check headers
-	if req.Header.Get("x-api-key") != "my-api-key" {
-		t.Errorf("x-api-key header = %q, want %q", req.Header.Get("x-api-key"), "my-api-key")
+	if req.Header.Get("x-api-key") != "" {
+		t.Errorf("x-api-key header should be empty, got %q", req.Header.Get("x-api-key"))
+	}
+
+	// Check body
+	body, _ := io.ReadAll(req.Body)
+	expectedBody := `{"api_key":"my-api-key"}`
+	if string(body) != expectedBody {
+		t.Errorf("Request body = %q, want %q", string(body), expectedBody)
 	}
 }

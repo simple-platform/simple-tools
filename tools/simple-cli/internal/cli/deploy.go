@@ -2,12 +2,10 @@ package cli
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"simple-cli/internal/build"
 	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
@@ -54,10 +52,10 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 		return fmt.Errorf("app path '%s' not found", appPath)
 	}
 
-	// Find scl-parser
-	parserPath, err := findSCLParser()
+	// Ensure scl-parser is available (downloads if needed)
+	parserPath, err := build.EnsureSCLParser(nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to ensure scl-parser: %w", err)
 	}
 
 	// === PHASE 1: Config & Auth ===
@@ -207,29 +205,8 @@ func dryRunOutput(files map[string]deploy.FileInfo, version string) error {
 	return nil
 }
 
-func findSCLParser() (string, error) {
-	// First, check if scl-parser is in PATH
-	if path, err := exec.LookPath("scl-parser"); err == nil {
-		return path, nil
-	}
-
-	// Check common locations relative to executable
-	execPath, _ := os.Executable()
-	execDir := filepath.Dir(execPath)
-	candidates := []string{
-		filepath.Join(execDir, "scl-parser"),
-		filepath.Join(execDir, "..", "bin", "scl-parser"),
-		"/usr/local/bin/scl-parser",
-	}
-
-	for _, p := range candidates {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-
-	return "", fmt.Errorf("scl-parser not found in PATH or common locations")
-}
+// findSCLParser is deprecated - kept for test compatibility
+// Use build.EnsureSCLParser() instead which handles automatic download
 
 func init() {
 	RootCmd.AddCommand(deployCmd)

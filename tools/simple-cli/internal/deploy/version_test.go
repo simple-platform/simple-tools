@@ -251,8 +251,8 @@ func TestVersionManager_ParseAppSCL(t *testing.T) {
 		{
 			name: "valid app.scl",
 			parserBlocks: []SCLBlock{
-				{Key: "id", Name: []string{"com.example.app"}},
-				{Key: "version", Name: []string{"1.0.0"}},
+				{Type: "kv", Key: "id", Value: "com.example.app"},
+				{Type: "kv", Key: "version", Value: "1.0.0"},
 			},
 			wantID:      "com.example.app",
 			wantVersion: "1.0.0",
@@ -261,8 +261,8 @@ func TestVersionManager_ParseAppSCL(t *testing.T) {
 		{
 			name: "valid app.scl with prerelease",
 			parserBlocks: []SCLBlock{
-				{Key: "id", Name: []string{"com.test.myapp"}},
-				{Key: "version", Name: []string{"1.2.3-dev.5"}},
+				{Type: "kv", Key: "id", Value: "com.test.myapp"},
+				{Type: "kv", Key: "version", Value: "1.2.3-dev.5"},
 			},
 			wantID:      "com.test.myapp",
 			wantVersion: "1.2.3-dev.5",
@@ -271,7 +271,7 @@ func TestVersionManager_ParseAppSCL(t *testing.T) {
 		{
 			name: "missing id",
 			parserBlocks: []SCLBlock{
-				{Key: "version", Name: []string{"1.0.0"}},
+				{Type: "kv", Key: "version", Value: "1.0.0"},
 			},
 			wantErr:     true,
 			errContains: "id not found",
@@ -279,7 +279,7 @@ func TestVersionManager_ParseAppSCL(t *testing.T) {
 		{
 			name: "missing version",
 			parserBlocks: []SCLBlock{
-				{Key: "id", Name: []string{"com.example.app"}},
+				{Type: "kv", Key: "id", Value: "com.example.app"},
 			},
 			wantErr:     true,
 			errContains: "version not found",
@@ -351,8 +351,8 @@ func TestVersionManager_BumpVersion(t *testing.T) {
 				"/apps/myapp/app.scl": []byte("id \"com.example.app\"\nversion \"1.0.0\"\n"),
 			},
 			parserBlocks: []SCLBlock{
-				{Key: "id", Name: []string{"com.example.app"}},
-				{Key: "version", Name: []string{"1.0.0"}},
+				{Type: "kv", Key: "id", Value: "com.example.app"},
+				{Type: "kv", Key: "version", Value: "1.0.0"},
 			},
 			appPath:     "/apps/myapp",
 			env:         "dev",
@@ -364,8 +364,8 @@ func TestVersionManager_BumpVersion(t *testing.T) {
 			name:  "file not found",
 			files: map[string][]byte{},
 			parserBlocks: []SCLBlock{
-				{Key: "id", Name: []string{"com.example.app"}},
-				{Key: "version", Name: []string{"1.0.0"}},
+				{Type: "kv", Key: "id", Value: "com.example.app"},
+				{Type: "kv", Key: "version", Value: "1.0.0"},
 			},
 			appPath:     "/apps/missing",
 			env:         "dev",
@@ -439,8 +439,8 @@ func TestVersionManager_BumpVersion_WriteError(t *testing.T) {
 	}
 	mockParser := &MockSCLParser{
 		Result: []SCLBlock{
-			{Key: "id", Name: []string{"com.example.app"}},
-			{Key: "version", Name: []string{"1.0.0"}},
+			{Type: "kv", Key: "id", Value: "com.example.app"},
+			{Type: "kv", Key: "version", Value: "1.0.0"},
 		},
 	}
 
@@ -585,8 +585,8 @@ func TestExtractFromBlocks(t *testing.T) {
 		{
 			name: "both id and version",
 			blocks: []SCLBlock{
-				{Key: "id", Name: []string{"com.test.app"}},
-				{Key: "version", Name: []string{"2.0.0"}},
+				{Type: "kv", Key: "id", Value: "com.test.app"},
+				{Type: "kv", Key: "version", Value: "2.0.0"},
 			},
 			wantID:      "com.test.app",
 			wantVersion: "2.0.0",
@@ -594,13 +594,21 @@ func TestExtractFromBlocks(t *testing.T) {
 		{
 			name: "only id",
 			blocks: []SCLBlock{
-				{Key: "id", Name: []string{"com.test.app"}},
+				{Type: "kv", Key: "id", Value: "com.test.app"},
 			},
 			wantID:      "com.test.app",
 			wantVersion: "",
 		},
 		{
-			name:        "empty blocks",
+			name: "only version",
+			blocks: []SCLBlock{
+				{Type: "kv", Key: "version", Value: "2.0.0"},
+			},
+			wantID:      "",
+			wantVersion: "2.0.0",
+		},
+		{
+			name:        "empty",
 			blocks:      []SCLBlock{},
 			wantID:      "",
 			wantVersion: "",
