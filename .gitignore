@@ -1,6 +1,7 @@
 .DS_Store
 .devbox
 .turbo
+.tmp
 .nix-*
 *.out
 *.log

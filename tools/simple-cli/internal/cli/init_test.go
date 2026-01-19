@@ -13,7 +13,8 @@ func TestCreateMonorepoStructure_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "test-project")
 
-	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, testPath, "test-project")
+	cfg := scaffold.MonorepoConfig{ProjectName: "test-project", TenantName: "acme"}
+	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, testPath, cfg)
 	if err != nil {
 		t.Fatalf("createMonorepoStructure failed: %v", err)
 	}
@@ -37,6 +38,7 @@ func TestCreateMonorepoStructure_Success(t *testing.T) {
 	files := []string{
 		"AGENTS.md",
 		"README.md",
+		"simple.scl",
 		".simple/context/01-platform-overview.md",
 		".simple/context/02-scl-grammar.md",
 		".simple/context/03-data-layer-scl.md",
@@ -55,6 +57,21 @@ func TestCreateMonorepoStructure_Success(t *testing.T) {
 			t.Errorf("file %s was not created", file)
 		}
 	}
+
+	// Verify simple.scl contains tenant
+	simpleSCL, err := os.ReadFile(filepath.Join(testPath, "simple.scl"))
+	if err != nil {
+		t.Fatalf("failed to read simple.scl: %v", err)
+	}
+	if !strings.Contains(string(simpleSCL), "tenant acme") {
+		t.Error("simple.scl should contain 'tenant acme'")
+	}
+	if !strings.Contains(string(simpleSCL), "acme-dev.on.simple.dev") {
+		t.Error("simple.scl should contain 'acme-dev.on.simple.dev'")
+	}
+	if !strings.Contains(string(simpleSCL), "acme.on.simple.dev") {
+		t.Error("simple.scl should contain 'acme.on.simple.dev' for prod")
+	}
 }
 
 func TestCreateMonorepoStructure_ExistingPath(t *testing.T) {
@@ -64,7 +81,8 @@ func TestCreateMonorepoStructure_ExistingPath(t *testing.T) {
 	// Create the path first
 	_ = os.MkdirAll(existingPath, 0755)
 
-	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, existingPath, "existing")
+	cfg := scaffold.MonorepoConfig{ProjectName: "existing", TenantName: "test"}
+	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, existingPath, cfg)
 	if err == nil {
 		t.Error("expected error for existing path, got nil")
 	}
@@ -77,7 +95,8 @@ func TestCreateMonorepoStructure_ReadmeContainsProjectName(t *testing.T) {
 	tmpDir := t.TempDir()
 	testPath := filepath.Join(tmpDir, "my-awesome-project")
 
-	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, testPath, "my-awesome-project")
+	cfg := scaffold.MonorepoConfig{ProjectName: "my-awesome-project", TenantName: "myco"}
+	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, testPath, cfg)
 	if err != nil {
 		t.Fatalf("createMonorepoStructure failed: %v", err)
 	}
@@ -97,7 +116,8 @@ func TestCreateMonorepoStructure_NestedPath(t *testing.T) {
 	// test-nested/deep/project
 	nestedPath := filepath.Join(tmpDir, "test-nested", "deep", "project")
 
-	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, nestedPath, "project")
+	cfg := scaffold.MonorepoConfig{ProjectName: "project", TenantName: "tenant"}
+	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, nestedPath, cfg)
 	if err != nil {
 		t.Fatalf("createMonorepoStructure failed for nested path: %v", err)
 	}
@@ -132,7 +152,8 @@ func TestCreateMonorepoStructure_PermissionDenied(t *testing.T) {
 	_ = os.Chmod(lockedDir, 0555) // Valid reading, no writing
 
 	// Attempt creation
-	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, targetPath, "new-project")
+	cfg := scaffold.MonorepoConfig{ProjectName: "new-project", TenantName: "test"}
+	err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, targetPath, cfg)
 
 	// If running as root (some docker containers), this might pass.
 	// But in general getting an error is expected.
