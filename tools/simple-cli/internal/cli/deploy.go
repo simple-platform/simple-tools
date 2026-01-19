@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	deployEnv    string
-	deployBump   string
-	deployDryRun bool
+	deployEnv       string
+	deployBump      string
+	deployDryRun    bool
+	deployNoInstall bool
 )
 
 var deployCmd = &cobra.Command{
@@ -26,6 +27,8 @@ var deployCmd = &cobra.Command{
 
 Version is automatically managed based on target environment.
 Use --bump for first deploy after a prod release.
+By default, the deployed version is automatically installed.
+Use --no-install to skip installation (upload artifacts only).
 
 Examples:
   simple deploy apps/com.example.crm --env dev --bump patch
@@ -87,7 +90,6 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	var newVersion string
 	var files map[string]deploy.FileInfo
 	var versionErr, filesErr error
-
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -164,19 +166,52 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 		return err
 	}
 
+	// === PHASE 4: Auto-Install ===
+	var installResult *deploy.InstallResult
+	if !deployNoInstall {
+		if !jsonOutput {
+			fmt.Printf("🚀 Installing %s@%s to %s...\n", result.AppID, result.Version, deployEnv)
+		}
+		installResult, err = client.Install()
+		if err != nil {
+			// Deployment succeeded but install failed
+			fmt.Printf("⚠️  Deploy successful but install failed: %v\n", err)
+			// Return deployment success but with warning if this was critical?
+			// For now, let's treat install failure as command failure if auto-install was requested
+			if jsonOutput {
+				return printJSON(map[string]interface{}{
+					"status":  "error",
+					"error":   fmt.Sprintf("deploy successful but install failed: %v", err),
+					"app_id":  result.AppID,
+					"version": result.Version,
+				})
+			}
+			return err
+		}
+	}
+
 	duration := time.Since(start)
 
 	if jsonOutput {
-		return printJSON(map[string]interface{}{
+		resp := map[string]interface{}{
 			"status":      "success",
 			"app_id":      result.AppID,
 			"version":     result.Version,
 			"files":       map[string]int{"total": len(files), "new": len(neededFiles), "cached": len(files) - len(neededFiles)},
 			"duration_ms": duration.Milliseconds(),
-		})
+		}
+		if installResult != nil {
+			resp["installed"] = true
+			resp["install_success"] = installResult.Success
+		}
+		return printJSON(resp)
 	}
 
-	fmt.Printf("✅ Deployed %s@%s in %s\n", result.AppID, result.Version, duration.Round(time.Millisecond))
+	msg := fmt.Sprintf("✅ Deployed %s@%s", result.AppID, result.Version)
+	if installResult != nil && installResult.Success {
+		msg += " (Installed)"
+	}
+	fmt.Printf("%s in %s\n", msg, duration.Round(time.Millisecond))
 	return nil
 }
 
@@ -213,5 +248,6 @@ func init() {
 	deployCmd.Flags().StringVar(&deployEnv, "env", "", "target environment (required: dev, staging, or prod)")
 	deployCmd.Flags().StringVar(&deployBump, "bump", "", "version bump type: patch|minor|major (required for first deploy after prod)")
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "show what would be deployed without deploying")
+	deployCmd.Flags().BoolVar(&deployNoInstall, "no-install", false, "skip automatic installation after deploy")
 	_ = deployCmd.MarkFlagRequired("env")
 }
