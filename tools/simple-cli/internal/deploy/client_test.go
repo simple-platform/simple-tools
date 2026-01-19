@@ -277,6 +277,14 @@ func TestClient_SendFiles_Integration(t *testing.T) {
 			} else if msgType == websocket.BinaryMessage {
 				// Binary file received
 				receivedFiles["binary"] = true
+
+				// Decode to get ref and send reply
+				msg := decodeBinaryMessageFast(data)
+				if msg != nil {
+					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
+						map[string]any{"status": "ok", "response": map[string]any{}})
+					conn.WriteMessage(websocket.TextMessage, reply)
+				}
 			}
 		}
 	})
@@ -459,6 +467,10 @@ func TestPushBinaryFile(t *testing.T) {
 				if msg != nil && msg.Event == "file" {
 					if payload, ok := msg.Payload.([]byte); ok {
 						receivedPayload <- payload
+						// Send reply
+						reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
+							map[string]any{"status": "ok", "response": map[string]any{}})
+						conn.WriteMessage(websocket.TextMessage, reply)
 					}
 				}
 			}

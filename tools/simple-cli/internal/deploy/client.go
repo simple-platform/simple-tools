@@ -223,8 +223,7 @@ func (c *Client) sendFile(path string, fi FileInfo) error {
 	case err := <-done:
 		return err
 	case <-time.After(c.timeout):
-		// If no reply within timeout, assume success (server stores in assigns without reply)
-		return nil
+		return fmt.Errorf("timeout waiting for file response")
 	}
 }
 
