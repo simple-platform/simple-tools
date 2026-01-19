@@ -523,14 +523,27 @@ func (c *PhoenixChannel) PushBinary(event string, payload []byte) (uint64, error
 }
 
 // PushBinaryFile sends a file with metadata in our custom format.
+// Returns an error if the combined payload size would exceed safe limits.
 func (c *PhoenixChannel) PushBinaryFile(metadata map[string]string, content []byte) (uint64, error) {
 	metaJSON, err := json.Marshal(metadata)
 	if err != nil {
 		return 0, err
 	}
 
+	// Validate metadata length fits in uint32 (4 bytes header)
+	if len(metaJSON) > 0xFFFFFFFF {
+		return 0, fmt.Errorf("metadata too large: %d bytes exceeds maximum", len(metaJSON))
+	}
+
+	// Calculate total size using int64 to prevent overflow
 	// Build payload: [metadata_len (4 bytes)] [metadata_json] [file_content]
-	payload := make([]byte, 4+len(metaJSON)+len(content))
+	const maxPayloadSize = 100 * 1024 * 1024 // 100MB limit
+	totalSize := int64(4) + int64(len(metaJSON)) + int64(len(content))
+	if totalSize > maxPayloadSize {
+		return 0, fmt.Errorf("payload too large: %d bytes exceeds maximum %d", totalSize, maxPayloadSize)
+	}
+
+	payload := make([]byte, int(totalSize))
 	binary.BigEndian.PutUint32(payload[0:4], uint32(len(metaJSON)))
 	copy(payload[4:4+len(metaJSON)], metaJSON)
 	copy(payload[4+len(metaJSON):], content)

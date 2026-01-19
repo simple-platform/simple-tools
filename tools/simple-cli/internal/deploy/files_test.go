@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -213,7 +214,7 @@ func TestFileCollector_Parallelization(t *testing.T) {
 	_ = os.MkdirAll(securityDir, 0755)
 
 	for i := 0; i < 20; i++ {
-		name := filepath.Join(securityDir, "policy"+itoa(int64(i))+".scl")
+		name := filepath.Join(securityDir, "policy"+strconv.Itoa(i)+".scl")
 		_ = os.WriteFile(name, []byte("policy content"), 0644)
 	}
 

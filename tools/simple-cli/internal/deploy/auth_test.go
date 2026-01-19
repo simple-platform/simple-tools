@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -81,21 +82,9 @@ func createTestJWT(exp int64) string {
 
 func createTestJWTWithAlg(exp int64, alg string) string {
 	header := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"alg":"%s","typ":"at+jwt","kid":"test-key-id"}`, alg)))
-	payload := base64.URLEncoding.EncodeToString([]byte(`{"exp":` + itoa(exp) + `,"sub":"test"}`))
+	payload := base64.URLEncoding.EncodeToString([]byte(`{"exp":` + strconv.FormatInt(exp, 10) + `,"sub":"test"}`))
 	signature := base64.URLEncoding.EncodeToString([]byte("fake-signature"))
 	return header + "." + payload + "." + signature
-}
-
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	var result []byte
-	for n > 0 {
-		result = append([]byte{byte('0' + n%10)}, result...)
-		n /= 10
-	}
-	return string(result)
 }
 
 func TestAuthenticator_GetJWT(t *testing.T) {

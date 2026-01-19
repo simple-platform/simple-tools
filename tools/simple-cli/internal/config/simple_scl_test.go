@@ -497,30 +497,30 @@ func TestExtractEnvironments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg, err := extractEnvironments(tt.blocks)
+			cfg, err := extractConfig(tt.blocks)
 
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("extractEnvironments() expected error, got nil")
+					t.Errorf("extractConfig() expected error, got nil")
 					return
 				}
 				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
-					t.Errorf("extractEnvironments() error = %v, want containing %q", err, tt.errContains)
+					t.Errorf("extractConfig() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Errorf("extractEnvironments() unexpected error = %v", err)
+				t.Errorf("extractConfig() unexpected error = %v", err)
 				return
 			}
 
 			if len(cfg.Environments) != tt.wantEnvs {
-				t.Errorf("extractEnvironments() got %d envs, want %d", len(cfg.Environments), tt.wantEnvs)
+				t.Errorf("extractConfig() got %d envs, want %d", len(cfg.Environments), tt.wantEnvs)
 			}
 
 			if cfg.Tenant != tt.wantTenant {
-				t.Errorf("extractEnvironments() tenant = %q, want %q", cfg.Tenant, tt.wantTenant)
+				t.Errorf("extractConfig() tenant = %q, want %q", cfg.Tenant, tt.wantTenant)
 			}
 		})
 	}

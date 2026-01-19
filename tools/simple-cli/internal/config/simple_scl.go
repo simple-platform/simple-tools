@@ -200,8 +200,3 @@ func extractConfig(blocks []SCLBlock) (*SimpleSCL, error) {
 
 	return cfg, nil
 }
-
-// Deprecated: Use extractConfig instead
-func extractEnvironments(blocks []SCLBlock) (*SimpleSCL, error) {
-	return extractConfig(blocks)
-}
