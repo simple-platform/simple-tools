@@ -86,6 +86,7 @@
   ],
   "cSpell.words": [
     "AFLAGS",
+    "Antipattern",
     "asyncify",
     "bcol",
     "Bidirectionality",
@@ -121,6 +122,7 @@
     "ncol",
     "nixpkgs",
     "nshafer",
+    "parseable",
     "paulhatch",
     "pflag",
     "PREOF",
