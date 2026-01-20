@@ -55,7 +55,7 @@ This document defines the **standard operating procedure** for building and modi
     *   **Custom Actions**:
         *   **Command:** `simple new action <app_id> <action_name>`
         *   Write proper code and tests.
-        *   **Verify:** `simple test <app_id> --action <name>`
+        *   **Verify:** `simple test <app_id> --action <action_name>`
         *   **Registration** (in `apps/<app_id>/records/`):
             *   Action in `logic` table.
             *   Trigger in `trigger` table.
