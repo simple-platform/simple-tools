@@ -83,7 +83,7 @@ set dev_simple_system.logic_trigger, bind_process_order {
 
 ## 4. Client Record Behaviors
 **File:** `apps/<app>/scripts/record-behaviors/<table>.js`
-**Command:** `simple new behavior <app> <table>`
+**Command:** `simple new behavior <app-id> <table-name>`
 
 *   **Scope:** Runs in the browser (and verified on server).
 *   **API:** `$form`, `$db` (Read-Only), `$user`.
