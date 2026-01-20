@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import behavior from './{{.TableName}}.js'
 
-describe('record Behavior: {{.TableName}}', () => {
+describe('Record Behavior: {{.TableName}}', () => {
   // Mock Context
   const mockContext = {
     $ai: {},
