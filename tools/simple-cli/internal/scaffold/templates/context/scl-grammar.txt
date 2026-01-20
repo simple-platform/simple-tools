@@ -58,8 +58,8 @@
 :enum
 # SQL: text (with check constraint)
 # Constraints:
-#   values: "Draft", "Active", "In_Progress"  # Spaces in values are not allowed; use underscores instead
-#   # WRONG: values: "Draft", "Active", "In Progress"  # Do NOT use spaces in enum values
+#   values: "Draft", "Active", "In_Progress"  # Use underscores instead of spaces in enum values
+#   # WRONG: values: "Draft", "Active", "In Progress"  # This is invalid; spaces are not allowed in enum values
 
 :json
 # SQL: json
