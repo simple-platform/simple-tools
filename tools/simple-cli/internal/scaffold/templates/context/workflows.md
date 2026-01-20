@@ -50,7 +50,7 @@ This document defines the **standard operating procedure** for building and modi
         *   JS Scripts: `apps/<app_id>/scripts/record-behaviors/<table-name>.js`
         *   Test: `apps/<app_id>/scripts/record-behaviors/<table-name>.test.js`
         *   Registration: `apps/<app_id>/records/10_behaviors.scl`
-        *   **Verify:** `simple test <app_id> --behavior <name>`
+        *   **Verify:** `simple test <app_id> --behavior <table_name>`
         *   *Ref:* `.simple/context/cli-manifest.json` (Command: "new behavior")
     *   **Custom Actions**:
         *   **Command:** `simple new action <app_id> <action_name>`
