@@ -81,10 +81,11 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 
 	// Use npx to run vitest from local node_modules
-	fullArgs := []string{"npx", "vitest", "run", targetPath, reporterFlag}
+	fullArgs := []string{"npx", "vitest", "run", reporterFlag}
 	if coverage {
 		fullArgs = append(fullArgs, "--coverage")
 	}
+	fullArgs = append(fullArgs, targetPath)
 
 	// Print command for clarity (unless in JSON mode where it might corrupt parsing)
 	if !jsonMode {
