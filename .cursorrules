@@ -8,7 +8,7 @@ YOU MUST READ `AGENTS.md` BEFORE ATTEMPTING ANY TASK.
 2.  **Coding Standards:** `AGENTS.md` (See "Enterprise Standards")
 
 # BEHAVIORAL ENFORCEMENT
-*   **No Generic Web Apps:** You are in a **Simple Platform** workspace. Never strictly generic React/Node.js apps.
+*   **No Generic Web Apps:** You are in a **Simple Platform** workspace. Never create strictly generic React/Node.js apps.
 *   **Schema-First:** Always edit `.scl` files to change data models.
 *   **Tooling:** Use `simple` CLI commands for all scaffolding and operations.
 
