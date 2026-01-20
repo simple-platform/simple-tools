@@ -60,7 +60,7 @@ set dev_simple_system.table_field, order_total_config {
   
   # 4. Visibility rules
   hidden false
-  readonly true  # Verify: use Behaviors for conditional readonly
+  readonly true  # Note: Use Behaviors for conditional readonly logic; this sets a static readonly state.
 }
 ```
 
