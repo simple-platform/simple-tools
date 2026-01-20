@@ -14,7 +14,7 @@ description: Production readiness checklist, testing, and deployment procedure.
     *   Verify `records/`: Are Logical Keys stable? (e.g. `role_admin`, not `role_1`).
     *   **Security:** Are all PII fields marked `secret: true`?
 2.  **Schema Evolution:**
-    *   **Rule:** You cannot DROP a column in Production without a deprecation cycle.
+    *   **Rule:** You cannot DROP a column in Production without a deprecation cycle of at least one full release cycle (recommended minimum 30 days).
     *   **Check:** Does this deploy remove any fields? If so, STOP. Rename them to `_deprecated_` first.
 3.  **Data Integrity:**
     *   Are all new `belongs :to` relationships required? If so, is there existing data that will fail validation?
