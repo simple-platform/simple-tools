@@ -1,6 +1,7 @@
 ---
-activation: always
+trigger: always_on
 ---
+
 # Platform Invariants
 
 > [!IMPORTANT]

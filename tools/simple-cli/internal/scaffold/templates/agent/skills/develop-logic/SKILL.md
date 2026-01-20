@@ -38,35 +38,20 @@ set dev_simple_system.logic, action_process_order {
 ```
 
 ### Step B: Define Trigger (`20_triggers.scl`)
-Choose **ONE** type:
+**1. Database Event**
+*   `operations`: `["insert", "update", "delete"]`
+*   `condition`: jq expression (e.g., `.record.status == "Active"`).
+    *   *Context:* `.record` (new), `.changes` (diff), `.operation`.
 
-**Type 1: Database Event**
-```scl
-set dev_simple_system.trigger, trigger_order_created {
-  name "on-order-created"
-  type "db_event"
-  # Configuration: Table + Operations
-  table_id `$var('meta') |> $jq('.tables[] | select(.name == "order") | .id')`
-  operations `["insert"] |> $json()`
-}
-```
+**2. Schedule (Cron)**
+*   `time_schedule` options:
+    *   `frequency`: `minutely`|`hourly`|`daily`|`weekly`
+    *   `timezone`: IANA string (e.g. `America/New_York`)
+    *   `weekdays`: `true`
 
-**Type 2: Schedule (Cron)**
-```scl
-set dev_simple_system.trigger, trigger_nightly {
-  name "nightly-cleanup"
-  type "time_based"
-  time_schedule `{"frequency": "daily", "time": "00:00"} |> $json()`
-}
-```
-
-**Type 3: Webhook**
-```scl
-set dev_simple_system.trigger, trigger_stripe_hook {
-  name "stripe-webhook"
-  type "webhook"
-}
-```
+**3. Webhook**
+*   `method`: `post` (default), `get`, `put`, `delete`
+*   `is_public`: `false` (requires auth) or `true` (open)
 
 ### Step C: Bind Them (`30_links.scl`)
 This is the critical step that activates the logic.
@@ -83,8 +68,31 @@ set dev_simple_system.logic_trigger, bind_process_order {
 
 ## 4. Client Record Behaviors
 **File:** `apps/<app>/scripts/record-behaviors/<table>.js`
-**Command:** `simple new behavior <app-id> <table-name>`
 
-*   **Scope:** Runs in the browser (and verified on server).
-*   **API:** `$form`, `$db` (Read-Only), `$user`.
-*   **Events:** `load` (Defaults), `update` (Computed), `submit` (Validation).
+### Events
+*   `load`: Set defaults (Client+Server).
+*   `update`: React to changes (Client only).
+*   `submit`: Validate (Client+Server).
+
+### `$form` API
+```javascript
+// Properties
+$form.event              // 'load', 'update', 'submit'
+$form.record()           // Get all values
+
+// Field Methods
+$form('status').value()        // Get
+$form('status').set('Active')  // Set
+$form('total').editable(false) // Read-only
+$form('notes').visible(false)  // Hide
+$form('email').required(true)  // Mandate
+$form('age').error('Too young') // Block save
+```
+
+### `$db` API (Read-Only)
+```javascript
+const { product } = await $db.query(
+  `query($id: ID!) { ... }`, 
+  { id: 123 }
+)
+```

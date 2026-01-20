@@ -96,8 +96,53 @@ mutation RemoveUser($id: ID!) {
 }
 ```
 
-## 4. Introspection
-When in doubt, query the schema itself:
+## 4. Advanced Querying (Aggregation + Nodes)
+
+### Mixed Pagination
+Get the TOTAL count of matches (aggregate) but only fetch the FIRST PAGE of actual data (nodes).
+
+```graphql
+query SearchAndPaginate {
+  com_acme_crm__users_agg(
+    where: { status: { _eq: "active" } }
+    order_by: { created_at: desc }
+    limit: 20  # Applies to 'nodes'
+    offset: 0  # Applies to 'nodes'
+  ) {
+    # 1. Total count matching the filter (ignoring limit!)
+    aggregate {
+      count
+    }
+    # 2. The actual page of data (respected limit)
+    nodes {
+      id
+      email
+    }
+  }
+}
+```
+
+### Nested Aggregation
+Calculate stats for related records (e.g., Average Order Value per User).
+
+```graphql
+query UserStats {
+  users: com_acme_crm__users {
+    email
+    # Aggregate on relationship
+    orders_agg {
+      aggregate {
+        count
+        sum { total }
+      }
+    }
+  }
+}
+```
+
+## 5. Introspection
+When in doubt, query the schema itself to discover available types and fields.
+
 ```graphql
 query Introspection {
   __schema {

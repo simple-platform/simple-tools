@@ -155,7 +155,7 @@ Follow this process strictly for all requests.
 
 
 3.  **Implement Data Model (`tables.scl`):**
-    ```ruby
+    ```scl
     table contact {
       required email, :string {
         unique true

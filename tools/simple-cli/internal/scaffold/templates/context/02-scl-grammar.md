@@ -12,7 +12,7 @@ SCL files consist of **blocks** and **key-value** pairs.
 
 Blocks define objects like tables, records, or fields. They start with a type, an optional name, and an opening brace `{`.
 
-```ruby
+```scl
 # Format: type [name] { ... }
 
 table user {
@@ -22,7 +22,7 @@ table user {
 
 Blocks can have multiple arguments after the type:
 
-```ruby
+```scl
 # Format: type arg1, arg2 { ... }
 
 set dev_simple_system.setting, my_setting {
@@ -34,7 +34,7 @@ set dev_simple_system.setting, my_setting {
 
 Properties are set using `key value` syntax.
 
-```ruby
+```scl
 table user {
   # Key Value
   display_name "System User"
@@ -68,13 +68,13 @@ table user {
 SCL **does not** use square brackets `[]` for lists. Instead, it uses **comma-separated values**.
 
 ### Incorrect ❌
-```ruby
+```scl
 roles ["admin", "editor"]
 tags ["urgent", "v1"]
 ```
 
 ### Correct ✅
-```ruby
+```scl
 roles "admin", "editor"
 tags "urgent", "v1"
 ```
@@ -87,7 +87,7 @@ If a key has multiple values separated by commas, the parser interprets them as 
 
 Comments start with `#` and run to the end of the line.
 
-```ruby
+```scl
 # This is a comment
 name "foo" # Inline comment
 ```

@@ -46,13 +46,34 @@ set dev_simple_system.view_action, btn_approve {
   # Link to the Custom View ID
   custom_view_id `$var('ids') |> $jq('.views[0].id')`
   
-  # BEHAVIOR:
-  # Link to the Trigger ID (which runs the Action)
-  trigger_id `$var('ids') |> $jq('.triggers[0].id')`
+## 4. View Properties
+| Property | Description |
+| :--- | :--- |
+| `icon` | Feather icon name (e.g., `file-text`, `download`). |
+| `name` | Internal identifier (kebab-case). |
+| `label` | Button text shown to user. |
+| `type` | `primary`, `outline`, `danger`. |
+
+## 5. Complete Recipe: "Generate PDF" Button
+1.  **Logic:** Create `actions/generate-pdf`.
+2.  **Trigger:** Create `trigger, generate_pdf_trigger` (Manual type).
+3.  **Bind:** Link Logic+Trigger in `logic_trigger`.
+4.  **View:** Create `custom_view, order_view`.
+5.  **Button:** Create `view_action` linking View+Trigger.
+
+```scl
+set dev_simple_system.view_action, btn_gen_pdf {
+  name "gen-pdf"
+  label "Generate PDF"
+  icon "file-text"
+  type outline
+  
+  custom_view_id `$var('ids') |> $jq('.view_id')`
+  trigger_id     `$var('ids') |> $jq('.trigger_id')`
 }
 ```
 
-## 4. Best Practices
+## 6. Best Practices
 *   **Context:** Actions receive the ID(s) of the expected record(s).
 *   **Feedback:** The UI handles loading states automatically while the WASM Action runs.
 *   **Permissions:** Action visibility respects the underlying Logic permissions.

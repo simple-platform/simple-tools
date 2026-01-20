@@ -1,7 +1,5 @@
----
-activation:
-  type: glob
-  pattern: "apps/**/*.{ts,js}"
+trigger: glob
+globs: "apps/**/*.{ts,js}"
 ---
 # Logic Boundaries & API Constraints
 

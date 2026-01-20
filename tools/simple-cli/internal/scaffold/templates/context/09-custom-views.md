@@ -8,7 +8,7 @@ Create custom UI views and add action buttons to tables and records.
 
 Register a custom view for a table:
 
-````ruby
+````scl
 var tables {
   query ```
   query {
@@ -43,7 +43,7 @@ set dev_simple_system.custom_view, order_record_view {
 
 Add buttons to custom views that trigger Actions:
 
-````ruby
+````scl
 var data {
   query ```
   query {
@@ -96,7 +96,7 @@ set dev_simple_system.view_action, generate_invoice_btn {
 
 Full workflow for a "Generate LOI" button on an offers table:
 
-````ruby
+````scl
 # 1. Query existing data
 var data {
   query ```

@@ -8,7 +8,7 @@ App Records use a powerful expression language for dynamic values. This is the f
 
 Expressions are enclosed in backticks and consist of function calls prefixed with `$`, optionally piped together with `|>`.
 
-```ruby
+```scl
 # Simple function call
 script `$file('scripts/my-script.js')`
 
@@ -24,7 +24,7 @@ id `$var('metadata') |> $jq('.tables[] | select(.name == "order") | .id')`
 
 Retrieves a variable defined earlier in the file.
 
-````ruby
+````scl
 # Define a variable
 var metadata {
   query ```
@@ -40,7 +40,7 @@ table_id `$var('metadata') |> $jq('.tables[0].id')`
 
 Applies a [jq](https://jqlang.org/) query to transform JSON data.
 
-```ruby
+```scl
 # Extract a specific field
 id `$var('data') |> $jq('.tables[] | select(.name == "order") | .id')`
 
@@ -64,7 +64,7 @@ active `$var('data') |> $jq('.items[] | select(.is_active == true)')`
 
 Parses a JSON string into an object.
 
-```ruby
+```scl
 schedule `$var('schedule_text') |> $json()`
 ```
 
@@ -72,7 +72,7 @@ schedule `$var('schedule_text') |> $json()`
 
 Reads file contents from the app directory.
 
-```ruby
+```scl
 # Read a script file
 script `$file('scripts/record-behaviors/order.js')`
 ```
@@ -81,7 +81,7 @@ script `$file('scripts/record-behaviors/order.js')`
 
 Reads an image and returns a Base64 data URI.
 
-```ruby
+```scl
 icon `$encode_image('assets/logo.png')`
 # Returns: data:image/png;base64,iVBORw0KGgo...
 ```
@@ -90,7 +90,7 @@ icon `$encode_image('assets/logo.png')`
 
 Removes leading/trailing whitespace from a string.
 
-```ruby
+```scl
 value `$var('text') |> $trim()`
 ```
 
@@ -100,7 +100,7 @@ value `$var('text') |> $trim()`
 
 Chain functions together. Output of the left side becomes input to the right.
 
-```ruby
+```scl
 # Step by step:
 # 1. Get 'metadata' variable
 # 2. Apply jq to extract table ID
@@ -114,7 +114,7 @@ table_id `$var('metadata') |> $jq('.tables[] | select(.name == "order") | .id')`
 
 Variables store query results for use in record definitions.
 
-````ruby
+````scl
 var metadata {
   query ```
   query get_metadata {
@@ -152,7 +152,7 @@ set dev_simple_system.record_behavior, order_behavior {
 
 For inline JSON data:
 
-````ruby
+````scl
 var schedule {
   value ```
   {

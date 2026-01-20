@@ -12,7 +12,7 @@ The platform automatically generates human-readable display names from your snak
 
 Override table display names:
 
-````ruby
+````scl
 var metadata {
   query ```
   query {
@@ -40,7 +40,7 @@ set dev_simple_system.table, order_display {
 
 Customize field labels in the UI:
 
-````ruby
+````scl
 var fields {
   query ```
   query {
@@ -76,7 +76,7 @@ set dev_simple_system.table_field, display_total {
 
 Control the order fields appear in forms and lists:
 
-````ruby
+````scl
 # Query field IDs
 var metadata {
   query ```
@@ -135,7 +135,7 @@ set dev_simple_system.table_field, pos_updated_at {
 
 Link tables across different apps:
 
-````ruby
+````scl
 var metadata {
   query ```
   query {
@@ -189,7 +189,7 @@ set dev_simple_system.table_relationship, customer_orders {
 
 Insert initial data into your tables:
 
-```ruby
+```scl
 # Simple seed records (no query needed)
 set lead_source, source_website {
   name "Website"

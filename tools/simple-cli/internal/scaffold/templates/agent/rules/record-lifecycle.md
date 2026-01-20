@@ -1,7 +1,5 @@
----
-activation:
-  type: glob
-  pattern: "apps/*/records/*.scl"
+trigger: glob
+globs: "apps/*/records/*.scl"
 ---
 # Record Lifecycle & Idempotency Rules
 

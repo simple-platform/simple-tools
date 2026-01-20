@@ -64,5 +64,45 @@ set dev_simple_system.table_field, order_total_config {
 }
 ```
 
-## 5. View Configuration (Custom Views)
+## 5. Seed Data & Settings
+Populate default data and application configuration (`10_seed_data.scl`).
+
+### App Data
+```scl
+set lead_status, status_new {
+  label "New Lead"
+}
+```
+
+### App Settings
+```scl
+set dev_simple_system.setting, api_key {
+  name "external.api.key"
+  display_name "External API Key"
+  secret_value "sk_test_12345" # Encrypted at rest
+}
+```
+
+## 6. Cross-App Relationships
+Link your table to a table in *another* application (`records/30_links.scl`).
+
+```scl
+set dev_simple_system.table_relationship, link_customers_to_orders {
+  name "orders"
+  display_name "Customer Orders"
+  kind has          # 'has' or 'belongs'
+  cardinality many  # 'one' or 'many'
+
+  # Source = My Table (e.g., Customer in CRM)
+  source_table_id `$var('meta') |> $jq('.source_table[0].id')`
+  
+  # Target = External Table (e.g., Order in Sales)
+  target_table_id `$var('meta') |> $jq('.target_table[0].id')`
+  
+  # Target Field = Foreign Key on External Table
+  target_field_id `$var('meta') |> $jq('.target_table[0].fields[0].id')`
+}
+```
+
+## 7. View Configuration (Custom Views)
 See the `create-view` skill for configuring list layouts and dashboards.

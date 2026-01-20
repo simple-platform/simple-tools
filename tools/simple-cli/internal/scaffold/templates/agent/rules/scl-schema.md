@@ -1,7 +1,5 @@
----
-activation:
-  type: glob
-  pattern: "**/tables.scl"
+trigger: glob
+globs: "**/tables.scl"
 ---
 # SCL Schema Modeling Rules
 

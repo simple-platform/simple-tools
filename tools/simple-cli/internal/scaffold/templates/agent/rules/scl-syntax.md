@@ -1,7 +1,5 @@
----
-activation:
-  type: glob
-  pattern: "**/*.scl"
+trigger: glob
+globs: "**/*.scl"
 ---
 # SCL Syntax Rules
 

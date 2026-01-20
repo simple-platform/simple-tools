@@ -51,17 +51,20 @@ Derived from `scl-grammar.txt`.
 
 ### Boolean
 *   `:boolean` (`true` / `false`)
+    *   `default true`
 
 ### Temporal
-*   `:date`, `:time`, `:datetime` (Timestamptz)
+*   `:date` (Date only)
+*   `:time` (Time only)
+*   `:datetime` (Timestamptz)
 
 ### Structured
-*   `:json`, `:jsonb`
+*   `:json`, `:jsonb` (Arbitrary JSON)
 *   `:document` (File Attachments)
     *   `multiple: true`
-    *   `allowed_types: "pdf", "jpg"`
+    *   `allowed_types: "pdf", "jpg", "image/png"`
     *   `max_size: "10MB"`
-*   `:version` (Semver)
+*   `:version` (Semver string)
 
 ## 4. Relationships
 

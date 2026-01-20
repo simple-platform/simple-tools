@@ -10,7 +10,7 @@ description: Interactive wizard for scaffolding and designing a new Simple Platf
 
 ## Phase 1: Context & Discovery
 1.  **Read Context:**
-    *   Load `.agent/rules/00-platform-invariants.md`.
+    *   Load `.agent/rules/platform-invariants.md`.
     *   Load `.agent/skills/data-modeling/SKILL.md`.
 2.  **Inquire:**
     *   "What is the name of the application?"

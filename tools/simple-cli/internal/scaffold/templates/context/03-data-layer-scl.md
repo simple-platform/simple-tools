@@ -6,7 +6,7 @@ The Simple Configuration Language (SCL) is a declarative, human-readable languag
 
 ## App Definition (`app.scl`)
 
-```ruby
+```scl
 id com.mycompany.invoicing
 version 1.0.0
 display_name "Invoice Management"
@@ -17,7 +17,7 @@ description "Track and manage customer invoices"
 
 ## Table Definition (`tables.scl`)
 
-```ruby
+```scl
 table employee, employees {
   default :id, :timestamps, :userstamps
 
@@ -75,7 +75,7 @@ table employee, employees {
 
 ### `:string`
 
-```ruby
+```scl
 required name, :string {
   length 1..100          # Min..Max characters
   unique true            # Unique constraint
@@ -97,7 +97,7 @@ optional ssn, :string {
 
 ### `:integer`
 
-```ruby
+```scl
 required quantity, :integer {
   default 1
 }
@@ -109,7 +109,7 @@ optional max_occupancy, :integer {
 
 ### `:decimal`
 
-```ruby
+```scl
 required rate, :decimal {
   digits 10              # Total digits
   decimals 2             # Decimal places
@@ -124,7 +124,7 @@ optional commission, :decimal {
 
 ### `:boolean`
 
-```ruby
+```scl
 optional is_active, :boolean {
   default true
 }
@@ -136,7 +136,7 @@ optional overtime_exempt, :boolean {
 
 ### `:date`
 
-```ruby
+```scl
 required effective_date, :date
 
 optional expiry_date, :date
@@ -144,7 +144,7 @@ optional expiry_date, :date
 
 ### `:datetime`
 
-```ruby
+```scl
 optional check_in_time, :datetime
 
 optional response_deadline, :datetime
@@ -154,7 +154,7 @@ optional response_deadline, :datetime
 
 > ⚠️ **Enum values MUST NOT contain spaces.** Use underscores.
 
-```ruby
+```scl
 # Quoted values (recommended)
 required status, :enum {
   values "Pending", "In_Progress", "Completed"
@@ -173,7 +173,7 @@ required employee_type, :enum {
 
 ### `:json`
 
-```ruby
+```scl
 optional validation_errors, :json
 
 optional metadata, :json
@@ -181,7 +181,7 @@ optional metadata, :json
 
 ### `:document`
 
-```ruby
+```scl
 required image, :document {
   allowed_types "image/jpeg", "image/png", "application/pdf"
   max_size 5MB
@@ -200,7 +200,7 @@ optional attachments, :document {
 
 ### `belongs :to` (Many-to-One)
 
-```ruby
+```scl
 # Simple relationship
 belongs :to, department {
   required true
@@ -221,7 +221,7 @@ belongs :to, employee {
 
 ### `has :many` (One-to-Many)
 
-```ruby
+```scl
 # Simple
 has :many, invoices
 
@@ -245,7 +245,7 @@ has :many, benefits {
 
 ### `has :one` (One-to-One)
 
-```ruby
+```scl
 has :one, identity_map {
   table identity_map
 }
@@ -255,7 +255,7 @@ has :one, identity_map {
 
 ## Indexes
 
-```ruby
+```scl
 # Simple index
 index status { }
 
@@ -279,7 +279,7 @@ index period_start, period_end {
 
 ## Table Options
 
-```ruby
+```scl
 table order, orders {
   default :id, :timestamps, :userstamps
 
@@ -302,7 +302,7 @@ table order, orders {
 
 Common pattern:
 
-```ruby
+```scl
 default :id, :timestamps, :userstamps
 ```
 
