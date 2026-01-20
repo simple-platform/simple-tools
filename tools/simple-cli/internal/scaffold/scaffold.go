@@ -4,9 +4,12 @@ package scaffold
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"strings"
 	"text/template"
@@ -218,11 +221,11 @@ func CreateTriggerStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath 
 	// Check for duplicate trigger
 	existingTriggersFile := filepath.Join(recordsPath, "20_triggers.scl")
 	if PathExists(fsys, existingTriggersFile) {
-		content, err := fsys.ReadFile(existingTriggersFile)
+		exists, err := checkSCLEntityExists(existingTriggersFile, "set", "dev_simple_system.trigger", cfg.TriggerNameScl)
 		if err != nil {
-			return fmt.Errorf("failed to read existing triggers: %w", err)
+			return fmt.Errorf("failed to check trigger existence: %w", err)
 		}
-		if strings.Contains(string(content), fmt.Sprintf("set dev_simple_system.trigger, %s", cfg.TriggerNameScl)) {
+		if exists {
 			return fmt.Errorf("trigger already exists: %s", cfg.TriggerNameScl)
 		}
 	}
@@ -351,13 +354,12 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 	recordsPath := filepath.Join(appPath, "records")
 	actionsScl := filepath.Join(recordsPath, "10_actions.scl")
 	if PathExists(fsys, actionsScl) {
-		content, err := fsys.ReadFile(actionsScl)
-		if err != nil {
-			return fmt.Errorf("failed to read existing actions: %w", err)
-		}
-		// Check for "set dev_simple_system.logic, action_name {"
 		actionNameScl := strings.ReplaceAll(cfg.ActionName, "-", "_")
-		if strings.Contains(string(content), fmt.Sprintf("set dev_simple_system.logic, %s", actionNameScl)) {
+		exists, err := checkSCLEntityExists(actionsScl, "set", "dev_simple_system.logic", actionNameScl)
+		if err != nil {
+			return fmt.Errorf("failed to check action existence: %w", err)
+		}
+		if exists {
 			return fmt.Errorf("action already exists: %s", actionNameScl)
 		}
 	}
@@ -649,11 +651,12 @@ func CreateBehaviorStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 
 	// Read existing content to check for duplicates in SCL
 	if PathExists(fsys, behaviorsScl) {
-		content, err := fsys.ReadFile(behaviorsScl)
+		behaviorName := fmt.Sprintf("%s_behavior", cfg.TableName)
+		exists, err := checkSCLEntityExists(behaviorsScl, "set", "dev_simple_system.record_behavior", behaviorName)
 		if err != nil {
-			return fmt.Errorf("failed to read existing behaviors: %w", err)
+			return fmt.Errorf("failed to check behavior existence: %w", err)
 		}
-		if strings.Contains(string(content), fmt.Sprintf("set dev_simple_system.record_behavior, %s_behavior", cfg.TableName)) {
+		if exists {
 			return fmt.Errorf("behavior registration already exists in SCL for table: %s", cfg.TableName)
 		}
 	}
@@ -706,4 +709,56 @@ func appendBehaviorRecord(fsys fsx.FileSystem, tplFS fsx.TemplateFS, dst string,
 	}
 
 	return nil
+}
+
+// checkSCLEntityExists uses scl-parser CLI to check if a specific entity exists in an SCL file.
+var checkSCLEntityExists = func(filePath string, blockKey string, entityType string, entityName string) (bool, error) {
+	// check if scl-parser is installed and get path
+	parserPath, err := build.EnsureSCLParser(nil)
+	if err != nil {
+		return false, fmt.Errorf("failed to ensure scl-parser: %w", err)
+	}
+
+	cmd := exec.Command(parserPath, filePath)
+	output, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return false, fmt.Errorf("scl-parser failed: %s", string(exitErr.Stderr))
+		}
+		return false, fmt.Errorf("failed to run scl-parser: %w", err)
+	}
+
+	var blocks []map[string]interface{}
+	if err := json.Unmarshal(output, &blocks); err != nil {
+		return false, fmt.Errorf("failed to parse scl-parser output: %w", err)
+	}
+
+	for _, block := range blocks {
+		if block["type"] == "block" {
+			key, ok := block["key"].(string)
+			if ok && key == blockKey {
+				// Name can be a string or a list of strings
+				nameVal := block["name"]
+
+				// For 'set type, name', nameVal should be a list ["type", "name"]
+				if nameList, ok := nameVal.([]interface{}); ok {
+					if len(nameList) >= 2 {
+						// Need to cast interface{} to string
+						if typeStr, ok := nameList[0].(string); ok && typeStr == entityType {
+							if nameStr, ok := nameList[1].(string); ok && nameStr == entityName {
+								return true, nil
+							}
+						}
+					}
+				} else if nameStr, ok := nameVal.(string); ok {
+					// Fallback for simple blocks like 'table user'
+					if entityType == "" && nameStr == entityName {
+						return true, nil
+					}
+				}
+			}
+		}
+	}
+
+	return false, nil
 }

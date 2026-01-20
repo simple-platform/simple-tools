@@ -262,6 +262,13 @@ func TestCreateActionStructure_AppNotExists(t *testing.T) {
 }
 
 func TestCreateActionStructure_ActionExists(t *testing.T) {
+	// Mock SCL check
+	origCheck := checkSCLEntityExists
+	defer func() { checkSCLEntityExists = origCheck }()
+	checkSCLEntityExists = func(path, block, typ, name string) (bool, error) {
+		return true, nil // Simulate exists
+	}
+
 	mockFS := &mockWriteTrackingFS{
 		statFn: func(name string) bool {
 			// Both app and action exist
@@ -287,6 +294,16 @@ func TestCreateActionStructure_ActionExists(t *testing.T) {
 }
 
 func TestCreateActionStructure_DuplicateSCL(t *testing.T) {
+	// Mock SCL check
+	origCheck := checkSCLEntityExists
+	defer func() { checkSCLEntityExists = origCheck }()
+	checkSCLEntityExists = func(path, block, typ, name string) (bool, error) {
+		if name == "my_action" || name == "my-action" {
+			return true, nil
+		}
+		return false, nil
+	}
+
 	// Action directory doesn't exist, but it's present in SCL
 	mockFS := &mockWriteTrackingFS{
 		statFn: func(name string) bool {
@@ -480,6 +497,16 @@ func (m *mockFileInfoSimple) Sys() any           { return nil }
 // Trigger Tests
 
 func TestCreateTriggerStructure_Errors(t *testing.T) {
+	// Mock SCL check
+	origCheck := checkSCLEntityExists
+	defer func() { checkSCLEntityExists = origCheck }()
+	checkSCLEntityExists = func(path, block, typ, name string) (bool, error) {
+		if name == "daily_sync" {
+			return true, nil
+		}
+		return false, nil
+	}
+
 	tests := []struct {
 		name    string
 		mockFS  *mockWriteTrackingFS
