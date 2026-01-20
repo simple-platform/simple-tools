@@ -37,12 +37,69 @@ Create a client-side record behavior script.
     *   `<app-id>`: Target App ID.
     *   `<table-name>`: The table this behavior attaches to.
 
+### `simple new trigger:db`
+Create a database event trigger.
+*   **Usage:** `simple new trigger:db <app-id> <name> <display-name>`
+*   **Args:**
+    *   `<app-id>`: Target App ID.
+    *   `<name>`: Trigger name (snake_case).
+    *   `<display-name>`: Human readable label.
+*   **Flags:**
+    *   `--table <string>`: **REQUIRED** Table to watch.
+    *   `--ops <string>`: Operations to watch: `insert`, `update`, `delete` (comma-separated, default: `insert`).
+    *   `--action <string>`: Action to execute.
+    *   `--condition <string>`: JQ condition filter.
+    *   `--desc <string>`: Description.
+
+### `simple new trigger:timed`
+Create a scheduled timed trigger.
+*   **Usage:** `simple new trigger:timed <app-id> <name> <display-name>`
+*   **Args:**
+    *   `<app-id>`: Target App ID.
+    *   `<name>`: Trigger name (snake_case).
+    *   `<display-name>`: Human readable label.
+*   **Flags:**
+    *   `--frequency <string>`: `minutely`|`hourly`|`daily`|`weekly`|`monthly`|`yearly`.
+    *   `--interval <int>`: Interval between runs (default: 1).
+    *   `--start-at <string>`: Start time (ISO8601).
+    *   `--time <string>`: Time of day (HH:MM:SS) (default: "00:00:00").
+    *   `--timezone <string>`: Timezone (default: "UTC").
+    *   `--days <string>`: Specific days (MON,TUE...).
+    *   `--action <string>`: Action to execute.
+    *   `--desc <string>`: Description.
+
+### `simple new trigger:webhook`
+Create an HTTP webhook trigger.
+*   **Usage:** `simple new trigger:webhook <app-id> <name> <display-name>`
+*   **Args:**
+    *   `<app-id>`: Target App ID.
+    *   `<name>`: Trigger name (snake_case).
+    *   `<display-name>`: Human readable label.
+*   **Flags:**
+    *   `--method <string>`: HTTP method: `get`|`post`|`put`|`delete` (default: `post`).
+    *   `--public`: Make endpoint public (no auth).
+    *   `--action <string>`: Action to execute.
+    *   `--desc <string>`: Description.
+
 ## 3. Development Commands
 
 ### `simple build`
 Compile all SCL files and Actions (WASM).
-*   **Usage:** `simple build`
+*   **Usage:** `simple build [target]`
+*   **Args:**
+    *   `[target]` (Optional): Specific app (`com.acme.crm`) or action (`com.acme.crm/my-action`) to build.
+*   **Flags:**
+    *   `--all`: Build all actions in all apps.
+    *   `--concurrency <int>`: Number of parallel builds (default: 4).
 *   **Description:** Validates schema integrity and transpiles TypeScript to WASM.
+
+### `simple install`
+Install a deployed app to an environment (migrations, cache warming).
+*   **Usage:** `simple install <app-id>`
+*   **Args:**
+    *   `<app-id>`: App ID to install (must be already deployed).
+*   **Flags:**
+    *   `--env <string>`: **REQUIRED**. Target environment (`dev`, `staging`, `prod`).
 
 ### `simple test`
 Run the unified test runner (Vitest + SCL Linter).
