@@ -43,7 +43,7 @@ defmodule SCLParser.MixProject do
     [
       {:credo, "1.7.15", only: [:dev, :test], runtime: false},
       {:excoveralls, "0.18.5", only: :test},
-      {:ex_doc, "0.39.3", only: :dev, runtime: false}
+      {:ex_doc, "== 0.40.0", only: :dev, runtime: false}
     ]
   end
 end
