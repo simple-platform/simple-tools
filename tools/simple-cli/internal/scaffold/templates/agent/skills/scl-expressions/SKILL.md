@@ -67,7 +67,7 @@ var my_variable_name {
 *   **Example:** `$file('scripts/record-behaviors/user.js')`
 
 ### `$env(key)`
-*   **Purpose:** accessing environment variables (e.g., API Keys).
+*   **Purpose:** Accessing environment variables (e.g., API Keys).
 *   **Example:** `$env('STRIPE_SECRET_KEY')`
 
 ### `$encode_image(path)`
