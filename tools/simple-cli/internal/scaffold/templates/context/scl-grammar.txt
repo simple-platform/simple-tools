@@ -58,7 +58,7 @@
 :enum
 # SQL: text (with check constraint)
 # Constraints:
-#   values: "Draft", "Active", "In_Progress"  # NO SPACES ALLOWED in values
+#   values: "Draft", "Active", "In_Progress"  # Spaces in values are not allowed; use underscores instead
 
 :json
 # SQL: json
