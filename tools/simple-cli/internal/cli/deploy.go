@@ -174,10 +174,7 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 		}
 		installResult, err = client.Install()
 		if err != nil {
-			// Deployment succeeded but install failed
 			fmt.Printf("⚠️  Deploy successful but install failed: %v\n", err)
-			// Return deployment success but with warning if this was critical?
-			// For now, let's treat install failure as command failure if auto-install was requested
 			if jsonOutput {
 				return printJSON(map[string]interface{}{
 					"status":  "error",
