@@ -1,0 +1,16 @@
+# Record Behavior Registration for {{.TableName}}
+var metadata_{{.TableName}} {
+  query ```
+  query {
+    tables: dev_simple_system__tables(where: {
+      name: {_eq: "{{.TableName}}"}, 
+      application_id: {_eq: "{{.AppID}}"}
+    }) { id }
+  }
+  ```
+}
+
+set dev_simple_system.record_behavior, {{.TableName}}_behavior {
+  script `$file('scripts/record-behaviors/{{.TableName}}.js')`
+  table_id `$var('metadata_{{.TableName}}') |> $jq('.tables[0].id')`
+}

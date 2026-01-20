@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -159,8 +160,18 @@ func (c *FileCollector) globFiles(appPath, dir string) []string {
 			return nil // Skip errors
 		}
 		if d.IsDir() {
+			// Skip coverage directories
+			if d.Name() == "coverage" {
+				return filepath.SkipDir
+			}
 			return nil
 		}
+
+		// Skip test files
+		if strings.HasSuffix(d.Name(), ".test.js") || strings.HasSuffix(d.Name(), ".test.ts") {
+			return nil
+		}
+
 		rel, _ := filepath.Rel(appPath, path)
 		result = append(result, rel)
 		return nil

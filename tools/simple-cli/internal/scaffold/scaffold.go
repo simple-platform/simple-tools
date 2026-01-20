@@ -47,8 +47,18 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		return err
 	}
 
+	// Copy Antigravity Agent Context (.agent/)
+	if err := copyAgentDocs(fsys, tplFS, rootPath); err != nil {
+		return err
+	}
+
 	// Copy AGENTS.md
 	if err := copyTemplate(fsys, tplFS, "templates/AGENTS.md", filepath.Join(rootPath, "AGENTS.md")); err != nil {
+		return err
+	}
+
+	// Copy .cursorrules (AI Context Bridge)
+	if err := copyTemplate(fsys, tplFS, "templates/cursorrules", filepath.Join(rootPath, ".cursorrules")); err != nil {
 		return err
 	}
 
@@ -503,6 +513,46 @@ func copyContextDocs(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string)
 	return nil
 }
 
+// copyAgentDocs copies the entire .agent context structure recursively.
+func copyAgentDocs(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string) error {
+	srcDir := "templates/agent"
+	dstDir := filepath.Join(rootPath, ".agent")
+
+	// Create .agent root
+	if err := fsys.MkdirAll(dstDir, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create .agent directory: %w", err)
+	}
+
+	return copyRecursive(fsys, tplFS, srcDir, dstDir)
+}
+
+// copyRecursive copies a directory recursively from embedded FS to disk.
+func copyRecursive(fsys fsx.FileSystem, tplFS fsx.TemplateFS, srcDir, dstDir string) error {
+	entries, err := tplFS.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to read %s: %w", srcDir, err)
+	}
+
+	for _, entry := range entries {
+		srcPath := srcDir + "/" + entry.Name()
+		dstPath := filepath.Join(dstDir, entry.Name())
+
+		if entry.IsDir() {
+			if err := fsys.MkdirAll(dstPath, fsx.DirPerm); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", dstPath, err)
+			}
+			if err := copyRecursive(fsys, tplFS, srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyTemplate(fsys, tplFS, srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 // copyTemplate copies a file from the embedded filesystem to disk.
 func copyTemplate(fsys fsx.FileSystem, tplFS fsx.TemplateFS, src, dst string) error {
 	content, err := tplFS.ReadFile(src)
@@ -535,6 +585,123 @@ func renderTemplate(fsys fsx.FileSystem, tplFS fsx.TemplateFS, src, dst string, 
 	}
 
 	if err := fsys.WriteFile(dst, buf.Bytes(), fsx.FilePerm); err != nil {
+		return fmt.Errorf("failed to write %s: %w", dst, err)
+	}
+
+	return nil
+}
+
+// BehaviorConfig holds configuration for creating a new record behavior.
+type BehaviorConfig struct {
+	AppID     string
+	TableName string
+}
+
+// CreateBehaviorStructure scaffolds a new record behavior.
+//
+// It creates:
+//   - apps/<appID>/scripts/record-behaviors/<tableName>.js
+//   - apps/<appID>/scripts/record-behaviors/<tableName>.test.js
+//   - apps/<appID>/records/10_behaviors.scl (appended or created)
+func CreateBehaviorStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string, cfg BehaviorConfig) error {
+	appPath := filepath.Join(rootPath, "apps", cfg.AppID)
+
+	// Validate: app must exist
+	if !PathExists(fsys, appPath) {
+		return fmt.Errorf("app does not exist: %s", cfg.AppID)
+	}
+
+	scriptsPath := filepath.Join(appPath, "scripts", "record-behaviors")
+	if err := fsys.MkdirAll(scriptsPath, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create scripts directory: %w", err)
+	}
+
+	recordsPath := filepath.Join(appPath, "records")
+	if err := fsys.MkdirAll(recordsPath, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create records directory: %w", err)
+	}
+
+	// Check for duplicate behavior script
+	scriptFile := filepath.Join(scriptsPath, cfg.TableName+".js")
+	if PathExists(fsys, scriptFile) {
+		return fmt.Errorf("behavior script already exists: %s", scriptFile)
+	}
+
+	// Template data
+	data := map[string]string{
+		"AppID":     cfg.AppID,
+		"TableName": cfg.TableName,
+	}
+
+	// Render script.js
+	if err := renderTemplate(fsys, tplFS, "templates/behavior/script.js", scriptFile, data); err != nil {
+		return err
+	}
+
+	// Render script.test.js
+	testFile := filepath.Join(scriptsPath, cfg.TableName+".test.js")
+	if err := renderTemplate(fsys, tplFS, "templates/behavior/script.test.js", testFile, data); err != nil {
+		return err
+	}
+
+	// Append to 10_behaviors.scl
+	behaviorsScl := filepath.Join(recordsPath, "10_behaviors.scl")
+
+	// Read existing content to check for duplicates in SCL
+	if PathExists(fsys, behaviorsScl) {
+		content, err := fsys.ReadFile(behaviorsScl)
+		if err != nil {
+			return fmt.Errorf("failed to read existing behaviors: %w", err)
+		}
+		if strings.Contains(string(content), fmt.Sprintf("set dev_simple_system.record_behavior, %s_behavior", cfg.TableName)) {
+			return fmt.Errorf("behavior registration already exists in SCL for table: %s", cfg.TableName)
+		}
+	}
+
+	if err := appendBehaviorRecord(fsys, tplFS, behaviorsScl, data); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// appendBehaviorRecord appends a behavior record to the 10_behaviors.scl file.
+func appendBehaviorRecord(fsys fsx.FileSystem, tplFS fsx.TemplateFS, dst string, data map[string]string) error {
+	// Read the template
+	content, err := tplFS.ReadFile("templates/behavior/10_behaviors.scl")
+	if err != nil {
+		return fmt.Errorf("failed to read behavior template: %w", err)
+	}
+
+	tmpl, err := template.New("behavior").Parse(string(content))
+	if err != nil {
+		return fmt.Errorf("failed to parse behavior template: %w", err)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return fmt.Errorf("failed to execute behavior template: %w", err)
+	}
+
+	// Check if file exists and append, otherwise create
+	var existingContent []byte
+	if PathExists(fsys, dst) {
+		existingContent, err = fsys.ReadFile(dst)
+		if err != nil {
+			return fmt.Errorf("failed to read existing %s: %w", dst, err)
+		}
+	}
+
+	var finalContent []byte
+	if len(existingContent) > 0 {
+		// Append with newline separator
+		finalContent = append(existingContent, '\n')
+		finalContent = append(finalContent, buf.Bytes()...)
+	} else {
+		finalContent = buf.Bytes()
+	}
+
+	if err := fsys.WriteFile(dst, finalContent, fsx.FilePerm); err != nil {
 		return fmt.Errorf("failed to write %s: %w", dst, err)
 	}
 

@@ -1,0 +1,76 @@
+{
+  "commands": {
+    "new app": {
+      "usage": "simple new app <app-id> <name>",
+      "description": "Create a new application scaffold",
+      "args": [
+        { "name": "app-id", "type": "string", "description": "Unique app identifier (e.g., com.mycompany.crm)" },
+        { "name": "name", "type": "string", "description": "Human-readable display name" }
+      ],
+      "flags": [
+        { "name": "--desc", "type": "string", "description": "Application description" }
+      ]
+    },
+    "new behavior": {
+      "usage": "simple new behavior <app-id> <table-name>",
+      "description": "Create a new record behavior script and test",
+      "args": [
+        { "name": "app-id", "type": "string", "description": "Target App ID" },
+        { "name": "table-name", "type": "string", "description": "Table name to attach behavior to" }
+      ]
+    },
+    "new action": {
+      "usage": "simple new action <app-id> <name> <display-name>",
+      "description": "Create a new custom action",
+      "args": [
+        { "name": "app-id", "type": "string", "description": "Target App ID" },
+        { "name": "name", "type": "string", "description": "Action name (kebab-case)" },
+        { "name": "display-name", "type": "string", "description": "Human-readable display name" }
+      ],
+      "flags": [
+        { "name": "--scope", "type": "string", "required": true, "description": "NPM package scope" },
+        { "name": "--env", "type": "string", "description": "Execution environment (server, client, both)" },
+        { "name": "--desc", "type": "string", "description": "Action description" }
+      ]
+    },
+    "test": {
+      "usage": "simple test [app-id]",
+      "description": "Run tests for applications, actions, or behaviors",
+      "args": [
+        { "name": "app-id", "type": "string", "optional": true, "description": "Specific app to test" }
+      ],
+      "flags": [
+        { "name": "--action", "type": "string", "description": "Test a specific action" },
+        { "name": "--behavior", "type": "string", "description": "Test a specific behavior" },
+        { "name": "--coverage", "type": "boolean", "description": "Enable coverage reporting" },
+        { "name": "--json", "type": "boolean", "description": "Output JSON results" }
+      ]
+    },
+    "deploy": {
+      "usage": "simple deploy <app-path>",
+      "description": "Deploy an application to the platform",
+      "args": [
+        { "name": "app-path", "type": "string", "description": "Path to the application directory" }
+      ],
+      "flags": [
+        { "name": "--env", "type": "string", "required": true, "description": "Target environment (dev, staging, prod)" },
+        { "name": "--bump", "type": "string", "description": "Version bump strategy (patch, minor, major)" },
+        { "name": "--no-install", "type": "boolean", "description": "Skip automatic installation" }
+      ]
+    },
+    "build": {
+      "usage": "simple build",
+      "description": "Build all actions in the workspace"
+    },
+    "init": {
+      "usage": "simple init <project-name>",
+      "description": "Initialize a new monorepo workspace",
+      "args": [
+        { "name": "project-name", "type": "string", "description": "Name of the project directory" }
+      ],
+      "flags": [
+        { "name": "--tenant", "type": "string", "description": "Tenant name for configuration" }
+      ]
+    }
+  }
+}
