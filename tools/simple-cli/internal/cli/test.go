@@ -75,20 +75,16 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 
 	// Construct Vitest command
-	vitestArgs := []string{"vitest", "run", targetPath}
-
-	if coverage {
-		vitestArgs = append(vitestArgs, "--coverage")
-	}
-
+	reporterFlag := "--reporter=verbose"
 	if jsonMode {
-		vitestArgs = append(vitestArgs, "--reporter=json")
-	} else {
-		vitestArgs = append(vitestArgs, "--reporter=verbose")
+		reporterFlag = "--reporter=json"
 	}
 
 	// Use npx to run vitest from local node_modules
-	fullArgs := append([]string{"npx"}, vitestArgs...)
+	fullArgs := []string{"npx", "vitest", "run", targetPath, reporterFlag}
+	if coverage {
+		fullArgs = append(fullArgs, "--coverage")
+	}
 
 	// Print command for clarity (unless in JSON mode where it might corrupt parsing)
 	if !jsonMode {
