@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -40,7 +41,12 @@ func NewClient(cfg ClientConfig) *Client {
 
 // Connect establishes WebSocket connection to the Phoenix server.
 func (c *Client) Connect() error {
-	endpointURL, err := url.Parse(fmt.Sprintf("wss://%s/socket?auth_token=%s", c.endpoint, c.jwt))
+	endpoint := c.endpoint
+	if !strings.Contains(endpoint, "://") {
+		endpoint = fmt.Sprintf("wss://%s", endpoint)
+	}
+
+	endpointURL, err := url.Parse(fmt.Sprintf("%s/socket?auth_token=%s", endpoint, c.jwt))
 	if err != nil {
 		return fmt.Errorf("invalid endpoint URL: %w", err)
 	}
@@ -217,8 +223,7 @@ func (c *Client) sendFile(path string, fi FileInfo) error {
 	case err := <-done:
 		return err
 	case <-time.After(c.timeout):
-		// If no reply within timeout, assume success (server stores in assigns without reply)
-		return nil
+		return fmt.Errorf("timeout waiting for file response for %s", path)
 	}
 }
 
@@ -317,6 +322,79 @@ func (c *Client) Deploy() (*DeployResult, error) {
 		return result.result, result.err
 	case <-time.After(c.timeout):
 		return nil, fmt.Errorf("deploy response timeout")
+	}
+}
+
+// InstallResult represents the result of a successful installation.
+type InstallResult struct {
+	AppID   string `json:"app_id"`
+	Version string `json:"version"`
+	Success bool   `json:"success"`
+}
+
+// Install triggers the installation of the app version.
+func (c *Client) Install() (*InstallResult, error) {
+	if !c.IsConnected() {
+		return nil, fmt.Errorf("client not connected")
+	}
+
+	done := make(chan struct {
+		result *InstallResult
+		err    error
+	}, 1)
+
+	// Send install event with empty payload
+	ref, err := c.channel.Push("install", map[string]any{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to send install command: %w", err)
+	}
+
+	c.channel.onRef(ref, func(payload any) {
+		resp, ok := payload.(map[string]any)
+		if !ok {
+			done <- struct {
+				result *InstallResult
+				err    error
+			}{nil, fmt.Errorf("invalid response format")}
+			return
+		}
+
+		if status, _ := resp["status"].(string); status != "ok" {
+			response, _ := resp["response"].(map[string]any)
+			msg := "install failed"
+			if response != nil {
+				if m, ok := response["message"].(string); ok {
+					msg = m
+				}
+			}
+			done <- struct {
+				result *InstallResult
+				err    error
+			}{nil, fmt.Errorf("%s", msg)}
+			return
+		}
+
+		response, _ := resp["response"].(map[string]any)
+		version := ""
+		if v, ok := response["version"].(string); ok {
+			version = v
+		}
+
+		done <- struct {
+			result *InstallResult
+			err    error
+		}{&InstallResult{
+			AppID:   c.appID,
+			Version: version,
+			Success: true,
+		}, nil}
+	})
+
+	select {
+	case result := <-done:
+		return result.result, result.err
+	case <-time.After(c.timeout):
+		return nil, fmt.Errorf("install response timeout")
 	}
 }
 
