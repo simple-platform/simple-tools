@@ -14,7 +14,7 @@ Lightweight form logic. Runs independently in Browser and Server.
     *   `$db`: **READ-ONLY**. You MAY query data (e.g., look up prices), but you **MUST NOT mutate**.
 *   **PROHIBITED:**
     *   `$db.mutate(...)` / `mutation { ... }`.
-    *   `alert()`, `console.log()` (Use `$form.info()` or `$ai.log()`).
+    *   `alert()`, `console.log()` (Use `$form.info()` instead).
     *   External HTTP calls (Use Actions instead).
 
 ## 2. Server Actions (`actions/**/*.ts`)
