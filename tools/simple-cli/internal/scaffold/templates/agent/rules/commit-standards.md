@@ -16,7 +16,6 @@ trigger: always_on
 
 ## 3. Contextual Analysis
 *   **Before Committing:** Analyze the diff.
-*   **Before Committing:** Analyze the diff.
     *   Did I add a new file? -> `feat`
     *   Did I fix a typo? -> `docs` or `fix`
     *   Did I change a variable name? -> `refactor`
