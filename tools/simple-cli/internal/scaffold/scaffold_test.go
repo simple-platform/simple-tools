@@ -265,7 +265,7 @@ func TestCreateActionStructure_ActionExists(t *testing.T) {
 	// Mock SCL check
 	origCheck := checkSCLEntityExists
 	defer func() { checkSCLEntityExists = origCheck }()
-	checkSCLEntityExists = func(path, block, typ, name string) (bool, error) {
+	checkSCLEntityExists = func(filePath, entityName, entityType, blockKey string) (bool, error) {
 		return true, nil // Simulate exists
 	}
 
