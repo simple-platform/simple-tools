@@ -725,7 +725,7 @@ var checkSCLEntityExists = func(filePath string, blockKey string, entityType str
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			return false, fmt.Errorf("scl-parser failed: %s", string(exitErr.Stderr))
+			return false, fmt.Errorf("scl-parser failed for %s: %s", filePath, string(exitErr.Stderr))
 		}
 		return false, fmt.Errorf("failed to run scl-parser: %w", err)
 	}
