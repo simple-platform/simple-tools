@@ -63,7 +63,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	if err := exec.Command("git", "-C", targetPath, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
 		// Not inside a git repo, so initialize one. Treat failure as a hard error so the user knows init was incomplete.
 		if err := exec.Command("git", "init", targetPath).Run(); err != nil {
-			return fmt.Errorf("failed to initialize git repository at %s: %w", targetPath, err)
+			return fmt.Errorf("failed to initialize git repository at %s (is git installed and on your PATH?): %w", targetPath, err)
 		}
 	}
 
