@@ -223,7 +223,7 @@ func CreateTriggerStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath 
 	if PathExists(fsys, existingTriggersFile) {
 		exists, err := checkSCLEntityExists(existingTriggersFile, "set", "dev_simple_system.trigger", cfg.TriggerNameScl)
 		if err != nil {
-			return fmt.Errorf("failed to check trigger existence: %w", err)
+			return fmt.Errorf("failed to check trigger existence for trigger %q in file %s: %w", cfg.TriggerNameScl, existingTriggersFile, err)
 		}
 		if exists {
 			return fmt.Errorf("trigger already exists: %s", cfg.TriggerNameScl)
