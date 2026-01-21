@@ -4,7 +4,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import behavior from './{{.TableName}}.js'
 
-describe('Record Behavior: {{.TableName}}', () => {
+describe('record Behavior: {{.TableName}}', () => {
   // Mock Context
   const mockContext = {
     $ai: {},
@@ -12,7 +12,7 @@ describe('Record Behavior: {{.TableName}}', () => {
       query: vi.fn(),
     },
     $form: Object.assign(
-      vi.fn(field => ({
+      vi.fn(_field => ({
         editable: vi.fn(),
         error: vi.fn(),
         set: vi.fn(),
@@ -35,18 +35,18 @@ describe('Record Behavior: {{.TableName}}', () => {
     mockContext.$form.event = 'load'
     await behavior(mockContext)
     // Example assertion: verify a field was updated
-    // expect(mockContext.$form).toHaveBeenCalled()
+    expect(mockContext.$form).toHaveBeenCalled()
   })
 
   it('should handle update event', async () => {
     mockContext.$form.event = 'update'
     await behavior(mockContext)
-    // Add assertions for update logic
+    expect(mockContext.$form).toHaveBeenCalled()
   })
 
   it('should handle submit event', async () => {
     mockContext.$form.event = 'submit'
     await behavior(mockContext)
-    // Add assertions for submit logic
+    expect(mockContext.$form).toHaveBeenCalled()
   })
 })

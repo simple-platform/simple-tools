@@ -80,8 +80,22 @@ func runTest(cmd *cobra.Command, args []string) error {
 		reporterFlag = "--reporter=json"
 	}
 
-	// Use npx to run vitest from local node_modules
-	fullArgs := []string{"npx", "vitest", "run", reporterFlag}
+	// Check for local vitest binary in node_modules/.bin
+	vitestBin := filepath.Join(targetPath, "node_modules", ".bin", "vitest")
+	// If we are running from root, check root node_modules
+	if _, err := os.Stat(vitestBin); os.IsNotExist(err) {
+		cwd, _ := os.Getwd()
+		vitestBin = filepath.Join(cwd, "node_modules", ".bin", "vitest")
+	}
+
+	var fullArgs []string
+	if _, err := os.Stat(vitestBin); err == nil {
+		// Found local binary
+		fullArgs = []string{vitestBin, "run", reporterFlag}
+	} else {
+		// Fallback to npx
+		fullArgs = []string{"npx", "vitest", "run", reporterFlag}
+	}
 	if coverage {
 		fullArgs = append(fullArgs, "--coverage")
 	}
