@@ -84,8 +84,12 @@ func runTest(cmd *cobra.Command, args []string) error {
 	vitestBin := filepath.Join(targetPath, "node_modules", ".bin", "vitest")
 	// If we are running from root, check root node_modules
 	if _, err := os.Stat(vitestBin); os.IsNotExist(err) {
-		cwd, _ := os.Getwd()
-		vitestBin = filepath.Join(cwd, "node_modules", ".bin", "vitest")
+		cwd, err := os.Getwd()
+		if err == nil {
+			vitestBin = filepath.Join(cwd, "node_modules", ".bin", "vitest")
+		} else {
+			fmt.Fprintf(os.Stderr, "warning: could not determine current directory for vitest lookup: %v\n", err)
+		}
 	}
 
 	var fullArgs []string
