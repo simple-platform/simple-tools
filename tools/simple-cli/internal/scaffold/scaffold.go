@@ -654,7 +654,7 @@ func CreateBehaviorStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		behaviorName := fmt.Sprintf("%s_behavior", cfg.TableName)
 		exists, err := checkSCLEntityExists(behaviorsScl, "set", "dev_simple_system.record_behavior", behaviorName)
 		if err != nil {
-			return fmt.Errorf("failed to check behavior existence: %w", err)
+			return fmt.Errorf("failed to check behavior existence for %s in %s: %w", behaviorName, behaviorsScl, err)
 		}
 		if exists {
 			return fmt.Errorf("behavior registration already exists in SCL for table: %s", cfg.TableName)
