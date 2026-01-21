@@ -41,7 +41,7 @@ You can seed data into **your own tables** or **platform tables** (like settings
 
 Seeding records into your application's tables:
 
-```ruby
+```scl
 set lead_source, source_website {
   name "Website"
 }
@@ -57,7 +57,7 @@ You can also seed "platform" records to configure the environment or create defa
 
 **App Settings:**
 
-```ruby
+```scl
 # Regular config value
 set dev_simple_system.setting, api_endpoint {
   name "external.api.endpoint"
@@ -75,7 +75,7 @@ set dev_simple_system.setting, api_key {
 
 **Default Users:**
 
-```ruby
+```scl
 set dev_simple_system.user, user_john_smith {
   email "john.smith@example.com"
   first_name "John"
@@ -89,7 +89,7 @@ set dev_simple_system.user, user_john_smith {
 
 ## Basic Syntax
 
-```ruby
+```scl
 # Format: set [table_name], [logical_key] { fields... }
 
 set dev_simple_system.record_type, logical_key {
@@ -107,7 +107,7 @@ The `logical_key` (e.g., `user_john_smith` in the example above) is a stable ide
 
 ### Using Variables
 
-````ruby
+````scl
 # Define a variable with GraphQL query
 var metadata {
   query ```

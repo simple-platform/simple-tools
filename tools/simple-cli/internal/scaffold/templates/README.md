@@ -37,7 +37,7 @@ This creates the app structure in `apps/com.mycompany.crm` with a default `app.s
 
 Edit `apps/com.mycompany.crm/tables.scl` to define your data model:
 
-```ruby
+```scl
 table contact {
   required name, :string
   required email, :string

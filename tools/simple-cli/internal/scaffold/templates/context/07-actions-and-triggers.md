@@ -20,7 +20,7 @@ This generates the source code and configuration. You then register it in SCL.
 
 Register the Action (compiled WASM module) in your SCL:
 
-```ruby
+```scl
 set dev_simple_system.logic, import_data {
   name "import-data"
   display_name "Import Data from API"
@@ -50,7 +50,7 @@ set dev_simple_system.logic, import_data {
 
 Schedule recurring execution using the `recurrence` object:
 
-````ruby
+````scl
 var schedule {
   value ```
   {
@@ -101,7 +101,7 @@ set dev_simple_system.trigger, import_schedule {
 
 Trigger that can be invoked manually or via API:
 
-```ruby
+```scl
 set dev_simple_system.trigger, generate_report {
   key generate_report
   name "Generate Report"
@@ -122,7 +122,7 @@ Execute Actions asynchronously (after transaction commit) using the `db_event` r
 
 First, define a conceptual "Trigger" to act as the hub:
 
-```ruby
+```scl
 set dev_simple_system.trigger, order_events {
   name "Order Events"
   description "Triggers when orders are created or updated"
@@ -133,7 +133,7 @@ set dev_simple_system.trigger, order_events {
 
 Connect a table event to the Trigger:
 
-````ruby
+````scl
 # Define variable for JSON operations
 var ops {
   value `["insert", "update"]`
@@ -214,7 +214,7 @@ Trigger Actions via HTTP requests. Like Database Events, this requires a **Trigg
 
 #### 1. Define the Trigger
 
-```ruby
+```scl
 set dev_simple_system.trigger, payment_events {
   name "Payment Events"
   description "Fires on payment callbacks"
@@ -225,7 +225,7 @@ set dev_simple_system.trigger, payment_events {
 
 Connect an HTTP endpoint to the Trigger:
 
-````ruby
+````scl
 var ids {
   query ```
   query {
@@ -273,7 +273,7 @@ Bind your Logic to the `payment_events` Trigger.
 
 Connect Actions to Triggers:
 
-````ruby
+````scl
 var metadata {
   query ```
   query {

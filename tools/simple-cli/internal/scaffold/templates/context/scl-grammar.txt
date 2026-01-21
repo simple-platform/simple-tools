@@ -1,0 +1,242 @@
+# Verified SCL Grammar & Patterns
+
+## 1. Valid Field Types & Constraints
+# DO NOT assume types. Only use this list.
+
+:string
+# SQL: varchar/text
+# Constraints:
+#   length: 100                 # Max length
+#   length: 2..100              # Min..Max length
+#   hash: true                  # Store as hash
+#   secret: true                # Encrypt value
+#   multiline: true             # Text area in UI
+# NOTE: Avoid using 'regex' constraint for validation due to performance and maintainability concerns.
+# Prefer Record Behaviors for complex or frequently changing rules.
+# Only use 'regex' for simple, well-defined patterns.
+
+:char
+# SQL: char
+# Constraints: length, hash, secret, multiline
+
+:boolean
+# SQL: boolean
+# Constraints: none
+
+:integer
+# SQL: integer (4-byte)
+# Constraints: none
+
+:smallint
+# SQL: smallint (2-byte)
+# Constraints: none
+
+:bigint
+# SQL: bigint (8-byte)
+# Constraints: none
+
+:float
+# SQL: real
+# Constraints: none
+
+:decimal
+# SQL: decimal
+# Constraints:
+#   digits: 10   (Precision)
+#   decimals: 2  (Scale)
+
+:datetime
+# SQL: timestamptz
+# Constraints: none
+
+:date
+# SQL: date
+# Constraints: none
+
+:time
+# SQL: time
+# Constraints: none
+
+:enum
+# SQL: text (with check constraint)
+# Constraints:
+#   values: "Draft", "Active", "In_Progress"  # Use underscores instead of spaces in enum values
+#   # WRONG: values: "Draft", "Active", "In Progress"  # This is invalid; spaces are not allowed in enum values
+
+:json
+# SQL: json
+# Constraints: none
+
+:jsonb
+# SQL: jsonb
+# Constraints: none
+
+:document
+# SQL: jsonb
+# Constraints:
+#   multiple: true              # Allow multiple files
+#   allowed_types: "pdf", "jpg" # Comma separated values forms a list
+#   max_size: "10MB"
+
+:version
+# SQL: _extensions.semver
+# Constraints: none
+
+# NOTE: 'uuid' is NOT a valid type. Use ':string' with 'id_prefix' in table definition.
+
+## 2. Universal SCL Syntax
+
+### Setting Records
+# Used in `records/` files to create or update platform records.
+# Syntax: set [<schema_name>.]<table_name> <logical_key_name> { <field_name> <value> }
+
+set dev_simple_system.setting, api_config {
+  name "api.endpoint"           # String value
+  value "https://example.com"
+  is_active true                # Boolean value
+  retry_count 3                 # Number value
+}
+
+### Variables
+# Used to store queries or static data for reuse.
+
+# 1. Query Variable
+var metadata {
+  query ```
+  query get_metadata {
+    tables: dev_simple_system__tables(where: { name: { _eq: "employee" } }) {
+      id
+      name
+    }
+  }
+  ```
+}
+
+# 2. Static Value Variable
+var status_filter {
+  value ```
+  {
+    "filter": { "status": { "_eq": "active" } }
+  }
+  ```
+}
+
+## 3. Operations: Relationships
+
+### In-App Relationships (tables.scl)
+# References to tables within the SAME application
+belongs :to, parent_table {
+  required true
+}
+
+has :many, children {
+  table child_table
+}
+
+### Cross-App Belongs-To (tables.scl)
+# Reference a table in another app.
+# Syntax: <app_name>.<table_name>
+
+belongs :to, job_site {
+  table com_bnv_administration.job_site  # Fully qualified table name
+  required true
+}
+
+### Cross-App Has-Many (records/*.scl)
+# Inverse of a Cross-App Belongs-To. Must be registered dynamically via `table_relationship`.
+
+set dev_simple_system.table_relationship, link_user_to_projects {
+  name "projects"
+  display_name "Projects"
+  kind has
+  cardinality many
+
+  # Source = THIS table (where the 'has many' is conceptually located)
+  source_table_id `$var('metadata') |> $jq('.tables[] | select(.name == "user") | .id')`
+
+  # Target = THE OTHER table (which has the 'belongs to' pointer)
+  target_table_id `$var('metadata') |> $jq('.tables[] | select(.name == "project") | .id')`
+
+  # Target Field = The FK field on the target table
+  target_field_id `$var('metadata') |> $jq('.project_fields[] | select(.name == "manager_id") | .id')`
+}
+
+## 4. Metadata Configuration (records/*.scl)
+# Configure field Display Names and Positions.
+
+set dev_simple_system.table_field, config_employee_first_name {
+  id `$var('metadata') |> $jq('.employee_fields[] | select(.name == "first_name") | .id')`
+  display_name "Given Name"
+  position 10
+}
+
+## 5. Record Behaviors (records/*.scl)
+# Attaching JS logic to a table.
+
+set dev_simple_system.record_behavior, behavior_employee {
+  script `$file('scripts/record-behaviors/employee.js')`
+  table_id `$var('metadata') |> $jq('.tables[] | select(.name == "employee") | .id')`
+}
+
+## 6. Logic & Triggers (records/*.scl)
+
+# 1. Action
+set dev_simple_system.logic, action_process_payroll {
+  name "process-payroll"
+  execution_environment server
+  language go
+}
+
+# 2. Trigger
+set dev_simple_system.trigger, trigger_monthly {
+  name "monthly-schedule"
+  type "time_based"
+  time_schedule `$var('schedule_var') |> $json()`
+}
+
+# 3. Binding
+set dev_simple_system.logic_trigger, bind_payroll {
+  logic_id `$var('metadata') |> $jq('.logics[] | select(.name == "process-payroll") | .id')`
+  trigger_id `$var('metadata') |> $jq('.triggers[] | select(.name == "monthly-schedule") | .id')`
+  is_active true
+}
+
+## 7. Expression Engine Reference
+# Syntax: Backticks with function calls. Pipe `|>` to chain.
+
+### Core Functions
+
+# 1. $var(name)
+# Retrieve a defined variable.
+table_id `$var('metadata')`
+
+# 2. $jq(query)
+# Transform JSON data using jq syntax.
+# .field             => Get field
+# .[0]               => Get first item
+# .[]                => Iterate array
+# select(.x == "y")  => Filter
+id `$var('metadata') |> $jq('.tables[] | select(.name == "order") | .id')`
+
+# 3. $file(path)
+# Read file contents from app directory.
+script `$file('scripts/record-behaviors/order.js')`
+
+# 4. $json()
+# Parse string into JSON object.
+schedule `$var('schedule_text') |> $json()`
+
+# 5. $encode_image(path)
+# Return Base64 data URI of an image.
+icon `$encode_image('assets/logo.png')`
+
+# 6. $trim()
+# Remove whitespace.
+value `$var('text') |> $trim()`
+
+### Common Patterns
+# Extract ID from metadata query
+id `$var('metadata') |> $jq('.tables[] | select(.name == "my_table") | .id')`
+
+# Extract first ID from a list
+logic_id `$var('metadata') |> $jq('.logics[0].id')`

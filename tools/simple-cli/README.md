@@ -110,6 +110,45 @@ simple build apps/com.company.crm --concurrency 8
 
 ---
 
+### `simple test`
+
+Run tests for applications, actions, or record behaviors using Vitest.
+
+**Usage:**
+```bash
+simple test [app-id] [flags]
+```
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `app-id` | No | Target app ID. If omitted, runs all tests in the workspace. |
+
+**Flags:**
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--action` | `-a` | - | Run tests for a specific action. |
+| `--behavior` | `-b` | - | Run tests for a specific record behavior. |
+| `--coverage` | | `false` | Enable code coverage reporting. |
+| `--json` | | `false` | Output results in JSON format. |
+
+**Examples:**
+```bash
+# Run all tests
+simple test
+
+# Run all tests for an app
+simple test com.mycompany.crm
+
+# Test specific action
+simple test com.mycompany.crm --action send-email
+
+# Test behavior
+simple test com.mycompany.crm --behavior order
+```
+
+---
+
 ### `simple init`
 
 Initialize a new Simple Platform workspace.
@@ -202,6 +241,28 @@ simple new action com.mycompany.crm send-invite "Send Invite" \
 simple new action com.mycompany.crm validate-form "Validate Form" \
   --scope mycompany \
   --env client
+```
+
+---
+
+### `simple new behavior`
+
+Create a new record behavior script and register it in SCL.
+
+**Usage:**
+```bash
+simple new behavior <app-id> <table-name>
+```
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `app-id` | Yes | Target App ID. |
+| `table-name` | Yes | Name of the table to attach behavior to (e.g., `order`). |
+
+**Examples:**
+```bash
+simple new behavior com.mycompany.crm order
 ```
 
 ---

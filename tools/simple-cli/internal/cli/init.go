@@ -3,6 +3,7 @@ package cli
 
 import (
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
@@ -55,6 +56,20 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 	if err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, targetPath, cfg); err != nil {
 		return fmt.Errorf("failed to create monorepo: %w", err)
+	}
+
+	// Initialize git repo if not already inside one
+	// We check if the command runs inside the target path. If it fails, it means we are not in a git repo.
+	if err := exec.Command("git", "-C", targetPath, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+		// Not inside a git repo, so initialize one. Treat failure as a hard error so the user knows init was incomplete.
+		if err := exec.Command("git", "init", targetPath).Run(); err != nil {
+			return fmt.Errorf("failed to initialize git repository at %s (is git installed and on your PATH?): %w", targetPath, err)
+		}
+	} else {
+		// Already in a git repo
+		if !jsonOutput {
+			fmt.Printf("ℹ️  Directory %s is already inside a git repository, skipping git init\n", targetPath)
+		}
 	}
 
 	// Output result

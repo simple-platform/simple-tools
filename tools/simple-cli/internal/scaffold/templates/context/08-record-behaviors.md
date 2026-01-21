@@ -6,7 +6,7 @@ Record Behaviors are JavaScript scripts attached to tables that define form logi
 
 ## Registering a Record Behavior
 
-````ruby
+````scl
 var metadata {
   query ```
   query {
