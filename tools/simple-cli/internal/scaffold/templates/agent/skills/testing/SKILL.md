@@ -62,7 +62,7 @@ describe('order behavior', () => {
   it('should set default status on load', async () => {
     // 1. Mock the API
     const $form = {
-      event: 'load',
+      'event': 'load',
       'status': { set: vi.fn(), value: () => null }
     }
     const $user = { id: 'usr_123' }

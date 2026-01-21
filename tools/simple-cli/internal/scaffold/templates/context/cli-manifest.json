@@ -19,6 +19,48 @@
         { "name": "table-name", "type": "string", "description": "Table name to attach behavior to" }
       ]
     },
+    "new trigger:db": {
+      "usage": "simple new trigger:db <app-id> <name> <display-name>",
+      "description": "Create a database event trigger",
+      "args": [
+        { "name": "app-id", "type": "string", "description": "Target App ID" },
+        { "name": "name", "type": "string", "description": "Trigger name (snake_case)" },
+        { "name": "display-name", "type": "string", "description": "Human-readable label" }
+      ],
+      "flags": [
+        { "name": "--table", "type": "string", "required": true, "description": "Table to watch" },
+        { "name": "--ops", "type": "string", "description": "Operations: insert, update, delete" },
+        { "name": "--action", "type": "string", "description": "Action to execute" }
+      ]
+    },
+    "new trigger:timed": {
+      "usage": "simple new trigger:timed <app-id> <name> <display-name>",
+      "description": "Create a scheduled timed trigger",
+      "args": [
+        { "name": "app-id", "type": "string", "description": "Target App ID" },
+        { "name": "name", "type": "string", "description": "Trigger name (snake_case)" },
+        { "name": "display-name", "type": "string", "description": "Human-readable label" }
+      ],
+      "flags": [
+        { "name": "--frequency", "type": "string", "required": true, "description": "minutely|hourly|daily|weekly|monthly|yearly" },
+        { "name": "--interval", "type": "int", "description": "Interval between runs" },
+        { "name": "--action", "type": "string", "description": "Action to execute" }
+      ]
+    },
+    "new trigger:webhook": {
+      "usage": "simple new trigger:webhook <app-id> <name> <display-name>",
+      "description": "Create an HTTP webhook trigger",
+      "args": [
+        { "name": "app-id", "type": "string", "description": "Target App ID" },
+        { "name": "name", "type": "string", "description": "Trigger name (snake_case)" },
+        { "name": "display-name", "type": "string", "description": "Human-readable label" }
+      ],
+      "flags": [
+        { "name": "--method", "type": "string", "description": "HTTP method (get, post, etc.)" },
+        { "name": "--public", "type": "boolean", "description": "Make endpoint public" },
+        { "name": "--action", "type": "string", "description": "Action to execute" }
+      ]
+    },
     "new action": {
       "usage": "simple new action <app-id> <name> <display-name>",
       "description": "Create a new custom action",

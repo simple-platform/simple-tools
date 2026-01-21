@@ -21,7 +21,11 @@ You are an expert **Simple Platform Engineer** for this project.
 > **YOU MUST DO:** Edit `apps/<app>/tables.scl`
 >
 > **SOURCE OF TRUTH:**
-> All valid actions are defined in `.simple/context/cli-manifest.json` and `.simple/context/workflows.md`.
+> All valid actions and rules are defined in the `.agent/` directory.
+> *   **Workflows:** `.agent/workflows/` (Task execution steps)
+> *   **Skills:** `.agent/skills/` (Tool usage and capabilities)
+> *   **Rules:** `.agent/rules/` (Coding standards and constraints)
+> *   **Context:** `.simple/context/` (Platform documentation)
 > **YOU MUST READ THESE FILES BEFORE DOING ANYTHING.**
 
 ## Your Role
@@ -129,70 +133,23 @@ Consult these documents for detailed syntax and behavior.
 ---
 
 ## 3. Workflow Recipes
-
-Follow this process strictly for all requests.
-
-### 🆕 Recipe: Build a New App
-
-**Trigger:** "Create a CRM app", "Build a project management tool"
-
-#### Phase 1: Planning & Iteration
-1.  **Define Data Model:** Work with user to define tables, fields, relationships, display names, and field positions.
-2.  **Define Record Behaviors:** For each field, define logic for `load`, `update`, and `submit` events.
-3.  **Define Actions:** Identify additional custom logic needs that can't be satisfied by record behaviors (Time-based, DB events, Webhooks).
-4.  **Define Custom Views:** Determine if specific UI buttons/triggers are needed inside Record views.
-5.  **Iterate:** Refine this plan until the user explicitly approves it.
-
-#### Phase 2: Implementation
-*Proceed only after Plan Approval. Follow strict coding standards.*
-
-
-1.  **Scaffold App:**
-    ```bash
-    simple new app com.mycompany.crm "Customer Relationship Management"
-    ```
-
-2.  *(Skipped - Handled by scaffold)* **App Manifest (`app.scl`)** created automatically.
-
-
-3.  **Implement Data Model (`tables.scl`):**
-    ```scl
-    table contact {
-      required email, :string {
-        unique true
-      }
-
-      required name, :string
-    }
-    ```
-
-4.  **Scaffold Actions (if needed):**
-    ```bash
-    simple new action com.mycompany.crm import-contacts --lang ts
-    ```
-
-5.  **Build & Deploy:**
-    ```bash
-    simple build com.mycompany.crm
-    simple deploy com.mycompany.crm
-    ```
-
-### 🛠️ Recipe: Change Request (Modification/Fix)
-
-**Trigger:** "Add status field", "Fix invoice calculation"
-
-#### Phase 1: Planning
-1.  **Analyze Request:** Identify if changes are needed in **Schema** (tables.scl), **Behaviors** (scripts/), or **Logic** (actions/).
-2.  **Define Changes:** Propose specific edits.
-3.  **Iterate:** Get user approval.
-
-#### Phase 2: Implementation
-1.  **Apply Changes:** Edit the files.
-2.  **Build & Deploy:**
-    ```bash
-    simple build com.mycompany.crm
-    simple deploy com.mycompany.crm
-    ```
+ 
+ > [!IMPORTANT]
+ > **OFFICIAL WORKFLOWS**
+ > The detailed, executable validation rules and steps for these workflows are located in `.agent/workflows/`.
+ > **YOU MUST FOLLOW THE STEPS IN THOSE FILES EXACTLY.**
+ 
+ ### 🆕 Recipe: Build a New App
+ *   **Ref:** `.agent/workflows/create-new-app.md`
+ *   Scaffold a new application, define schemas, and implement logic.
+ 
+ ### ⚡ Recipe: Add Logic & Behaviors
+ *   **Ref:** `.agent/workflows/add-logic.md`
+ *   Decision tree for implementing Record Behaviors, Triggers, and Actions.
+ 
+ ### 🚀 Recipe: Deploy Application
+ *   **Ref:** `.agent/workflows/deploy-app.md`
+ *   Production readiness checklist, verification, and deployment.
 
 ---
 

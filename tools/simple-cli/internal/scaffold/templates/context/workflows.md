@@ -52,8 +52,12 @@ This document defines the **standard operating procedure** for building and modi
         *   Registration: `apps/<app_id>/records/10_behaviors.scl`
         *   **Verify:** `simple test <app_id> --behavior <table_name>`
         *   *Ref:* `.simple/context/cli-manifest.json` (Command: "new behavior")
-    *   **Custom Actions**:
-        *   **Command:** `simple new action <app_id> <action_name>`
+    *   **Custom Actions & Triggers**:
+        *   **Commands:**
+            *   `simple new action <app_id> <action_name> --scope ...`
+            *   `simple new trigger:db <app_id> ...`
+            *   `simple new trigger:timed <app_id> ...`
+            *   `simple new trigger:webhook <app_id> ...`
         *   Write proper code and tests.
         *   **Verify:** `simple test <app_id> --action <action_name>`
         *   **Registration** (in `apps/<app_id>/records/`):
@@ -61,7 +65,7 @@ This document defines the **standard operating procedure** for building and modi
             *   Trigger in `trigger` table.
             *   Binding in `logic_trigger` table.
             *   *Ref:* `.simple/context/scl-grammar.txt` (Section: Logic Binding)
-        *   *Ref:* `.simple/context/cli-manifest.json` (Command: "new action")
+        *   *Ref:* `.simple/context/cli-manifest.json` (Commands: "new action", "new trigger:*")
     *   **Seed Data**:
         *   Add seed records in `apps/<app_id>/records/` files.
         *   *Ref:* `.simple/context/05-app-records-overview.md` (Concepts: Seed Data)

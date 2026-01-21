@@ -221,7 +221,7 @@ func CreateTriggerStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath 
 	// Check for duplicate trigger
 	existingTriggersFile := filepath.Join(recordsPath, "20_triggers.scl")
 	if PathExists(fsys, existingTriggersFile) {
-		exists, err := checkSCLEntityExists(existingTriggersFile, "set", "dev_simple_system.trigger", cfg.TriggerNameScl)
+		exists, err := checkSCLEntityMatchType(existingTriggersFile, "set", "dev_simple_system.trigger", cfg.TriggerNameScl)
 		if err != nil {
 			return fmt.Errorf("failed to check trigger existence for trigger %q in file %s: %w", cfg.TriggerNameScl, existingTriggersFile, err)
 		}
@@ -355,7 +355,7 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 	actionsScl := filepath.Join(recordsPath, "10_actions.scl")
 	if PathExists(fsys, actionsScl) {
 		actionNameScl := strings.ReplaceAll(cfg.ActionName, "-", "_")
-		exists, err := checkSCLEntityExists(actionsScl, "set", "dev_simple_system.logic", actionNameScl)
+		exists, err := checkSCLEntityMatchType(actionsScl, "set", "dev_simple_system.logic", actionNameScl)
 		if err != nil {
 			return fmt.Errorf("failed to check action existence: %w", err)
 		}
@@ -652,7 +652,7 @@ func CreateBehaviorStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 	// Read existing content to check for duplicates in SCL
 	if PathExists(fsys, behaviorsScl) {
 		behaviorName := fmt.Sprintf("%s_behavior", cfg.TableName)
-		exists, err := checkSCLEntityExists(behaviorsScl, "set", "dev_simple_system.record_behavior", behaviorName)
+		exists, err := checkSCLEntityMatchType(behaviorsScl, "set", "dev_simple_system.record_behavior", behaviorName)
 		if err != nil {
 			return fmt.Errorf("failed to check behavior existence for %s in %s: %w", behaviorName, behaviorsScl, err)
 		}
@@ -711,10 +711,10 @@ func appendBehaviorRecord(fsys fsx.FileSystem, tplFS fsx.TemplateFS, dst string,
 	return nil
 }
 
-// checkSCLEntityExists uses scl-parser CLI to check if a specific entity exists in an SCL file.
+// checkSCLEntityMatchType uses scl-parser CLI to check if a specific entity with a specific name/type exists in an SCL file.
 // It is defined as a package-level variable (rather than a regular function) so tests can
 // replace it with a stub or mock implementation when needed.
-var checkSCLEntityExists = func(filePath string, entityName string, entityType string, blockKey string) (bool, error) {
+var checkSCLEntityMatchType = func(filePath string, entityName string, entityType string, blockKey string) (bool, error) {
 	// check if scl-parser is installed and get path
 	parserPath, err := build.EnsureSCLParser(nil)
 	if err != nil {
@@ -735,41 +735,48 @@ var checkSCLEntityExists = func(filePath string, entityName string, entityType s
 		return false, fmt.Errorf("failed to parse scl-parser output: %w", err)
 	}
 
-	matchesName := func(nameVal interface{}) bool {
-		// For 'set type, name', nameVal should be a list ["type", "name"]
-		if nameList, ok := nameVal.([]interface{}); ok {
-			if len(nameList) >= 2 {
-				// Need to cast interface{} to string
-				typeStr, okType := nameList[0].(string)
-				nameStr, okName := nameList[1].(string)
-				if okType && okName && typeStr == entityType && nameStr == entityName {
-					return true
-				}
-			}
-		}
-
-		// Fallback for simple blocks like 'table user'
-		if nameStr, ok := nameVal.(string); ok {
-			if entityType == "" && nameStr == entityName {
-				return true
-			}
-		}
-
-		return false
-	}
-
 	for _, block := range blocks {
-		if block["type"] == "block" {
-			key, ok := block["key"].(string)
-			if ok && key == blockKey {
-				// Name can be a string or a list of strings
-				nameVal := block["name"]
-				if matchesName(nameVal) {
-					return true, nil
-				}
-			}
+		if matchesEntity(block, blockKey, entityType, entityName) {
+			return true, nil
 		}
 	}
 
 	return false, nil
+}
+
+// matchesEntity checks if a block matches the specified key, type, and name.
+func matchesEntity(block map[string]interface{}, blockKey, entityType, entityName string) bool {
+	if block["type"] != "block" {
+		return false
+	}
+
+	key, ok := block["key"].(string)
+	if !ok || key != blockKey {
+		return false
+	}
+
+	nameVal := block["name"]
+
+	// Case 1: 'set type, name' -> nameVal is ["type", "name"]
+	if nameList, ok := nameVal.([]interface{}); ok {
+		if len(nameList) >= 2 {
+			typeStr, okType := nameList[0].(string)
+			nameStr, okName := nameList[1].(string)
+			if okType && okName && typeStr == entityType && nameStr == entityName {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Case 2: Simple block 'table user' -> nameVal is "user"
+	if nameStr, ok := nameVal.(string); ok {
+		// If we are looking for a specific type (e.g. "set"), a string name doesn't match
+		// unless entityType is empty (generic block match)
+		if entityType == "" && nameStr == entityName {
+			return true
+		}
+	}
+
+	return false
 }

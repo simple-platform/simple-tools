@@ -263,9 +263,9 @@ func TestCreateActionStructure_AppNotExists(t *testing.T) {
 
 func TestCreateActionStructure_ActionExists(t *testing.T) {
 	// Mock SCL check
-	origCheck := checkSCLEntityExists
-	defer func() { checkSCLEntityExists = origCheck }()
-	checkSCLEntityExists = func(filePath, entityName, entityType, blockKey string) (bool, error) {
+	origCheck := checkSCLEntityMatchType
+	defer func() { checkSCLEntityMatchType = origCheck }()
+	checkSCLEntityMatchType = func(filePath, entityName, entityType, blockKey string) (bool, error) {
 		return true, nil // Simulate exists
 	}
 
@@ -295,9 +295,9 @@ func TestCreateActionStructure_ActionExists(t *testing.T) {
 
 func TestCreateActionStructure_DuplicateSCL(t *testing.T) {
 	// Mock SCL check
-	origCheck := checkSCLEntityExists
-	defer func() { checkSCLEntityExists = origCheck }()
-	checkSCLEntityExists = func(path, block, typ, name string) (bool, error) {
+	origCheck := checkSCLEntityMatchType
+	defer func() { checkSCLEntityMatchType = origCheck }()
+	checkSCLEntityMatchType = func(path, block, typ, name string) (bool, error) {
 		if name == "my_action" || name == "my-action" {
 			return true, nil
 		}
@@ -498,9 +498,9 @@ func (m *mockFileInfoSimple) Sys() any           { return nil }
 
 func TestCreateTriggerStructure_Errors(t *testing.T) {
 	// Mock SCL check
-	origCheck := checkSCLEntityExists
-	defer func() { checkSCLEntityExists = origCheck }()
-	checkSCLEntityExists = func(path, block, typ, name string) (bool, error) {
+	origCheck := checkSCLEntityMatchType
+	defer func() { checkSCLEntityMatchType = origCheck }()
+	checkSCLEntityMatchType = func(path, block, typ, name string) (bool, error) {
 		if name == "daily_sync" {
 			return true, nil
 		}
