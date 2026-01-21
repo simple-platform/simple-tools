@@ -12,6 +12,16 @@ In Simple Platform, logic is decoupled from execution triggers.
 
 This allows one piece of Logic to be triggered by multiple events (e.g., "Send Email" triggered by "Signup" OR "Nightly Job").
 
+> [!CAUTION]
+> **Signature Mismatch Risk**
+> *   **Server Actions** (`simple.Handle`) are NOT Record Behaviors.
+> *   **Record Behaviors** (`export default ({$form})`) are NOT Server Actions.
+> *   **NEVER** mix these signatures. See `rules/logic-standards.md`.
+
+> [!IMPORTANT]
+> **No Seeding in Code**
+> Do not use logic to create seed data. Use SCL `instance` blocks. See `skills/data-seeding/SKILL.md`.
+
 ## 2. Server Actions (The Code)
 **File:** `apps/<app>/actions/<name>/index.ts`
 **Command:** `simple new action <app> <name> --scope myorg --env server`

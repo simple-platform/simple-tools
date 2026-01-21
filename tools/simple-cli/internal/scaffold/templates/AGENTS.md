@@ -63,10 +63,11 @@ Use these commands to build and deploy your work.
 
 > [!IMPORTANT]
 > **AI AGENTS: READ THIS FIRST**
-> Before attempting any task in this workspace, you MUST read the "Self-Driving Kit" located in `.simple/context/`.
-> 1.  **Understand the Plan**: Read `.simple/context/workflows.md` to understand the standard operating procedures.
-> 2.  **Know the Tools**: Read `.simple/context/cli-manifest.json` to see available CLI commands.
-> 3.  **Know the Syntax**: Read `.simple/context/scl-grammar.txt` for verified SCL patterns.
+> Before attempting any task in this workspace, you MUST read the "Self-Driving Kit" located in `.simple/context/` and `.agent/`.
+> 1.  **Understand the Plan**: Read `.simple/context/workflows.md`.
+> 2.  **Know the Rules**: Read `.agent/rules/*.md` for strict coding standards (Logic, Versioning, Commits).
+> 3.  **Know the Tools**: Read `.simple/context/cli-manifest.json` and `.agent/skills/*/SKILL.md`.
+> 4.  **Know the Syntax**: Read `.simple/context/scl-grammar.txt`.
 
 > [!NOTE]
 > **Enterprise Standard**: Simple Platform is an ENTERPRISE business platform.
