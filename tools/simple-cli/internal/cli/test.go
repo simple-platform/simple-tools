@@ -89,7 +89,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 	// Print command for clarity (unless in JSON mode where it might corrupt parsing)
 	if !jsonMode {
-		fmt.Printf("Running: %s\n", fmt.Sprint(fullArgs))
+		fmt.Printf("Running: %v\n", fullArgs)
 	}
 
 	execCmd := exec.Command(fullArgs[0], fullArgs[1:]...)
