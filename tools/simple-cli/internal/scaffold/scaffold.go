@@ -714,7 +714,7 @@ func appendBehaviorRecord(fsys fsx.FileSystem, tplFS fsx.TemplateFS, dst string,
 // checkSCLEntityExists uses scl-parser CLI to check if a specific entity exists in an SCL file.
 // It is defined as a package-level variable (rather than a regular function) so tests can
 // replace it with a stub or mock implementation when needed.
-var checkSCLEntityExists = func(filePath string, blockKey string, entityType string, entityName string) (bool, error) {
+var checkSCLEntityExists = func(filePath string, entityName string, entityType string, blockKey string) (bool, error) {
 	// check if scl-parser is installed and get path
 	parserPath, err := build.EnsureSCLParser(nil)
 	if err != nil {
