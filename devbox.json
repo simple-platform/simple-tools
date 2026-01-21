@@ -4,7 +4,7 @@
     "commit": "11cb3517b3af6af300dd6c055aeda73c9bf52c48"
   },
   "packages": {
-    "nodejs":                   "25.3.0",
+    "nodejs":                   "25.4.0",
     "go":                       "1.25.5",
     "golangci-lint":            "2.8.0",
     "erlang":                   "27.2",
