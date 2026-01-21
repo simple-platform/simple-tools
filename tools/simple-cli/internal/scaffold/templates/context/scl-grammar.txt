@@ -11,7 +11,9 @@
 #   hash: true                  # Store as hash
 #   secret: true                # Encrypt value
 #   multiline: true             # Text area in UI
-# NOTE: Avoid using 'regex' constraint for validation due to performance and maintainability concerns; prefer Record Behaviors for complex or frequently changing rules, and only use 'regex' for simple, well-defined patterns.
+# NOTE: Avoid using 'regex' constraint for validation due to performance and maintainability concerns.
+# Prefer Record Behaviors for complex or frequently changing rules.
+# Only use 'regex' for simple, well-defined patterns.
 
 :char
 # SQL: char
