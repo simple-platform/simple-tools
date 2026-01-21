@@ -735,28 +735,37 @@ var checkSCLEntityExists = func(filePath string, entityName string, entityType s
 		return false, fmt.Errorf("failed to parse scl-parser output: %w", err)
 	}
 
+	matchesName := func(nameVal interface{}) bool {
+		// For 'set type, name', nameVal should be a list ["type", "name"]
+		if nameList, ok := nameVal.([]interface{}); ok {
+			if len(nameList) >= 2 {
+				// Need to cast interface{} to string
+				typeStr, okType := nameList[0].(string)
+				nameStr, okName := nameList[1].(string)
+				if okType && okName && typeStr == entityType && nameStr == entityName {
+					return true
+				}
+			}
+		}
+
+		// Fallback for simple blocks like 'table user'
+		if nameStr, ok := nameVal.(string); ok {
+			if entityType == "" && nameStr == entityName {
+				return true
+			}
+		}
+
+		return false
+	}
+
 	for _, block := range blocks {
 		if block["type"] == "block" {
 			key, ok := block["key"].(string)
 			if ok && key == blockKey {
 				// Name can be a string or a list of strings
 				nameVal := block["name"]
-
-				// For 'set type, name', nameVal should be a list ["type", "name"]
-				if nameList, ok := nameVal.([]interface{}); ok {
-					if len(nameList) >= 2 {
-						// Need to cast interface{} to string
-						if typeStr, ok := nameList[0].(string); ok && typeStr == entityType {
-							if nameStr, ok := nameList[1].(string); ok && nameStr == entityName {
-								return true, nil
-							}
-						}
-					}
-				} else if nameStr, ok := nameVal.(string); ok {
-					// Fallback for simple blocks like 'table user'
-					if entityType == "" && nameStr == entityName {
-						return true, nil
-					}
+				if matchesName(nameVal) {
+					return true, nil
 				}
 			}
 		}
