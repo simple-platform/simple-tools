@@ -61,9 +61,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Initialize git repo if not already inside one
 	// We check if the command runs inside the target path. If it fails, it means we are not in a git repo.
 	if err := exec.Command("git", "-C", targetPath, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
-		// Not inside a git repo, so initialize one
+		// Not inside a git repo, so initialize one. Treat failure as a hard error so the user knows init was incomplete.
 		if err := exec.Command("git", "init", targetPath).Run(); err != nil {
-			fmt.Printf("⚠️  Failed to initialize git repository: %v\n", err)
+			return fmt.Errorf("failed to initialize git repository at %s: %w", targetPath, err)
 		}
 	}
 
