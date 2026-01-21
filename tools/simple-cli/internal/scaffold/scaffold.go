@@ -747,11 +747,25 @@ var checkSCLEntityMatchType = func(filePath string, entityName string, entityTyp
 // matchesEntity checks if a parsed SCL block matches the specified key, type, and name.
 //
 // It supports two shapes of the "name" field produced by scl-parser:
+//
 //   1) "set type, name" blocks where block["name"] is a list, e.g. ["type", "name"].
-//      In this case both entityType and entityName must match the elements in that list.
-//   2) Simple blocks like "table user" where block["name"] is a string, e.g. "user".
-//      In this case only entityName is matched, and only when entityType is empty. If a
-//      non-empty entityType is provided, string "name" blocks are not considered matches.
+//      This pattern is produced by SCL statements such as:
+//          set dev_simple_system.logic, action_name
+//      which scl-parser reports as:
+//          "key":  "set"
+//          "name": ["dev_simple_system.logic", "action_name"]
+//      In this case, entityType must match the first element ("dev_simple_system.logic")
+//      and entityName must match the second element ("action_name").
+//
+//   2) Simple declaration blocks where block["name"] is a string, e.g. "user".
+//      This pattern is produced by SCL statements such as:
+//          table user
+//      which scl-parser reports as:
+//          "key":  "table"
+//          "name": "user"
+//      For these blocks, only entityName is matched, and only when entityType is empty.
+//      If a non-empty entityType is provided, string "name" blocks are not considered
+//      matches by this helper.
 func matchesEntity(block map[string]interface{}, blockKey, entityType, entityName string) bool {
 	if block["type"] != "block" {
 		return false
