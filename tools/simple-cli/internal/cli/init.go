@@ -59,7 +59,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	// Initialize git repo if not already inside one
-	// We check runs inside the target path. If it fails, it means we are not in a git repo.
+	// We check if the command runs inside the target path. If it fails, it means we are not in a git repo.
 	if err := exec.Command("git", "-C", targetPath, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
 		// Not inside a git repo, so initialize one
 		if err := exec.Command("git", "init", targetPath).Run(); err != nil {
