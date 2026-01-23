@@ -26,7 +26,7 @@ jobs:
           go-version: '1.23'
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@971e284b6050e8a58e641609b772f9975658e842 # v6.1.1
         with:
           version: v1.60
           working-directory: tools/simple-cli
@@ -53,8 +53,8 @@ jobs:
         uses: paulhatch/semantic-version@v5.4.0
         with:
           tag_prefix: v
-          major_pattern: '/(\\(simple-cli\\).*!)|BREAKING CHANGE/'
-          minor_pattern: '/feat\\(simple-cli\\):/'
+          major_pattern: '(\(simple-cli\).*!)|BREAKING CHANGE'
+          minor_pattern: 'feat\(simple-cli\):'
           version_format: '${major}.${minor}.${patch}'
           change_path: tools/simple-cli
           namespace: simple-cli
