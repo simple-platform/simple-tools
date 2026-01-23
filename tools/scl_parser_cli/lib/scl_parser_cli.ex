@@ -14,10 +14,16 @@ defmodule SCLParserCLI do
   # coveralls-ignore-stop
 
   @doc false
+  @version Mix.Project.config()[:version]
+
   def run(args) do
     case parse_args(args) do
       {:ok, :help} ->
         print_help()
+        :ok
+
+      {:ok, :version} ->
+        IO.puts("scl-parser version #{@version}")
         :ok
 
       {:ok, filename} ->
@@ -31,6 +37,7 @@ defmodule SCLParserCLI do
 
   defp parse_args(["--help"]), do: {:ok, :help}
   defp parse_args(["-h"]), do: {:ok, :help}
+  defp parse_args(["--version"]), do: {:ok, :version}
 
   defp parse_args([filename]) do
     if File.exists?(filename) do
