@@ -2,6 +2,11 @@
 
 All notable changes to SCL Parser CLI will be documented in this file.
 
+## SCL Parser CLI 1.0.3
+
+### ✨ Features
+* feat(scl-parser-cli): add support for `--version` flag (bbb4eb0)
+
 ## SCL Parser CLI 1.0.2
 
 ## SCL Parser CLI 1.0.1
