@@ -101,6 +101,7 @@
     "esbuild",
     "Freqs",
     "fsys",
+    "goarch",
     "gofmt",
     "golangci",
     "golint",
