@@ -1,0 +1,210 @@
+name: Simple CLI Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_release:
+        description: 'Create a release PR with version bump and changelog'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.60
+          working-directory: tools/simple-cli
+
+      - name: Run Tests
+        run: |
+          cd tools/simple-cli
+          go test -v ./...
+
+  prepare:
+    name: Prepare Release
+    needs: test
+    if: github.event.inputs.confirm_release == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate Version
+        id: version
+        uses: paulhatch/semantic-version@v5.4.0
+        with:
+          tag_prefix: v
+          major_pattern: '/(\\(simple-cli\\).*!)|BREAKING CHANGE/'
+          minor_pattern: '/feat\\(simple-cli\\):/'
+          version_format: '${major}.${minor}.${patch}'
+          change_path: tools/simple-cli
+          namespace: simple-cli
+          bump_each_commit: false
+          search_commit_body: true
+          enable_prerelease_mode: false
+
+  build_binaries:
+    name: Build Binary (${{ matrix.target }})
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            goos: darwin
+            goarch: amd64
+          - target: macos-silicon
+            goos: darwin
+            goarch: arm64
+          - target: linux
+            goos: linux
+            goarch: amd64
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+          - target: windows
+            goos: windows
+            goarch: amd64
+            ext: .exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          cd tools/simple-cli
+          EXTENSION="${{ matrix.ext }}"
+          
+          # Inject the calculated version
+          LDFLAGS="-s -w -X simple-cli/internal/cli.Version=${VERSION}"
+          
+          go build -ldflags="$LDFLAGS" -o "bin/simple${EXTENSION}" ./cmd/simple
+          
+          # Rename to final artifact name
+          mv "bin/simple${EXTENSION}" "../simple-cli-${{ matrix.target }}${EXTENSION}"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: tools/simple-cli-${{ matrix.target }}${{ matrix.ext }}
+          retention-days: 1
+
+  create_release_pr:
+    name: Create Release PR
+    needs: [prepare, build_binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Version is already calculated in prepare job
+      
+      - name: Generate Changelog
+        id: changelog
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          PREV_TAG=$(git tag -l "v*-simple-cli" --sort=-version:refname | head -n 1)
+          
+          if [ -z "$PREV_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"* %s (%h)" --grep="(simple-cli)" -- tools/simple-cli)
+          else
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --grep="(simple-cli)" -- tools/simple-cli)
+          fi
+
+          FEATURES=$(echo "$COMMITS" | grep "feat(simple-cli):" || true)
+          FIXES=$(echo "$COMMITS" | grep "fix(simple-cli):" || true)
+          BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\(simple-cli\)!:|BREAKING CHANGE" || true)
+          OTHER=$(echo "$COMMITS" | grep -v -E "feat\(simple-cli\):|fix\(simple-cli\):|ci\(simple-cli\):" | grep -v "^$" || true)
+
+          {
+            echo "## Simple CLI ${VERSION}"
+            echo ""
+            if [ -n "$BREAKING" ]; then echo "### ⚠️ Breaking Changes"; echo "$BREAKING"; echo ""; fi
+            if [ -n "$FEATURES" ]; then echo "### ✨ Features"; echo "$FEATURES"; echo ""; fi
+            if [ -n "$FIXES" ]; then echo "### 🐛 Bug Fixes"; echo "$FIXES"; echo ""; fi
+            if [ -n "$OTHER" ]; then echo "### 📝 Other Changes"; echo "$OTHER"; echo ""; fi
+          } > /tmp/changelog_section.md
+
+          cat /tmp/changelog_section.md >> $GITHUB_STEP_SUMMARY
+
+      - name: Create Release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          BRANCH="release/simple-cli-v${VERSION}"
+          
+          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
+          git config --local user.name "Simple DevOps"
+          
+          git checkout -b "$BRANCH"
+          
+          cd tools/simple-cli
+          
+          if [ ! -f CHANGELOG.md ]; then
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "All notable changes to Simple CLI will be documented in this file." >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+          fi
+          
+          awk -v section="$(cat /tmp/changelog_section.md)" '
+            /^## / && !inserted { print section; print ""; inserted=1 }
+            { print }
+            END { if (!inserted) print section }
+          ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+          
+          # Update package.json version
+          sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${VERSION}\"/" package.json
+          
+          git add CHANGELOG.md package.json
+          
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+          
+          git commit -m "chore(simple-cli): release version ${VERSION}"
+          git push origin "$BRANCH"
+          
+          gh pr create \
+            --title "chore(simple-cli): release version ${VERSION}" \
+            --body-file /tmp/changelog_section.md \
+            --base main \
+            --head "$BRANCH"
