@@ -10,6 +10,7 @@ import (
 
 var (
 	jsonOutput bool
+	Version    = "dev"
 )
 
 // RootCmd represents the base command when called without any subcommands
@@ -19,7 +20,7 @@ var RootCmd = &cobra.Command{
 	Long:  `Simple CLI manages apps, builds, and deployments in the Simple platform.`,
 	// Silence usage to prevent printing help on error
 	SilenceUsage: true,
-	// We handle errors to support JSON output
+	// Silence Errors to support JSON output
 	SilenceErrors: true,
 }
 
@@ -38,6 +39,7 @@ func Execute() int {
 }
 
 func init() {
+	RootCmd.Version = Version
 	RootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output results in JSON format")
 }
 

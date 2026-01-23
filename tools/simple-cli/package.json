@@ -5,7 +5,7 @@
   "scripts": {
     "lint": "golangci-lint run ./...",
     "test": "go test -cover ./...",
-    "build": "go build -o bin/simple ./cmd/simple",
+    "build": "go build -ldflags=\"-s -w -X simple-cli/internal/cli.Version=$npm_package_version\" -o bin/simple ./cmd/simple",
     "tidy": "go mod tidy",
     "deps": "go mod download"
   }
