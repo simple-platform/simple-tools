@@ -111,6 +111,7 @@
     "Isatty",
     "Javy",
     "kcol",
+    "ldflags",
     "lipgloss",
     "lparen",
     "myaction",
