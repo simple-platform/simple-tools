@@ -97,6 +97,15 @@ func NewPhoenixSocket(endpointURL *url.URL) *PhoenixSocket {
 	}
 }
 
+// AuthFailedError indicates an authentication failure during connection.
+type AuthFailedError struct {
+	StatusCode int
+}
+
+func (e *AuthFailedError) Error() string {
+	return fmt.Sprintf("websocket auth failed: %d", e.StatusCode)
+}
+
 // Connect establishes the WebSocket connection.
 func (s *PhoenixSocket) Connect() error {
 	wsURL := *s.endpoint
@@ -120,7 +129,7 @@ func (s *PhoenixSocket) Connect() error {
 	conn, resp, err := dialer.Dial(wsURL.String(), http.Header{})
 	if err != nil {
 		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
-			return fmt.Errorf("websocket auth failed: %d", resp.StatusCode)
+			return &AuthFailedError{StatusCode: resp.StatusCode}
 		}
 		return fmt.Errorf("websocket dial failed: %w", err)
 	}

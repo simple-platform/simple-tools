@@ -3,6 +3,7 @@ package deploy
 import (
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -625,17 +626,23 @@ func TestPhoenixSocketConnectAuthFailure(t *testing.T) {
 
 	// Parse server URL
 	wsURL := "ws" + strings.TrimPrefix(authServer.URL, "http") + "/socket"
-	u, _ := url.Parse(wsURL)
+	u, err := url.Parse(wsURL)
+	if err != nil {
+		t.Fatalf("failed to parse WebSocket URL: %v", err)
+	}
 
 	// Connect
 	socket := NewPhoenixSocket(u)
-	err := socket.Connect()
+	err = socket.Connect()
 	if err == nil {
 		t.Fatal("Connect() should have failed")
 	}
 
-	if !strings.Contains(err.Error(), "websocket auth failed: 401") {
-		t.Errorf("error should contain 'websocket auth failed: 401', got: %v", err)
+	var authErr *AuthFailedError
+	if !errors.As(err, &authErr) {
+		t.Errorf("error should be AuthFailedError, got type %T: %v", err, err)
+	} else if authErr.StatusCode != 401 {
+		t.Errorf("StatusCode = %d, want 401", authErr.StatusCode)
 	}
 }
 
