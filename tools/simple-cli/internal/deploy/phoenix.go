@@ -117,8 +117,11 @@ func (s *PhoenixSocket) Connect() error {
 	dialer.ReadBufferSize = 16384
 	dialer.WriteBufferSize = 16384
 
-	conn, _, err := dialer.Dial(wsURL.String(), http.Header{})
+	conn, resp, err := dialer.Dial(wsURL.String(), http.Header{})
 	if err != nil {
+		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+			return fmt.Errorf("websocket auth failed: %d", resp.StatusCode)
+		}
 		return fmt.Errorf("websocket dial failed: %w", err)
 	}
 

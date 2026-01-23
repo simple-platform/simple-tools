@@ -606,6 +606,39 @@ func TestPhoenixSocketConnectAndJoin(t *testing.T) {
 	}
 }
 
+func TestPhoenixSocketConnectAuthFailure(t *testing.T) {
+	// Start mock server that returns 401
+	server := startMockPhoenixServer(t, func(conn *websocket.Conn) {
+		// This handler won't be called because handshake fails
+	})
+	// Force the mock server wrapper to handle the handshake failure check?
+	// The standard httptest.NewServer handles the connection.
+	// We need a specific handler that rejects the upgrade request with 401.
+	server.Close() // Close the specific websocket server
+
+	// create a custom server for this test
+	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte("Unauthorized"))
+	}))
+	defer authServer.Close()
+
+	// Parse server URL
+	wsURL := "ws" + strings.TrimPrefix(authServer.URL, "http") + "/socket"
+	u, _ := url.Parse(wsURL)
+
+	// Connect
+	socket := NewPhoenixSocket(u)
+	err := socket.Connect()
+	if err == nil {
+		t.Fatal("Connect() should have failed")
+	}
+
+	if !strings.Contains(err.Error(), "websocket auth failed: 401") {
+		t.Errorf("error should contain 'websocket auth failed: 401', got: %v", err)
+	}
+}
+
 func TestPhoenixSocketPush(t *testing.T) {
 	receivedMsg := make(chan *phoenixMessage, 1)
 
