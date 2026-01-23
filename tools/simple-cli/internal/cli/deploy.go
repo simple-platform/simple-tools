@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -134,7 +135,8 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	if err := client.Connect(); err != nil {
 		// potential auth failure (expired token)
 		// Check for auth failure error from phoenix socket
-		if strings.Contains(err.Error(), "websocket auth failed") { // 401/403
+		var authErr *deploy.AuthFailedError
+		if errors.As(err, &authErr) { // 401/403
 			if !jsonOutput {
 				fmt.Println("🔄 Auth token expired, refreshing...")
 			}
@@ -145,9 +147,10 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 			}
 
 			// 2. Get new JWT (force refresh)
-			jwt, authErr = auth.GetJWT(env.IdentityEndpoint(), env.APIKey, deployEnv)
-			if authErr != nil {
-				return fmt.Errorf("re-authentication failed: %w", authErr)
+			var newJWTErr error
+			jwt, newJWTErr = auth.GetJWT(env.IdentityEndpoint(), env.APIKey, deployEnv)
+			if newJWTErr != nil {
+				return fmt.Errorf("re-authentication failed: %w", newJWTErr)
 			}
 
 			// 3. Re-create client with new JWT
