@@ -1,0 +1,42 @@
+{
+  "name": "@simpleplatform/contextualizer",
+  "version": "0.1.0",
+  "description": "Effortlessly package your project's source code into a single, context-rich file for LLMs.",
+  "license": "Apache-2.0",
+  "homepage": "https://docs.simple.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simple-platform/simple-tools.git",
+    "directory": "tools/contextualizer"
+  },
+  "bugs": {
+    "url": "https://github.com/simple-platform/simple-tools/issues"
+  },
+  "keywords": [
+    "simple",
+    "simple platform",
+    "simple contextualizer",
+    "contextualizer",
+    "context",
+    "llm"
+  ],
+  "bin": {
+    "contextualizer": "./bin/index.js"
+  },
+  "files": [
+    "README.md",
+    "bin"
+  ],
+  "scripts": {
+    "lint": "golangci-lint run ./...",
+    "test": "go test -v -cover ./...",
+    "build": "go build -ldflags=\"-s -w -X main.Version=$npm_package_version\" -o bin/contextualizer ./cmd/contextualizer",
+    "tidy": "go mod tidy",
+    "deps": "go mod download",
+    "postinstall": "node bin/index.js --install-only"
+  },
+  "dependencies": {
+    "axios": "^1.7.9",
+    "fs-extra": "^11.2.0"
+  }
+}

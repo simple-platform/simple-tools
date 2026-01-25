@@ -29,6 +29,7 @@ This repository contains the official developer tools to build, test, and deploy
 | Tool | Description | Documentation |
 |------|-------------|---------------|
 | **[Simple CLI](./tools/simple-cli/)** | Command-line interface for scaffolding and building applications | [📖 Full Documentation](./tools/simple-cli/README.md) |
+| **[Contextualizer](./tools/contextualizer/)** | CLI to consolidate code for LLM context | [📖 Full Documentation](./tools/contextualizer/README.md) |
 | **[SCL Parser CLI](./tools/scl_parser_cli/)** | Standalone CLI for parsing SCL files to JSON | [📖 Full Documentation](./tools/scl_parser_cli/README.md) |
 | **[SCL Parser](./packages/scl_parser/)** | Elixir library for SCL parsing | [📖 Full Documentation](./packages/scl_parser/README.md) |
 
@@ -94,6 +95,7 @@ Run these from the monorepo root:
 simple-tools/
 ├── tools/
 │   ├── simple-cli/            # Go CLI application
+│   ├── contextualizer/        # Go CLI for LLM context
 │   └── scl_parser_cli/        # Elixir CLI for SCL Parser
 ├── packages/
 │   └── scl_parser/            # Elixir parser library
