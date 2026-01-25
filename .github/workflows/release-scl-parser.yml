@@ -90,7 +90,7 @@ jobs:
         uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
         with:
           tag_prefix: v
-          major_pattern: '/(BREAKING CHANGE|!:)/'
+          major_pattern: '/(\\(scl-parser\\).*!)|BREAKING CHANGE/'
           minor_pattern: '/feat\\(scl-parser\\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: packages/scl_parser

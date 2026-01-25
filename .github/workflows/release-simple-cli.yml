@@ -53,8 +53,8 @@ jobs:
         uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
         with:
           tag_prefix: v
-          major_pattern: '(BREAKING CHANGE|!:)'
-          minor_pattern: 'feat\(simple-cli\):'
+          major_pattern: '/(\\(simple-cli\\).*!)|BREAKING CHANGE/'
+          minor_pattern: '/feat\\(simple-cli\\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: tools/simple-cli
           namespace: simple-cli
