@@ -11,32 +11,5 @@ Add contextualizer tool effortlessly package project's source code into a single
 * feat(contextualizer): add contextualizer tool (5e37fd5)
 
 ### 📝 Other Changes
-* chore(contextualizer): release version 1.0.0 (b56db9d)
-* chore(contextualizer): release version 1.0.0 (c6f7639)
-* chore(contextualizer): add bin/contextualizer to git ignore (55e6c70)
-* test(contextualizer): resolve test failures (e515eb9)
-
-## Contextualizer 1.0.0
-
-### ⚠️ Breaking Changes
-Add contextualizer tool effortlessly package project's source code into a single,
-
-### ✨ Features
-* feat(contextualizer): add contextualizer tool (5e37fd5)
-
-### 📝 Other Changes
-* chore(contextualizer): release version 1.0.0 (c6f7639)
-* chore(contextualizer): add bin/contextualizer to git ignore (55e6c70)
-* test(contextualizer): resolve test failures (e515eb9)
-
-## Contextualizer 1.0.0
-
-### ⚠️ Breaking Changes
-Add contextualizer tool effortlessly package project's source code into a single,
-
-### ✨ Features
-* feat(contextualizer): add contextualizer tool (5e37fd5)
-
-### 📝 Other Changes
 * chore(contextualizer): add bin/contextualizer to git ignore (55e6c70)
 * test(contextualizer): resolve test failures (e515eb9)
