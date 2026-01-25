@@ -29,7 +29,6 @@ var DefaultIgnorePatterns = []string{
 	".idea/",
 	"__pycache__/",
 	".turbo/",
-	".turbo/",
 
 	// Files
 	"package-lock.json",
