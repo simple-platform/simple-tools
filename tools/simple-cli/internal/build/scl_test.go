@@ -9,7 +9,7 @@ import (
 
 func TestFetchSCLParserVersion(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintln(w, `version: "1.2.3"`)
+		_, _ = fmt.Fprintln(w, `version: "1.2.3"`)
 	}))
 	defer server.Close()
 

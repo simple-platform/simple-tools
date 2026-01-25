@@ -557,7 +557,7 @@ func startMockPhoenixServer(t *testing.T, handler func(*websocket.Conn)) *httpte
 			t.Logf("upgrade error: %v", err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		handler(conn)
 	}))
@@ -580,7 +580,7 @@ func TestPhoenixSocketConnectAndJoin(t *testing.T) {
 					// Send join reply
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}
@@ -620,7 +620,7 @@ func TestPhoenixSocketConnectAuthFailure(t *testing.T) {
 	// create a custom server for this test
 	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
-		w.Write([]byte("Unauthorized"))
+		_, _ = w.Write([]byte("Unauthorized"))
 	}))
 	defer authServer.Close()
 
@@ -666,12 +666,12 @@ func TestPhoenixSocketPush(t *testing.T) {
 				case "phx_join":
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				case "test_event":
 					receivedMsg <- msg
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{"received": true}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}
@@ -725,7 +725,7 @@ func TestPhoenixChannelLeave(t *testing.T) {
 				if msg != nil && (msg.Event == "phx_join" || msg.Event == "phx_leave") {
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}

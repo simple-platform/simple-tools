@@ -39,7 +39,7 @@ func TestEnsureTool_Download(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		content := []byte("binary-content")
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(content)))
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer server.Close()
 
@@ -84,7 +84,7 @@ func TestEnsureTool_Download(t *testing.T) {
 		Version:   "2.0.0",
 		LastCheck: time.Now().Add(-48 * time.Hour),
 	}
-	SaveManifest(manifest)
+	_ = SaveManifest(manifest)
 
 	_, err = EnsureTool(def)
 	if err != nil {

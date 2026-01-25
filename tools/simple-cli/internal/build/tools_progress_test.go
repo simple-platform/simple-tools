@@ -15,7 +15,7 @@ func TestEnsureTool_ProgressReporting(t *testing.T) {
 		w.Header().Set("Content-Length", "100")
 		// Write 100 bytes
 		data := make([]byte, 100)
-		w.Write(data)
+		_, _ = w.Write(data)
 	}))
 	defer server.Close()
 

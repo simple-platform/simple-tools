@@ -12,7 +12,7 @@ func TestEnsureDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Create a dummy package.json
 	packageJSON := `{"name": "test-package", "version": "1.0.0"}`

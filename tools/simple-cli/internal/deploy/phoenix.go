@@ -156,7 +156,7 @@ func (s *PhoenixSocket) Disconnect() {
 
 	s.connMu.Lock()
 	if s.conn != nil {
-		s.conn.Close()
+		_ = s.conn.Close()
 		s.conn = nil
 	}
 	s.connMu.Unlock()
@@ -345,9 +345,9 @@ func decodeJSONMessageFast(data []byte) *phoenixMessage {
 	msg := &phoenixMessage{}
 	msg.JoinRef = parseRefFast(arr[0])
 	msg.Ref = parseRefFast(arr[1])
-	json.Unmarshal(arr[2], &msg.Topic)
-	json.Unmarshal(arr[3], &msg.Event)
-	json.Unmarshal(arr[4], &msg.Payload)
+	_ = json.Unmarshal(arr[2], &msg.Topic)
+	_ = json.Unmarshal(arr[3], &msg.Event)
+	_ = json.Unmarshal(arr[4], &msg.Payload)
 
 	// For phx_reply, extract status and response from payload
 	if msg.Event == "phx_reply" {
@@ -448,7 +448,7 @@ func decodeBinaryMessageFast(data []byte) *phoenixMessage {
 			jsonPayload := payload[1+statusSize:]
 			if len(jsonPayload) > 0 {
 				var p any
-				json.Unmarshal(jsonPayload, &p)
+				_ = json.Unmarshal(jsonPayload, &p)
 				msg.Payload = p
 			}
 		}
@@ -594,9 +594,8 @@ func (c *PhoenixChannel) Leave() error {
 }
 
 // Legacy compatibility functions
-func encodeJSONMessage(joinRef, ref uint64, topic, event string, payload any) []byte {
-	return encodeJSONMessageFast(joinRef, ref, topic, event, payload)
-}
+
+
 
 func decodeJSONMessage(data []byte) (*phoenixMessage, error) {
 	msg := decodeJSONMessageFast(data)
@@ -604,10 +603,6 @@ func decodeJSONMessage(data []byte) (*phoenixMessage, error) {
 		return nil, fmt.Errorf("failed to decode message")
 	}
 	return msg, nil
-}
-
-func encodeBinaryMessage(joinRef, ref uint64, topic, event string, payload []byte) []byte {
-	return encodeBinaryMessageFast(joinRef, ref, topic, event, payload)
 }
 
 func decodeBinaryMessage(data []byte) (*phoenixMessage, error) {

@@ -28,7 +28,7 @@ func TestClient_Install(t *testing.T) {
 			case "phx_join":
 				reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 					map[string]any{"status": "ok", "response": map[string]any{}})
-				conn.WriteMessage(websocket.TextMessage, reply)
+				_ = conn.WriteMessage(websocket.TextMessage, reply)
 
 			case "install":
 				reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
@@ -38,7 +38,7 @@ func TestClient_Install(t *testing.T) {
 							"version": expectedVersion,
 						},
 					})
-				conn.WriteMessage(websocket.TextMessage, reply)
+				_ = conn.WriteMessage(websocket.TextMessage, reply)
 			}
 		}
 	})
@@ -92,7 +92,7 @@ func TestClient_Install_Error(t *testing.T) {
 			case "phx_join":
 				reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 					map[string]any{"status": "ok", "response": map[string]any{}})
-				conn.WriteMessage(websocket.TextMessage, reply)
+				_ = conn.WriteMessage(websocket.TextMessage, reply)
 
 			case "install":
 				reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
@@ -102,7 +102,7 @@ func TestClient_Install_Error(t *testing.T) {
 							"message": errorMsg,
 						},
 					})
-				conn.WriteMessage(websocket.TextMessage, reply)
+				_ = conn.WriteMessage(websocket.TextMessage, reply)
 			}
 		}
 	})

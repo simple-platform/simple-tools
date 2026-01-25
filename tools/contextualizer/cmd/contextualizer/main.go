@@ -52,7 +52,11 @@ func main() {
 					if err != nil {
 						fmt.Printf("Warning: Failed to open .gitignore: %v\n", err)
 					} else {
-						defer f.Close()
+						defer func() {
+							if err := f.Close(); err != nil {
+								fmt.Printf("Warning: Failed to close .gitignore: %v\n", err)
+							}
+						}()
 						if len(content) > 0 && content[len(content)-1] != '\n' {
 							if _, err := f.WriteString("\n"); err != nil {
 								fmt.Printf("Warning: Failed to write newline to .gitignore: %v\n", err)

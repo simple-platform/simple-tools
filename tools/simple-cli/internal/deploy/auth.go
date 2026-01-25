@@ -137,7 +137,9 @@ func (a *Authenticator) exchangeAPIKeyForJWT(endpoint, apiKey string) (string, e
 	if err != nil {
 		return "", fmt.Errorf("auth request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -175,7 +177,9 @@ func (a *Authenticator) VerifyJWT(endpoint, token string) error {
 	if err != nil {
 		return fmt.Errorf("JWKS request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("failed to fetch JWKS from %s: status %d", jwksURL, resp.StatusCode)

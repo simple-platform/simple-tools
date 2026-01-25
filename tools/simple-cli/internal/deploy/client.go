@@ -1,7 +1,6 @@
 package deploy
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strings"
@@ -227,39 +226,7 @@ func (c *Client) sendFile(path string, fi FileInfo) error {
 	}
 }
 
-// sendFileBase64 sends a file using JSON with base64 encoding (fallback).
-func (c *Client) sendFileBase64(path string, fi FileInfo) error {
-	done := make(chan error, 1)
 
-	ref, err := c.channel.Push("file", map[string]interface{}{
-		"path": path,
-		"hash": fi.Hash,
-		"data": base64.StdEncoding.EncodeToString(fi.Content),
-	})
-	if err != nil {
-		return fmt.Errorf("file push failed for %s: %w", path, err)
-	}
-
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- nil // File messages may not reply
-			return
-		}
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			done <- fmt.Errorf("file rejected for %s: %v", path, resp["response"])
-			return
-		}
-		done <- nil
-	})
-
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(c.timeout):
-		return fmt.Errorf("file upload timeout for %s", path)
-	}
-}
 
 // Deploy triggers the actual deployment.
 func (c *Client) Deploy() (*DeployResult, error) {

@@ -51,7 +51,11 @@ func NewModel(toolNames []string) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return spinner.Tick
+	var cmds []tea.Cmd
+	for _, key := range m.keys {
+		cmds = append(cmds, m.tools[key].spinner.Tick)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {

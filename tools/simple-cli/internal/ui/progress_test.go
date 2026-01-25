@@ -52,7 +52,7 @@ func TestModel_Update(t *testing.T) {
 	}
 
 	// Test Tea Quit
-	_, cmd = m.Update(tea.Quit())
+	_, _ = m.Update(tea.Quit())
 	// Tea quit command check omitted as implementation detail varies
 }
 

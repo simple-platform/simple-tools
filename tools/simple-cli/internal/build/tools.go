@@ -178,7 +178,11 @@ func downloadTool(url, destPath string, postFn func(string, string) error, onPro
 	if err != nil {
 		return fmt.Errorf("HTTP GET failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("Warning: failed to close response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status: %s", resp.Status)
@@ -189,7 +193,11 @@ func downloadTool(url, destPath string, postFn func(string, string) error, onPro
 		return fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
+	defer func() {
+		if err := os.Remove(tmpPath); err != nil && !os.IsNotExist(err) {
+			fmt.Printf("Warning: failed to remove temp file: %v\n", err)
+		}
+	}()
 
 	reader := &progressReader{
 		Reader:     resp.Body,
@@ -198,10 +206,10 @@ func downloadTool(url, destPath string, postFn func(string, string) error, onPro
 	}
 
 	if _, err := io.Copy(tmpFile, reader); err != nil {
-		tmpFile.Close()
+		_ = tmpFile.Close()
 		return fmt.Errorf("failed to write download: %w", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
 		return fmt.Errorf("failed to create destination directory: %w", err)
@@ -259,19 +267,31 @@ func ExtractGzip(srcPath, destPath string) error {
 	if err != nil {
 		return err
 	}
-	defer src.Close()
+	defer func() {
+		if err := src.Close(); err != nil {
+			fmt.Printf("Warning: failed to close src: %v\n", err)
+		}
+	}()
 
 	gr, err := gzip.NewReader(src)
 	if err != nil {
 		return err
 	}
-	defer gr.Close()
+	defer func() {
+		if err := gr.Close(); err != nil {
+			fmt.Printf("Warning: failed to close gzip reader: %v\n", err)
+		}
+	}()
 
 	dest, err := os.Create(destPath)
 	if err != nil {
 		return err
 	}
-	defer dest.Close()
+	defer func() {
+		if err := dest.Close(); err != nil {
+			fmt.Printf("Warning: failed to close dest: %v\n", err)
+		}
+	}()
 
 	_, err = io.Copy(dest, gr)
 	return err
@@ -282,13 +302,21 @@ func ExtractTarGzFile(srcPath, destPath, targetSuffix string) error {
 	if err != nil {
 		return fmt.Errorf("failed to open archive: %w", err)
 	}
-	defer src.Close()
+	defer func() {
+		if err := src.Close(); err != nil {
+			fmt.Printf("Warning: failed to close src: %v\n", err)
+		}
+	}()
 
 	gr, err := gzip.NewReader(src)
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() {
+		if err := gr.Close(); err != nil {
+			fmt.Printf("Warning: failed to close gzip reader: %v\n", err)
+		}
+	}()
 
 	tr := tar.NewReader(gr)
 	for {
@@ -305,7 +333,11 @@ func ExtractTarGzFile(srcPath, destPath, targetSuffix string) error {
 			if err != nil {
 				return fmt.Errorf("failed to create destination file: %w", err)
 			}
-			defer dest.Close()
+			defer func() {
+				if err := dest.Close(); err != nil {
+					fmt.Printf("Warning: failed to close dest: %v\n", err)
+				}
+			}()
 
 			if _, err := io.Copy(dest, tr); err != nil {
 				return fmt.Errorf("failed to extract file: %w", err)
@@ -359,13 +391,17 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer srcFile.Close()
+	defer func() {
+		_ = srcFile.Close()
+	}()
 
 	dstFile, err := os.Create(dst)
 	if err != nil {
 		return err
 	}
-	defer dstFile.Close()
+	defer func() {
+		_ = dstFile.Close()
+	}()
 
 	_, err = io.Copy(dstFile, srcFile)
 	return err

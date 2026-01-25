@@ -61,7 +61,7 @@ type DeployUpdateMsg DeployStatus
 
 // Init initializes the deploy model.
 func (m DeployModel) Init() tea.Cmd {
-	return spinner.Tick
+	return m.spinner.Tick
 }
 
 // Update handles messages for the deploy model.

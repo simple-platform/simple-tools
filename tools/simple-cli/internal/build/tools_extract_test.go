@@ -18,11 +18,11 @@ func TestExtractGzip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	w := gzip.NewWriter(f)
-	w.Write([]byte("hello world"))
-	w.Close()
+	_, _ = w.Write([]byte("hello world"))
+	_ = w.Close()
 
 	// Extract
 	if err := ExtractGzip(gzPath, destPath); err != nil {
@@ -142,11 +142,16 @@ func TestExtractTarGz(t *testing.T) {
 		Typeflag: tar.TypeDir,
 		Mode:     0755,
 	}
-	tw.WriteHeader(hdr)
-
-	tw.Close()
-	gw.Close()
-	f.Close()
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
 
 	// Test extraction with stripping 1 component
 	if err := ExtractTarGz(tgzPath, destDir, 1); err != nil {

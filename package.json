@@ -40,6 +40,18 @@
     "pre-commit": "pnpm lint-staged"
   },
   "lint-staged": {
-    "*": "pnpm lint"
+    "*.{js,ts,tsx,json,md}": "pnpm lint",
+    "packages/scl_parser/**/*.{ex,exs}": [
+      "bash -c \"cd packages/scl_parser && mix credo --strict\""
+    ],
+    "tools/contextualizer/**/*.go": [
+      "bash -c \"cd tools/contextualizer && golangci-lint run ./...\""
+    ],
+    "tools/simple-cli/**/*.go": [
+      "bash -c \"cd tools/simple-cli && golangci-lint run ./...\""
+    ],
+    "tools/scl_parser_cli/**/*.{ex,exs}": [
+      "bash -c \"cd tools/scl_parser_cli && mix credo --strict\""
+    ]
   }
 }

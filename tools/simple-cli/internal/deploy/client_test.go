@@ -150,7 +150,7 @@ func startClientMockServer(_ *testing.T, handler func(*websocket.Conn)) *httptes
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 
 		handler(conn)
 	}))
@@ -173,7 +173,7 @@ func TestClient_ConnectAndJoin_Placeholder(t *testing.T) {
 				if msg != nil && msg.Event == "phx_join" {
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}
@@ -204,11 +204,11 @@ func TestClient_SendManifest_Integration(t *testing.T) {
 				case "phx_join":
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				case "manifest":
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{"need_files": []string{"file1.txt"}}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}
@@ -272,7 +272,7 @@ func TestClient_SendFiles_Integration(t *testing.T) {
 				if msg.Event == "phx_join" {
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			} else if msgType == websocket.BinaryMessage {
 				// Binary file received
@@ -283,7 +283,7 @@ func TestClient_SendFiles_Integration(t *testing.T) {
 				if msg != nil {
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}
@@ -346,11 +346,11 @@ func TestClient_Deploy_Integration(t *testing.T) {
 				case "phx_join":
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				case "deploy":
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{"version": "1.0.0", "file_count": float64(5)}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}
@@ -407,7 +407,7 @@ func TestClient_Close_WithConnection(t *testing.T) {
 				if msg != nil && msg.Event == "phx_join" {
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			}
 		}
@@ -459,7 +459,7 @@ func TestPushBinaryFile(t *testing.T) {
 				if msg != nil && msg.Event == "phx_join" {
 					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 						map[string]any{"status": "ok", "response": map[string]any{}})
-					conn.WriteMessage(websocket.TextMessage, reply)
+					_ = conn.WriteMessage(websocket.TextMessage, reply)
 				}
 			case websocket.BinaryMessage:
 				// Decode Phoenix binary message
@@ -470,7 +470,7 @@ func TestPushBinaryFile(t *testing.T) {
 						// Send reply
 						reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
 							map[string]any{"status": "ok", "response": map[string]any{}})
-						conn.WriteMessage(websocket.TextMessage, reply)
+						_ = conn.WriteMessage(websocket.TextMessage, reply)
 					}
 				}
 			}

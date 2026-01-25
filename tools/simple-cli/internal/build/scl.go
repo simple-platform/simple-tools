@@ -33,7 +33,11 @@ func fetchSCLParserVersion() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch mix.exs: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			fmt.Printf("Warning: failed to close response body: %v\n", err)
+		}
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("unexpected status fetching mix.exs: %s", resp.Status)

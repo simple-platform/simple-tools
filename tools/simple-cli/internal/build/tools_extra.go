@@ -15,13 +15,21 @@ func ExtractTarGz(srcPath, destDir string, stripComponents int) error {
 	if err != nil {
 		return fmt.Errorf("failed to open archive: %w", err)
 	}
-	defer src.Close()
+	defer func() {
+		if err := src.Close(); err != nil {
+			fmt.Printf("Warning: failed to close src: %v\n", err)
+		}
+	}()
 
 	gr, err := gzip.NewReader(src)
 	if err != nil {
 		return fmt.Errorf("failed to create gzip reader: %w", err)
 	}
-	defer gr.Close()
+	defer func() {
+		if err := gr.Close(); err != nil {
+			fmt.Printf("Warning: failed to close gzip reader: %v\n", err)
+		}
+	}()
 
 	tr := tar.NewReader(gr)
 	for {
@@ -67,10 +75,10 @@ func ExtractTarGz(srcPath, destDir string, stripComponents int) error {
 				return fmt.Errorf("failed to create file: %w", err)
 			}
 			if _, err := io.Copy(f, tr); err != nil {
-				f.Close()
+				_ = f.Close()
 				return fmt.Errorf("failed to extract file: %w", err)
 			}
-			f.Close()
+			_ = f.Close()
 			if err := os.Chmod(target, os.FileMode(header.Mode)); err != nil {
 				return fmt.Errorf("failed to chmod: %w", err)
 			}
