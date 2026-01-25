@@ -11,3 +11,4 @@ simple
 dist
 burrito_out
 node_modules
+**/bin/contextualizer
