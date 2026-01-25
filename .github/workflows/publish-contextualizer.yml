@@ -1,0 +1,160 @@
+name: Publish Contextualizer
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'tools/contextualizer/package.json'
+      - 'tools/contextualizer/CHANGELOG.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check_release:
+    name: Check Release
+    runs-on: ubuntu-latest
+    outputs:
+      is_release: ${{ steps.check.outputs.is_release }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Check Commit Message
+        id: check
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Commit Message: $COMMIT_MSG"
+          
+          if echo "$COMMIT_MSG" | grep -q "chore(contextualizer): release version"; then
+            VERSION=$(echo "$COMMIT_MSG" | grep -oE "version [0-9]+\.[0-9]+\.[0-9]+" | head -n1 | cut -d' ' -f2)
+            echo "is_release=true" >> $GITHUB_OUTPUT
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+          else
+            echo "is_release=false" >> $GITHUB_OUTPUT
+          fi
+
+  build_binaries:
+    name: Build Binary (${{ matrix.target }})
+    needs: check_release
+    if: needs.check_release.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            goos: darwin
+            goarch: amd64
+          - target: macos-silicon
+            goos: darwin
+            goarch: arm64
+          - target: linux
+            goos: linux
+            goarch: amd64
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+          - target: windows
+            goos: windows
+            goarch: amd64
+            ext: .exe
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.25'
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ needs.check_release.outputs.version }}
+        run: |
+          cd tools/contextualizer
+          EXTENSION="${{ matrix.ext }}"
+          LDFLAGS="-s -w -X main.Version=${VERSION}"
+          
+          go build -ldflags="$LDFLAGS" -o "bin/contextualizer${EXTENSION}" ./cmd/contextualizer
+          mv "bin/contextualizer${EXTENSION}" "../contextualizer-${{ matrix.target }}${EXTENSION}"
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: tools/contextualizer-${{ matrix.target }}${{ matrix.ext }}
+          retention-days: 1
+
+  publish:
+    name: Publish Release & NPM
+    needs: [check_release, build_binaries]
+    if: needs.check_release.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write # For OIDC if used, otherwise standard token
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Extract Changelog Section
+        env:
+          VERSION: ${{ needs.check_release.outputs.version }}
+        run: |
+          cd tools/contextualizer
+          awk -v ver="## Contextualizer ${VERSION}" '
+            $0 ~ ver { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > /tmp/release_notes.md
+
+      - name: Create Release
+        env:
+          VERSION: ${{ needs.check_release.outputs.version }}
+        run: |
+          TAG="v${VERSION}-contextualizer"
+          
+          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
+          git config --local user.name "Simple DevOps"
+          
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+             echo "Tag $TAG already exists. Aborting to prevent overwrite."
+             exit 1
+          fi
+          
+          git remote set-url origin https://x-access-token:${{ secrets.SIMPLE_DEVOPS_TOKEN }}@github.com/${{ github.repository }}.git
+          git tag -a "$TAG" -m "Contextualizer v${VERSION}"
+          git push origin "$TAG"
+
+      - uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2.5.0
+        with:
+          tag_name: v${{ needs.check_release.outputs.version }}-contextualizer
+          name: Contextualizer ${{ needs.check_release.outputs.version }}
+          body_path: /tmp/release_notes.md
+          files: artifacts/*
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Publish to NPM
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd tools/contextualizer
+          # Ensure .npmrc is correctly set up for automation if not handled by setup-node
+          npm publish --access public
