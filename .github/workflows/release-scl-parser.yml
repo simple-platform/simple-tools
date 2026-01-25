@@ -90,7 +90,7 @@ jobs:
         uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
         with:
           tag_prefix: v
-          major_pattern: '/(\\(scl-parser\\).*!)|BREAKING CHANGE/'
+          major_pattern: '/(BREAKING CHANGE|!:)/'
           minor_pattern: '/feat\\(scl-parser\\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: packages/scl_parser
@@ -109,16 +109,43 @@ jobs:
           PREV_TAG=$(git tag -l "v*-scl-parser" --sort=-version:refname | head -n 1)
 
           if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- packages/scl_parser)
+            COMMITS=$(git log --pretty=format:"* %s (%h)%n%b" --grep="(scl-parser)" -- packages/scl_parser)
           else
-            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- packages/scl_parser)
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)%n%b" --grep="(scl-parser)" -- packages/scl_parser)
           fi
 
-          # Organize commits by type
-          FEATURES=$(echo "$COMMITS" | grep "feat(scl-parser):" || true)
-          FIXES=$(echo "$COMMITS" | grep "fix(scl-parser):" || true)
-          BREAKING=$(echo "$COMMITS" | grep -E "(feat|fix)\(scl-parser\)!:|BREAKING CHANGE" || true)
-          OTHER=$(echo "$COMMITS" | grep -v -E "feat\(scl-parser\):|fix\(scl-parser\):|ci\(scl-parser\):" | grep -v "^$" || true)
+          FEATURES=$(echo "$COMMITS" | grep "feat(scl-parser):" | head -n 1 || true)
+          # Note: Simple grep on subject lines might need cleaner output if bodies are mixed in.
+          # Let's separate the retrieval.
+          
+          # 1. Get Subjects for lists
+          if [ -z "$PREV_TAG" ]; then
+            SUBJECTS=$(git log --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- packages/scl_parser)
+          else
+            SUBJECTS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --grep="(scl-parser)" -- packages/scl_parser)
+          fi
+
+          FEATURES=$(echo "$SUBJECTS" | grep "feat(scl-parser):" || true)
+          FIXES=$(echo "$SUBJECTS" | grep "fix(scl-parser):" || true)
+          OTHER=$(echo "$SUBJECTS" | grep -v -E "feat\(scl-parser\):|fix\(scl-parser\):|ci\(scl-parser\):" | grep -v "^$" || true)
+
+          # 2. Get Breaking Changes (Subject OR Body)
+          if [ -z "$PREV_TAG" ]; then
+             BREAKING_RAW=$(git log --pretty=format:"%s%n%b" --grep="BREAKING CHANGE" --grep="!:" -- packages/scl_parser)
+          else
+             BREAKING_RAW=$(git log "${PREV_TAG}..HEAD" --pretty=format:"%s%n%b" --grep="BREAKING CHANGE" --grep="!:" -- packages/scl_parser)
+          fi
+          
+          # Clean up breaking changes to be one-liners or just list the commits
+          if [ -n "$BREAKING_RAW" ]; then
+             BREAKING=$(echo "$BREAKING_RAW" | grep "BREAKING CHANGE" | sed 's/BREAKING CHANGE: //g' || true)
+             # Fallback if the grep misses (e.g. !:)
+             if [ -z "$BREAKING" ]; then
+                BREAKING="Contains breaking changes. See commit history."
+             fi
+          else
+             BREAKING=""
+          fi
 
           # Build changelog content - store in /tmp for reuse
           {
