@@ -4,15 +4,15 @@
     "commit": "11cb3517b3af6af300dd6c055aeda73c9bf52c48"
   },
   "packages": {
-    "nodejs":                   "25.4.0",
-    "go":                       "1.25.5",
-    "golangci-lint":            "2.8.0",
-    "erlang":                   "27.2",
-    "elixir":                   "1.18.1",
+    "nodejs": "25.4.0",
+    "go": "1.25.5",
+    "golangci-lint": "2.8.0",
+    "erlang": "27.2",
+    "elixir": "1.18.1",
     "beam27Packages.elixir-ls": "0.30.0",
-    "zig":                      "0.15.2",
-    "p7zip":                    "17.05",
-    "act":                      "0.2.84"
+    "zig": "0.15.2",
+    "p7zip": "17.05",
+    "act": "0.2.84"
   },
   "env": {
     "COREPACK_INTEGRITY_KEYS": "0",
