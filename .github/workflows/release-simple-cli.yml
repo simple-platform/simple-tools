@@ -1,4 +1,4 @@
-name: Simple CLI Release
+name: Release Simple CLI
 
 on:
   workflow_dispatch:

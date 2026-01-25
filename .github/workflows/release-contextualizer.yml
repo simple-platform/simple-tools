@@ -1,4 +1,4 @@
-name: Contextualizer Release
+name: Release Contextualizer
 
 on:
   workflow_dispatch:

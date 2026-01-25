@@ -1,4 +1,4 @@
-name: SCL Parser CLI CI
+name: Release SCL Parser CLI
 
 on:
   pull_request:
