@@ -47,6 +47,11 @@ func TestLoad_NoFile(t *testing.T) {
 func TestLoad_Success(t *testing.T) {
 	tmpDir := t.TempDir()
 	cwd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(cwd) }()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
 	// Write dummy config
 	cfg := Config{
 		OutputDir: "custom_out",
@@ -82,6 +87,11 @@ func TestLoad_Success(t *testing.T) {
 func TestLoad_InvalidJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 	cwd, _ := os.Getwd()
+	defer func() { _ = os.Chdir(cwd) }()
+	if err := os.Chdir(tmpDir); err != nil {
+		t.Fatalf("Chdir failed: %v", err)
+	}
+
 	if err := os.WriteFile(ConfigFileName, []byte("{ invalid json"), 0644); err != nil {
 		t.Fatalf("WriteFile failed: %v", err)
 	}
