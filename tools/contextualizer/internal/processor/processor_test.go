@@ -64,9 +64,6 @@ func TestProcessor_ProcessDirectory(t *testing.T) {
 	if strings.Contains(outputRoot, "dist/ignored.js") {
 		t.Error("Should ignore dist content")
 	}
-	if strings.Contains(outputRoot, "dist/ignored.js") {
-		t.Error("Should ignore dist content")
-	}
 	if strings.Contains(outputRoot, "binary.bin") {
 		t.Error("Should ignore binary files (via extension or content check? Config has *.bin)")
 	}
