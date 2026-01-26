@@ -223,7 +223,11 @@ func (m Model) View() string {
 			if _, ok := m.selectedDirs[dir]; ok {
 				checked = selectedItemStyle.Render("[x]")
 			}
-			s.WriteString(fmt.Sprintf("%s %s %s\n", cursor, checked, dir))
+			displayDir := dir
+			if rel, err := filepath.Rel(m.cwd, dir); err == nil {
+				displayDir = rel
+			}
+			s.WriteString(fmt.Sprintf("%s %s %s\n", cursor, checked, displayDir))
 		}
 		s.WriteString(helpStyle.Render("\n(space to toggle, enter to confirm, q to quit)"))
 

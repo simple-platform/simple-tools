@@ -94,7 +94,7 @@ func main() {
 		}
 		for _, e := range entries {
 			if e.IsDir() && e.Name()[0] != '.' { // Skip hidden
-				subDirs = append(subDirs, filepath.Join(topDir, e.Name()))
+				subDirs = append(subDirs, filepath.Join(wd, topDir, e.Name()))
 			}
 		}
 	}
