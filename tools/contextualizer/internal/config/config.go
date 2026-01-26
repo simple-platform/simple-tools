@@ -21,6 +21,8 @@ type Config struct {
 var DefaultIgnorePatterns = []string{
 	// Directories
 	"node_modules/",
+	"tmp/",
+	".tmp/",
 	"dist/",
 	"build/",
 	"coverage/",

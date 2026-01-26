@@ -10,7 +10,27 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"contextualizer/internal/config"
 	"contextualizer/internal/processor"
+	"os/exec"
+	"runtime"
 )
+
+func openDir(path string) {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start"}
+	case "darwin":
+		cmd = "open"
+	default: // "linux"
+		cmd = "xdg-open"
+	}
+
+	args = append(args, path)
+	_ = exec.Command(cmd, args...).Run()
+}
 
 // Styles
 var (
@@ -85,10 +105,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case processingFinishedMsg:
 		if msg.err != nil {
-			m.err = msg.err
+			fmt.Printf("Error: %v\n", msg.err)
+			return m, tea.Quit
 		}
-		m.state = stateDone
-		return m, nil
+		
+		fmt.Printf("Done! Generated context in %s\n", m.config.OutputDir)
+		if m.config.OpenOutputDirectory {
+			openDir(m.config.OutputDir)
+		}
+		return m, tea.Quit
 	}
 
 	switch m.state {
