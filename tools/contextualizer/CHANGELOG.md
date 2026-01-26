@@ -2,6 +2,11 @@
 
 All notable changes to Contextualizer will be documented in this file.
 
+## Contextualizer 1.0.5
+
+### 📝 Other Changes
+* refactor(contextualizer): update contextualizer to remove redundant quit option (5abe718)
+
 ## Contextualizer 1.0.4
 
 ### ✨ Features
