@@ -22,8 +22,8 @@ importers:
         specifier: 20.3.1
         version: 20.3.1
       '@simpleplatform/contextualizer':
-        specifier: 1.0.2
-        version: 1.0.2
+        specifier: 1.0.4
+        version: 1.0.4
       '@typescript-eslint/parser':
         specifier: 8.53.1
         version: 8.53.1(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3)
@@ -332,8 +332,8 @@ packages:
     resolution: {integrity: sha512-QNqXyfVS2wm9hweSYD2O7F0G06uurj9kZ96TRQE5Y9hU7+tgdZwIkbAKc5Ocy1HxEY2kuDQa6cQ1WRs/O5LFKA==}
     engines: {node: ^12.20.0 || ^14.18.0 || >=16.0.0}
 
-  '@simpleplatform/contextualizer@1.0.2':
-    resolution: {integrity: sha512-qtwJOJpwMfeVNXP8CJe3nEwMvc1kOCTfM00gxd0eesE4vohLwY7ycbZUeVa687ttnJKh+VZ0k+t9eCKwqplUoA==}
+  '@simpleplatform/contextualizer@1.0.4':
+    resolution: {integrity: sha512-H9f7+vIEYmN/OtYrZJ2/1N+P99DGjeQ6b3JggNAR3lRVxvax/FU8cDOca5ii1omEsea78ghh2FUJcUSD03msXw==}
     hasBin: true
 
   '@sindresorhus/base62@1.0.0':
@@ -2577,7 +2577,7 @@ snapshots:
 
   '@pkgr/core@0.2.9': {}
 
-  '@simpleplatform/contextualizer@1.0.2':
+  '@simpleplatform/contextualizer@1.0.4':
     dependencies:
       axios: 1.13.2
       fs-extra: 11.3.3
