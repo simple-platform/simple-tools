@@ -13,7 +13,8 @@
     "test": "turbo run test",
     "build": "turbo run build",
     "tidy": "turbo run tidy",
-    "deps": "turbo run deps"
+    "deps": "turbo run deps",
+    "contextualizer": "contextualizer"
   },
   "dependencies": {
     "is-ci": "^4.1.0"
