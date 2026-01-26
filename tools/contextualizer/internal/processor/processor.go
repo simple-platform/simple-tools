@@ -108,7 +108,6 @@ func (p *Processor) shouldIgnore(path string, isDir bool) bool {
 				return true
 			}
 		}
-		
 		// Also check if the pattern matches a parent directory
 		// e.g. pattern "node_modules/" should match "node_modules/foo.js"
 		// This is implicitly handled if we skip the dir in WalkDir, but for file check:
