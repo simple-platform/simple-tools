@@ -22,7 +22,7 @@ importers:
         specifier: 20.3.1
         version: 20.3.1
       '@simpleplatform/contextualizer':
-        specifier: ^1.0.2
+        specifier: 1.0.2
         version: 1.0.2
       '@typescript-eslint/parser':
         specifier: 8.53.1
