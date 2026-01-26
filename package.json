@@ -22,6 +22,7 @@
     "@antfu/eslint-config": "6.7.3",
     "@commitlint/cli": "20.3.1",
     "@commitlint/config-conventional": "20.3.1",
+    "@simpleplatform/contextualizer": "^1.0.2",
     "@typescript-eslint/parser": "8.53.1",
     "@typescript-eslint/typescript-estree": "8.53.1",
     "commitizen": "4.3.1",

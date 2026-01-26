@@ -1,10 +1,11 @@
-shellEmulator: true
-
-trustPolicy: no-downgrade
-
 packages:
   - tools/*
   - packages/*
 
 onlyBuiltDependencies:
+  - '@simpleplatform/contextualizer'
   - simple-git-hooks
+
+shellEmulator: true
+
+trustPolicy: no-downgrade
