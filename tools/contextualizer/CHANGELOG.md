@@ -2,6 +2,11 @@
 
 All notable changes to Contextualizer will be documented in this file.
 
+## Contextualizer 1.0.1
+
+### 📝 Other Changes
+* docs(contextualizer): remove duplicate version info from change log (38b4a38)
+
 ## Contextualizer 1.0.0
 
 ### ⚠️ Breaking Changes
