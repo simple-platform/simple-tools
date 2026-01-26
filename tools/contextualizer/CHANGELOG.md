@@ -2,6 +2,11 @@
 
 All notable changes to Contextualizer will be documented in this file.
 
+## Contextualizer 1.0.3
+
+### 🐛 Bug Fixes
+* fix(contextualizer): resolve relative path and ignore pattern issues (bd6915e)
+
 ## Contextualizer 1.0.2
 
 ### 🐛 Bug Fixes
