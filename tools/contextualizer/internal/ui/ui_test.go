@@ -119,17 +119,17 @@ func TestInit(t *testing.T) {
 // However, we can test that the model handles the finished message correctly.
 
 func TestUpdate_ProcessingFinished(t *testing.T) {
-	m := Model{state: stateProcessing}
+	cfg := &config.Config{OutputDir: "out"}
+	m := Model{state: stateProcessing, config: cfg}
 	// We need to construct the private struct processingFinishedMsg?
 	// It's private in ui package. Since we share package `ui`, we can access it provided we are in `ui` package 
 	// (Test file declares package ui).
 	
 	msg := processingFinishedMsg{success: true}
-	newM, _ := m.Update(msg)
-	m = newM.(Model)
+	_, cmd := m.Update(msg)
 	
-	if m.state != stateDone {
-		t.Error("Should go to stateDone")
+	if cmd == nil {
+		t.Error("Expected tea.Quit command, got nil")
 	}
 }
 
