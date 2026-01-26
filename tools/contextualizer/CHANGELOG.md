@@ -2,6 +2,11 @@
 
 All notable changes to Contextualizer will be documented in this file.
 
+## Contextualizer 1.0.2
+
+### 🐛 Bug Fixes
+* fix(contextualizer): resolve contextualizer download issues (4e2ce66)
+
 ## Contextualizer 1.0.1
 
 ### 📝 Other Changes
