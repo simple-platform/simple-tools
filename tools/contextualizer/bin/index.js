@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { spawn } = require('node:child_process')
+const { execFile, spawn } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const Stream = require('node:stream')
@@ -96,7 +96,24 @@ async function downloadBinary() {
 }
 
 async function run() {
-  if (!fs.existsSync(binaryPath)) {
+  let needsDownload = true
+
+  if (fs.existsSync(binaryPath)) {
+    try {
+      // Check version silently
+      const execFileP = util.promisify(execFile)
+      const { stdout } = await execFileP(binaryPath, ['--version'])
+
+      if (stdout.trim() === VERSION) {
+        needsDownload = false
+      }
+    }
+    catch {
+      // Binary exists but might be corrupted or wrong architecture, so re-download
+    }
+  }
+
+  if (needsDownload) {
     // Attempt download
     await downloadBinary()
 
