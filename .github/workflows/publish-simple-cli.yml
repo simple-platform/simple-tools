@@ -130,11 +130,10 @@ jobs:
           git config --local user.name "Simple DevOps"
           
           if git rev-parse "$TAG" >/dev/null 2>&1; then
-             echo "Tag $TAG already exists. Aborting to prevent overwrite."
-             exit 1
+             git tag -d "$TAG"
+             git push origin :refs/tags/"$TAG"
           fi
           
-
           git remote set-url origin https://x-access-token:${{ secrets.SIMPLE_DEVOPS_TOKEN }}@github.com/${{ github.repository }}.git
           git tag -a "$TAG" -m "Simple CLI v${VERSION}"
           git push origin "$TAG"

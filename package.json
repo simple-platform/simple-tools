@@ -40,7 +40,7 @@
     "pre-commit": "pnpm lint-staged"
   },
   "lint-staged": {
-    "*.{js,ts,tsx,json,md}": "pnpm lint",
+    "*.{js,ts,tsx,json,md}": "eslint --fix",
     "packages/scl_parser/**/*.{ex,exs}": [
       "bash -c \"cd packages/scl_parser && mix credo --strict\""
     ],
