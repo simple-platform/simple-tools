@@ -48,11 +48,20 @@ const binaryPath = path.join(__dirname, binaryName)
 const isInstallOnly = process.argv.includes('--install-only')
 
 async function downloadBinary() {
-  const assetName = `${BIN_NAME}-v${VERSION}-${platform}-${arch}`
+  let assetName = ''
+  if (platform === 'darwin') {
+    assetName = arch === 'arm64' ? `${BIN_NAME}-macos-silicon` : `${BIN_NAME}-macos`
+  }
+  else if (platform === 'linux') {
+    assetName = arch === 'arm64' ? `${BIN_NAME}-linux-arm64` : `${BIN_NAME}-linux`
+  }
+  else if (platform === 'windows') {
+    assetName = `${BIN_NAME}-windows.exe`
+  }
   // Construct release URL (adjust based on actual release asset naming/location)
   // For monorepos, this might be tricky if releases aren't tagged per tool.
   // For now assuming tag matches version.
-  const url = `${REPO_URL}/releases/download/contextualizer-v${VERSION}/${assetName}`
+  const url = `${REPO_URL}/releases/download/v${VERSION}-contextualizer/${assetName}`
 
   // eslint-disable-next-line no-console
   console.log(`Downloading ${binaryName} from ${url}...`)
