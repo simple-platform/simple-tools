@@ -2,6 +2,11 @@
 
 All notable changes to Contextualizer will be documented in this file.
 
+## Contextualizer 1.0.4
+
+### ✨ Features
+* feat(contextualizer): update contextualizer to auto-download binaries on version upgrade (806d9c9)
+
 ## Contextualizer 1.0.3
 
 ### 🐛 Bug Fixes
