@@ -100,6 +100,14 @@ func (p *Processor) shouldIgnore(path string, isDir bool) bool {
 		if matched {
 			return true
 		}
+
+		// Try recursive match if not absolute
+		if !strings.HasPrefix(pattern, "/") && !strings.HasPrefix(pattern, "**/") {
+			matched, _ := doublestar.Match("**/"+pattern, pathToCheck)
+			if matched {
+				return true
+			}
+		}
 		
 		// Also check if the pattern matches a parent directory
 		// e.g. pattern "node_modules/" should match "node_modules/foo.js"
