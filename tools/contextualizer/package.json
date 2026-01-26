@@ -1,6 +1,6 @@
 {
   "name": "@simpleplatform/contextualizer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Effortlessly package your project's source code into a single, context-rich file for LLMs.",
   "license": "Apache-2.0",
   "homepage": "https://docs.simple.dev",
