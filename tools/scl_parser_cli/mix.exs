@@ -57,7 +57,7 @@ defmodule SCLParserCLI.MixProject do
     [
       {:scl_parser, "~> 1.0"},
       {:burrito, "~> 1.0"},
-      {:credo, "1.7.15", only: [:dev, :test], runtime: false},
+      {:credo, "== 1.7.16", only: [:dev, :test], runtime: false},
       {:excoveralls, "0.18.5", only: :test}
     ]
   end
