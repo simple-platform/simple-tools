@@ -36,7 +36,7 @@
     "postinstall": "node bin/index.js --install-only"
   },
   "dependencies": {
-    "axios": "1.13.2",
+    "axios": "1.13.4",
     "fs-extra": "^11.2.0"
   }
 }
