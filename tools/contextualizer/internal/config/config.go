@@ -22,22 +22,30 @@ var DefaultIgnorePatterns = []string{
 	// Directories
 	"node_modules/",
 	"tmp/",
-	".tmp/",
 	"dist/",
 	"build/",
 	"coverage/",
 	".git/",
+	".tmp/",
 	".vscode/",
 	".idea/",
-	"__pycache__/",
 	".turbo/",
+	"_build/",
+	"__pycache__/",
+	"burrito_out/",
+	"doc/",
+	"deps/",
+	"simple",
 
 	// Files
 	"package-lock.json",
 	"yarn.lock",
 	"bun.lockb",
 	"pnpm-lock.yaml",
+	"CHANGELOG.md",
+	".gitignore",
 	".DS_Store",
+	"LICENSE",
 
 	// Extensions / Globs
 	"*.log",
@@ -64,6 +72,9 @@ var DefaultIgnorePatterns = []string{
 	"*.so",
 	"*.dylib",
 	"*.bin",
+	"*.out",
+	"*.sum",
+	"*.lock",
 }
 
 var DefaultConfig = Config{

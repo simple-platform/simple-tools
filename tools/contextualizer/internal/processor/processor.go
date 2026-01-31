@@ -61,13 +61,13 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 		
 		// Skip if too large? (Optional, but TS didn't seem to enforce size limit, just binary check)
 		if info.Size() > 10*1024*1024 { // 10MB limit safety
-		    sb.WriteString(fmt.Sprintf("=== %s (Skipped: Too large) ===\n\n", relPath))
+		    sb.WriteString(fmt.Sprintf("===== %s (Skipped: Too large) =====\n\n", relPath))
 			return nil
 		}
 
 		content, isBinary, err := readFile(path)
 		if err != nil {
-			sb.WriteString(fmt.Sprintf("=== %s (Error reading file) ===\n\n", relPath))
+			sb.WriteString(fmt.Sprintf("===== %s (Error reading file) =====\n\n", relPath))
 			return nil
 		}
 		if isBinary {
@@ -75,7 +75,7 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 			return nil
 		}
 
-		sb.WriteString(fmt.Sprintf("=== %s ===\n%s\n\n", relPath, content))
+		sb.WriteString(fmt.Sprintf("===== %s =====\n%s\n\n", relPath, content))
 
 		return nil
 	})
