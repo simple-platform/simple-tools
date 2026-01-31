@@ -2,6 +2,11 @@
 
 All notable changes to Contextualizer will be documented in this file.
 
+## Contextualizer 1.0.6
+
+### 📝 Other Changes
+* refactor(contextualizer): update default ignore list (2571982)
+
 ## Contextualizer 1.0.5
 
 ### 📝 Other Changes
