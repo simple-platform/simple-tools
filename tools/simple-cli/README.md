@@ -24,11 +24,17 @@
 
 ## Installation
 
-### Prerequisites
+### Automatic Install (Recommended)
 
-- **Go** 1.25.4 or later ([Download](https://golang.org/dl/))
+Run the following command to install `simple` on macOS, Linux, or Windows (Git Bash):
+
+```bash
+curl -fsSL https://tools.simple.dev/simple-cli/install | bash
+```
 
 ### Install from Source
+
+**Prerequisites**: Go 1.25.4 or later ([Download](https://golang.org/dl/))
 
 ```bash
 # Clone the repository
@@ -71,10 +77,10 @@ simple new action com.mycompany.crm send-email "Send Email" \
 
 ### Global Flags
 
-| Flag | Description |
-|------|-------------|
-| `--json` | Output results in JSON format (useful for scripts/CI) |
-| `-h, --help` | Show help for any command |
+| Flag         | Description                                           |
+| ------------ | ----------------------------------------------------- |
+| `--json`     | Output results in JSON format (useful for scripts/CI) |
+| `-h, --help` | Show help for any command                             |
 
 ---
 
@@ -83,6 +89,7 @@ simple new action com.mycompany.crm send-email "Send Email" \
 Build all actions within an application.
 
 **Usage:**
+
 ```bash
 simple build [app-path] [flags]
 ```
@@ -100,6 +107,7 @@ simple build [app-path] [flags]
 | `--json` | | `false` | Output build results in JSON. |
 
 **Examples:**
+
 ```bash
 # Build current app
 simple build
@@ -115,6 +123,7 @@ simple build apps/com.company.crm --concurrency 8
 Run tests for applications, actions, or record behaviors using Vitest.
 
 **Usage:**
+
 ```bash
 simple test [app-id] [flags]
 ```
@@ -133,6 +142,7 @@ simple test [app-id] [flags]
 | `--json` | | `false` | Output results in JSON format. |
 
 **Examples:**
+
 ```bash
 # Run all tests
 simple test
@@ -154,6 +164,7 @@ simple test com.mycompany.crm --behavior order
 Initialize a new Simple Platform workspace.
 
 **Usage:**
+
 ```bash
 simple init <path>
 ```
@@ -164,6 +175,7 @@ simple init <path>
 | `path` | Yes | The directory to initialize. Can be `.` for current directory or a new folder name. |
 
 **Examples:**
+
 ```bash
 # Create a new project in a new folder
 simple init my-new-project
@@ -179,6 +191,7 @@ simple init .
 Create a new application within the workspace.
 
 **Usage:**
+
 ```bash
 simple new app <app-id> <name> [flags]
 ```
@@ -195,6 +208,7 @@ simple new app <app-id> <name> [flags]
 | `--desc` | `-d` | `""` | A brief description of the application. |
 
 **Examples:**
+
 ```bash
 # Create a CRM app
 simple new app com.mycompany.crm "Customer CRM"
@@ -211,6 +225,7 @@ simple new app com.mycompany.inventory "Inventory System" \
 Scaffold a new TypeScript action inside an application.
 
 **Usage:**
+
 ```bash
 simple new action <app> <name> <display_name> [flags]
 ```
@@ -231,6 +246,7 @@ simple new action <app> <name> <display_name> [flags]
 | `--lang` | `-l` | `ts` | Programming language (currently only `ts` is supported). |
 
 **Examples:**
+
 ```bash
 # Create a server-side action
 simple new action com.mycompany.crm send-invite "Send Invite" \
@@ -250,6 +266,7 @@ simple new action com.mycompany.crm validate-form "Validate Form" \
 Create a new record behavior script and register it in SCL.
 
 **Usage:**
+
 ```bash
 simple new behavior <app-id> <table-name>
 ```
@@ -261,6 +278,7 @@ simple new behavior <app-id> <table-name>
 | `table-name` | Yes | Name of the table to attach behavior to (e.g., `order`). |
 
 **Examples:**
+
 ```bash
 simple new behavior com.mycompany.crm order
 ```
@@ -272,6 +290,7 @@ simple new behavior com.mycompany.crm order
 Create a new trigger that invokes an existing action.
 
 **Usage:**
+
 ```bash
 simple new trigger:<type> <app> <name> <display_name> --action <action_name> [flags]
 ```
@@ -279,6 +298,7 @@ simple new trigger:<type> <app> <name> <display_name> --action <action_name> [fl
 **Types:**
 
 #### 1. Timed Trigger (`trigger:timed`)
+
 Runs an action on a schedule.
 
 ```bash
@@ -303,7 +323,8 @@ simple new trigger:timed <app> <name> <display_name> [flags]
 
 **Examples:**
 
-*Daily at 9 AM New York time:*
+_Daily at 9 AM New York time:_
+
 ```bash
 simple new trigger:timed com.company.crm daily-sync "Daily Sync" \
   --action sync-data \
@@ -312,7 +333,8 @@ simple new trigger:timed com.company.crm daily-sync "Daily Sync" \
   --timezone "America/New_York"
 ```
 
-*First Monday of every month:*
+_First Monday of every month:_
+
 ```bash
 simple new trigger:timed com.company.crm monthly-review "Monthly Review" \
   --action run-review \
@@ -324,6 +346,7 @@ simple new trigger:timed com.company.crm monthly-review "Monthly Review" \
 ---
 
 #### 2. Database Trigger (`trigger:db`)
+
 Fires when a database record is created, updated, or deleted.
 
 ```bash
@@ -340,7 +363,8 @@ simple new trigger:db <app> <name> <display_name> [flags]
 
 **Example:**
 
-*Trigger on order creation or update:*
+_Trigger on order creation or update:_
+
 ```bash
 simple new trigger:db com.company.crm on-order "On Order" \
   --action process-order \
@@ -352,6 +376,7 @@ simple new trigger:db com.company.crm on-order "On Order" \
 ---
 
 #### 3. Webhook Trigger (`trigger:webhook`)
+
 Creates an HTTP endpoint that triggers the action.
 
 ```bash
@@ -367,7 +392,8 @@ simple new trigger:webhook <app> <name> <display_name> [flags]
 
 **Example:**
 
-*Public webhook for payment callbacks:*
+_Public webhook for payment callbacks:_
+
 ```bash
 simple new trigger:webhook com.company.crm payment-hook "Payment Hook" \
   --action handle-payment \
