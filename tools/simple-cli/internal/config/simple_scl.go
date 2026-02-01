@@ -109,7 +109,7 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	envPath := filepath.Join(dir, ".env")
 	if _, err := os.Stat(envPath); err == nil {
 		if err := godotenv.Load(envPath); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to load .env file %s: %v\n", envPath, err)
+			fmt.Fprintf(os.Stderr, "warning: failed to load .env file %s, continuing without it: %v\n", envPath, err)
 		}
 	}
 
