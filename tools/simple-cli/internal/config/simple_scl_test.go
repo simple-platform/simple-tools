@@ -661,6 +661,72 @@ func TestLoader_LoadSimpleSCL_StatError(t *testing.T) {
 	}
 }
 
+func TestLoader_LoadSimpleSCL_WithDotEnv(t *testing.T) {
+	// Setup temp directory
+	dir := t.TempDir()
+
+	// Create simple.scl
+	sclPath := filepath.Join(dir, "simple.scl")
+	err := os.WriteFile(sclPath, []byte(""), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create .env file
+	envPath := filepath.Join(dir, ".env")
+	err = os.WriteFile(envPath, []byte("TEST_DOT_ENV_VAR=loaded_from_env_file"), 0644)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ensure env var is not already set
+	_ = os.Unsetenv("TEST_DOT_ENV_VAR")
+	defer func() { _ = os.Unsetenv("TEST_DOT_ENV_VAR") }()
+
+	// Setup mocked parser
+	mockParser := &MockSCLParser{
+		Result: []SCLBlock{
+			{Type: "kv", Key: "tenant", Value: "acme"},
+			{
+				Type: "block",
+				Key:  "env",
+				Name: "dev",
+				Children: []SCLBlock{
+					{Type: "kv", Key: "endpoint", Value: "dev.example.com"},
+					{Type: "kv", Key: "api_key", Value: "$TEST_DOT_ENV_VAR"},
+				},
+			},
+		},
+	}
+
+	loader := &Loader{
+		Parser:     mockParser,
+		FileReader: os.ReadFile,
+	}
+
+	// Load should trigger .env loading
+	cfg, err := loader.LoadSimpleSCL(dir)
+	if err != nil {
+		t.Fatalf("LoadSimpleSCL() unexpected error: %v", err)
+	}
+
+	// Check if env var is set in process
+	val := os.Getenv("TEST_DOT_ENV_VAR")
+	if val != "loaded_from_env_file" {
+		t.Errorf("Expected env var TEST_DOT_ENV_VAR to be 'loaded_from_env_file', got %q", val)
+	}
+
+	// Check if GetEnv resolves it correctly
+	env, err := cfg.GetEnv("dev")
+	if err != nil {
+		t.Fatalf("GetEnv() unexpected error: %v", err)
+	}
+
+	if env.APIKey != "loaded_from_env_file" {
+		t.Errorf("GetEnv() APIKey = %q, want 'loaded_from_env_file'", env.APIKey)
+	}
+}
+
 func TestEnvironment_DevOpsEndpoint(t *testing.T) {
 	tests := []struct {
 		name     string
