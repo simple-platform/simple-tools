@@ -6,12 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 	"contextualizer/internal/config"
 	"contextualizer/internal/processor"
 	"os/exec"
 	"runtime"
+
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func openDir(path string) {
@@ -34,11 +35,11 @@ func openDir(path string) {
 
 // Styles
 var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#04B575"))
+	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#04B575"))
 	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
-	blurredStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-	cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-	helpStyle = blurredStyle
+	blurredStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	cursorStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	helpStyle         = blurredStyle
 )
 
 type state int
@@ -51,24 +52,24 @@ const (
 )
 
 type Model struct {
-	config      *config.Config
-	processor   *processor.Processor
-	state       state
-	cwd         string
-	
+	config    *config.Config
+	processor *processor.Processor
+	state     state
+	cwd       string
+
 	// Directory Selection
 	availableDirs []string
 	selectedDirs  map[string]struct{}
 	cursor        int
-	
+
 	// Output Mode Selection
 	outputModes []string
 	modeCursor  int
 	outputMode  string
-	
+
 	// Processing
-	err           error
-	
+	err error
+
 	// Window size
 	width, height int
 }
@@ -83,7 +84,7 @@ func NewModel(cfg *config.Config, proc *processor.Processor, wd string, subDirs 
 		selectedDirs:  make(map[string]struct{}),
 		outputModes:   []string{"multiple", "single"},
 	}
-	
+
 	// Pre-select if configured? For now empty default.
 	return m
 }
@@ -108,7 +109,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			fmt.Printf("Error: %v\n", msg.err)
 			return m, tea.Quit
 		}
-		
+
 		fmt.Printf("Done! Generated context in %s\n", m.config.OutputDir)
 		if m.config.OpenOutputDirectory {
 			openDir(m.config.OutputDir)
@@ -185,55 +186,60 @@ func (m Model) updateSelectMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) startProcessingCmd() tea.Msg {
 	// This runs in a separate goroutine
-    // We iterate over selected dirs and process them
-    
-    // Ensure output dir exists
-    if err := os.MkdirAll(m.config.OutputDir, 0755); err != nil {
-        return processingFinishedMsg{err: err}
-    }
-    
-    // Single Mode
-    if m.outputMode == "single" {
-        var combined strings.Builder
-        for dir := range m.selectedDirs {
-            content, err := m.processor.ProcessDirectory(dir)
-             if err != nil {
-                return processingFinishedMsg{err: err}
-            }
-            combined.WriteString(fmt.Sprintf("\n\n# Project: %s\n\n", filepath.Base(dir)))
-            combined.WriteString(content)
-        }
-        
-        outFile := filepath.Join(m.config.OutputDir, "context.txt")
-        if err := os.WriteFile(outFile, []byte(combined.String()), 0644); err != nil {
-             return processingFinishedMsg{err: err}
-        }
-    } else {
-        // Multiple Mode
-        for dir := range m.selectedDirs {
-            content, err := m.processor.ProcessDirectory(dir)
-            if err != nil {
-                return processingFinishedMsg{err: err}
-            }
-            
-            outFile := filepath.Join(m.config.OutputDir, filepath.Base(dir) + ".txt")
-            if err := os.WriteFile(outFile, []byte(content), 0644); err != nil {
-                 return processingFinishedMsg{err: err}
-            }
-        }
-    }
-    
+	// We iterate over selected dirs and process them
+
+	// Clear output dir to avoid stale files
+	if err := os.RemoveAll(m.config.OutputDir); err != nil {
+		return processingFinishedMsg{err: err}
+	}
+
+	// Re-create output dir
+	if err := os.MkdirAll(m.config.OutputDir, 0755); err != nil {
+		return processingFinishedMsg{err: err}
+	}
+
+	// Single Mode
+	if m.outputMode == "single" {
+		var combined strings.Builder
+		for dir := range m.selectedDirs {
+			content, err := m.processor.ProcessDirectory(dir)
+			if err != nil {
+				return processingFinishedMsg{err: err}
+			}
+			combined.WriteString(fmt.Sprintf("\n\n# Project: %s\n\n", filepath.Base(dir)))
+			combined.WriteString(content)
+		}
+
+		outFile := filepath.Join(m.config.OutputDir, "context.txt")
+		if err := os.WriteFile(outFile, []byte(combined.String()), 0644); err != nil {
+			return processingFinishedMsg{err: err}
+		}
+	} else {
+		// Multiple Mode
+		for dir := range m.selectedDirs {
+			content, err := m.processor.ProcessDirectory(dir)
+			if err != nil {
+				return processingFinishedMsg{err: err}
+			}
+
+			outFile := filepath.Join(m.config.OutputDir, filepath.Base(dir)+".txt")
+			if err := os.WriteFile(outFile, []byte(content), 0644); err != nil {
+				return processingFinishedMsg{err: err}
+			}
+		}
+	}
+
 	return processingFinishedMsg{success: true}
 }
 
-type processingFinishedMsg struct{
-    err error
-    success bool
+type processingFinishedMsg struct {
+	err     error
+	success bool
 }
 
 func (m Model) View() string {
 	var s strings.Builder
-	
+
 	s.WriteString(titleStyle.Render("Contextualizer") + "\n\n")
 
 	switch m.state {
@@ -265,15 +271,15 @@ func (m Model) View() string {
 			}
 			s.WriteString(fmt.Sprintf("%s %s\n", cursor, mode))
 		}
-		
+
 	case stateProcessing:
 		s.WriteString("Processing...\n")
-		
+
 	case stateDone:
 		if m.err != nil {
-		    s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("Error: %v", m.err)))
+			s.WriteString(lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render(fmt.Sprintf("Error: %v", m.err)))
 		} else {
-		    s.WriteString("Done! Check " + m.config.OutputDir + "\n")
+			s.WriteString("Done! Check " + m.config.OutputDir + "\n")
 		}
 		s.WriteString("\n(q to quit)")
 	}
