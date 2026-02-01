@@ -2,6 +2,11 @@
 
 All notable changes to Contextualizer will be documented in this file.
 
+## Contextualizer 1.0.7
+
+### 📝 Other Changes
+* refactor(contextualizer): update contextualizer to cleanup context dir before new context (7bc9c0b)
+
 ## Contextualizer 1.0.6
 
 ### 📝 Other Changes
