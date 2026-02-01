@@ -129,6 +129,9 @@ func (c *FileCollector) collectPaths(appPath string) ([]string, error) {
 	// Records directory - all files
 	paths = append(paths, c.globFiles(appPath, "records")...)
 
+	// Assets directory - all files
+	paths = append(paths, c.globFiles(appPath, "assets")...)
+
 	// Actions - only WASM build outputs
 	actionsDir := filepath.Join(appPath, "actions")
 	entries, _ := os.ReadDir(actionsDir)

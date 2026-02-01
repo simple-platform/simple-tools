@@ -42,6 +42,11 @@ func TestFileCollector_CollectFiles(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(actionDir, "release.wasm"), []byte("wasm-bytes"), 0644)
 	_ = os.WriteFile(filepath.Join(actionDir, "release.async.wasm"), []byte("async-wasm"), 0644)
 
+	// Create assets directory
+	assetsDir := filepath.Join(dir, "assets")
+	_ = os.MkdirAll(assetsDir, 0755)
+	_ = os.WriteFile(filepath.Join(assetsDir, "image.png"), []byte("image-data"), 0644)
+
 	collector := NewFileCollector()
 	files, err := collector.CollectFiles(dir)
 
@@ -57,6 +62,7 @@ func TestFileCollector_CollectFiles(t *testing.T) {
 		"records/seed.json",
 		"actions/my-action/build/release.wasm",
 		"actions/my-action/build/release.async.wasm",
+		"assets/image.png",
 	}
 
 	for _, name := range expectedFiles {
