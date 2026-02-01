@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/joho/godotenv"
 )
 
 // SimpleSCL represents the parsed simple.scl configuration file.
@@ -101,6 +103,12 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 			return nil, fmt.Errorf("simple.scl not found in %s", dir)
 		}
 		return nil, fmt.Errorf("cannot access simple.scl: %w", err)
+	}
+
+	// Try to load .env file if it exists
+	envPath := filepath.Join(dir, ".env")
+	if _, err := os.Stat(envPath); err == nil {
+		_ = godotenv.Load(envPath)
 	}
 
 	// Parse SCL file to JSON AST
