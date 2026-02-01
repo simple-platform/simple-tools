@@ -108,7 +108,9 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	// Try to load .env file if it exists
 	envPath := filepath.Join(dir, ".env")
 	if _, err := os.Stat(envPath); err == nil {
-		_ = godotenv.Load(envPath)
+		if err := godotenv.Load(envPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: failed to load .env file %s: %v\n", envPath, err)
+		}
 	}
 
 	// Parse SCL file to JSON AST
