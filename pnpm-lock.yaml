@@ -22,8 +22,8 @@ importers:
         specifier: 20.3.1
         version: 20.3.1
       '@simpleplatform/contextualizer':
-        specifier: 1.0.5
-        version: 1.0.5
+        specifier: 1.0.7
+        version: 1.0.7
       '@typescript-eslint/parser':
         specifier: 8.54.0
         version: 8.54.0(eslint@9.39.2(jiti@2.6.1))(typescript@5.9.3)
@@ -332,8 +332,8 @@ packages:
     resolution: {integrity: sha512-QNqXyfVS2wm9hweSYD2O7F0G06uurj9kZ96TRQE5Y9hU7+tgdZwIkbAKc5Ocy1HxEY2kuDQa6cQ1WRs/O5LFKA==}
     engines: {node: ^12.20.0 || ^14.18.0 || >=16.0.0}
 
-  '@simpleplatform/contextualizer@1.0.5':
-    resolution: {integrity: sha512-g4+AqrDNYGZvFFKoTv3J9A+Ehj/rITHtEDiNWuGbQQtyFQHxTPD3IV+Lrz6/BprKQyZBvniweCD4tJrVCLInNA==}
+  '@simpleplatform/contextualizer@1.0.7':
+    resolution: {integrity: sha512-kOExVCmjfIYvT7DqcJuu5DY1c6012NQ1haReTeftOOYCE33CtMn27vomCxKpgvW1cZZzQYhWerix0bBQSXRE4A==}
     hasBin: true
 
   '@sindresorhus/base62@1.0.0':
@@ -577,9 +577,6 @@ packages:
   at-least-node@1.0.0:
     resolution: {integrity: sha512-+q/t7Ekv1EDY2l6Gda6LLiX14rU9TV20Wa3ofeQmwPFZbOMo9DXrLbOjFaaclkXKWidIaopwAObQDqwWtGUjqg==}
     engines: {node: '>= 4.0.0'}
-
-  axios@1.13.2:
-    resolution: {integrity: sha512-VPk9ebNqPcy5lRGuSlKx752IlDatOjT9paPlm8A7yOuW2Fbvp4X3JznJtT4f0GzGLLiWE9W8onz51SqLYwzGaA==}
 
   axios@1.13.4:
     resolution: {integrity: sha512-1wVkUaAO6WyaYtCkcYCOx12ZgpGf9Zif+qXa4n+oYzK558YryKqiL6UWwd5DqiH3VRW0GYhTZQ/vlgJrCoNQlg==}
@@ -2632,9 +2629,9 @@ snapshots:
 
   '@pkgr/core@0.2.9': {}
 
-  '@simpleplatform/contextualizer@1.0.5':
+  '@simpleplatform/contextualizer@1.0.7':
     dependencies:
-      axios: 1.13.2
+      axios: 1.13.4
       fs-extra: 11.3.3
     transitivePeerDependencies:
       - debug
@@ -2945,14 +2942,6 @@ snapshots:
   asynckit@0.4.0: {}
 
   at-least-node@1.0.0: {}
-
-  axios@1.13.2:
-    dependencies:
-      follow-redirects: 1.15.11
-      form-data: 4.0.5
-      proxy-from-env: 1.1.0
-    transitivePeerDependencies:
-      - debug
 
   axios@1.13.4:
     dependencies:
