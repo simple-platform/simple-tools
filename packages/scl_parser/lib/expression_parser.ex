@@ -3,6 +3,12 @@ defmodule SCLParser.ExpressionParser do
   Parses SCL expression strings like `$var('foo') |> $jq('.bar')`.
 
   These expressions typically appear within backtick strings in SCL files.
+  The parser supports:
+  - Function calls prefixed with `$`
+  - Pipe operator `|>` for chaining functions
+  - String literals (single, double, backtick quoted)
+  - Number and boolean literals
+  - Nested expressions
   """
 
   @int_regex ~r/^[0-9]+$/
@@ -37,6 +43,7 @@ defmodule SCLParser.ExpressionParser do
   - `{:ok, list_of_maps}` where each map is `%{fn: String.t(), params: list()}`.
   - `{:error, reason :: String.t()}` on failure.
   """
+  @spec parse(String.t()) :: {:ok, list(map())} | {:error, String.t()}
   def parse(input) when is_binary(input) do
     case tokenize_expression(input) do
       {:ok, tokens} -> parse_expression_tokens(tokens)

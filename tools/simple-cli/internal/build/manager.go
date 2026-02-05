@@ -213,7 +213,7 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		go func() {
 			defer wg.Done()
 			report("Bundling (Sync)...")
-			syncBundleErr = BundleJSFunc(actionDir, "index.ts", syncBundle, true,
+			syncBundleErr = BundleJSFunc(actionDir, "src/index.ts", syncBundle, true,
 				map[string]string{"__ASYNC_BUILD__": "false"})
 		}()
 	}

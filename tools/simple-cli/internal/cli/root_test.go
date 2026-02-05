@@ -9,51 +9,56 @@ import (
 	"testing"
 )
 
-// invokeCmd executes the root command with specific arguments and captures output
+// invokeCmd is a test helper that executes the root command with specific arguments
+// and captures both stdout and stderr.
+// It redirects os.Stdout and os.Stderr to buffers to inspect CLI output.
 func invokeCmd(args ...string) (string, string, error) {
 	// Reset commands for testing to avoid side effects
 	jsonOutput = false
 
-	// Create buffers for stdout/stderr
+	// Create buffers for stdout/stderr which we will inspect later
 	outBuf := new(bytes.Buffer)
 	errBuf := new(bytes.Buffer)
 
-	// Swap stdout/stderr
+	// Swap stdout/stderr to capture output from functions that write directly to os.Stdout/Err
+	// (like fmt.Println called deep in the command logic)
 	oldStdout := os.Stdout
 	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stdout = w
-	os.Stderr = w // Simple redirection for test simplicity
-	// Note: Proper separating needs more work, but Cobra allows SetOut/SetErr
+	os.Stderr = w // Redirect stderr to same pipe for simplicity in this helper
 
+	// Configure Cobra command to write to our buffers
+	// Note: We do both pipe capture (for fmt.Print) and SetOut (for cmd.Print) to be safe.
 	RootCmd.SetOut(outBuf)
 	RootCmd.SetErr(errBuf)
 	RootCmd.SetArgs(args)
 
-	// Execute
+	// Execute the command
 	err := RootCmd.Execute()
 
-	// Restore stdout/stderr
+	// Restore original stdout/stderr
 	_ = w.Close()
 	os.Stdout = oldStdout
 	os.Stderr = oldStderr
 	out, _ := io.ReadAll(r)
 
-	// RootCmd execution output might go to SetOut/SetErr or direct formatted print depending on implementation
-	// In root.go: printJSON uses os.Stdout directly. execute uses os.Stderr directly.
-	// So checking the pipe capture 'out' is most reliable for printJSON.
-
-	// Combine pipe output with buffer output
+	// Combine pipe output with buffer output to get the complete picture of what was printed.
 	fullOutput := string(out) + outBuf.String()
 	fullErr := errBuf.String()
 
 	return fullOutput, fullErr, err
 }
 
+// TestInitCmd_Integration verifies the 'simple init' command flow.
+// It checks that:
+// 1. The command accepts valid arguments and flags (e.g., --tenant).
+// 2. Essential files like simple.scl and AGENTS.md are created.
+// 3. JSON output format is correct when requested.
 func TestInitCmd_Integration(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Test 1: Normal initialization with --tenant flag
+	// Case 1: Normal initialization with --tenant flag
 	args := []string{"init", tmpDir + "/proj1", "--tenant", "acme"}
 	out, _, err := invokeCmd(args...)
 	if err != nil {
@@ -73,7 +78,7 @@ func TestInitCmd_Integration(t *testing.T) {
 		t.Error("simple.scl not created")
 	}
 
-	// Test 2: JSON Output
+	// Case 2: JSON Output validation
 	args = []string{"init", tmpDir + "/proj2", "--tenant", "myco", "--json"}
 	out, _, err = invokeCmd(args...)
 	if err != nil {
@@ -87,7 +92,7 @@ func TestInitCmd_Integration(t *testing.T) {
 	if result["status"] != "success" {
 		t.Errorf("Expected status=success, got %v", result["status"])
 	}
-	if result["project"] != "proj2" { // filepath.Base(path)
+	if result["project"] != "proj2" {
 		t.Errorf("Expected project=proj2, got %v", result["project"])
 	}
 	if result["tenant"] != "myco" {
@@ -95,33 +100,24 @@ func TestInitCmd_Integration(t *testing.T) {
 	}
 }
 
+// TestInitCmd_ErrorIntegration checks how the CLI handles initialization errors.
+// Examples include trying to initialize in an existing directory.
 func TestInitCmd_ErrorIntegration(t *testing.T) {
 	tmpDir := t.TempDir()
 	_ = os.Mkdir(tmpDir+"/exists", 0755)
 
-	// Test 1: Error Normal (path already exists)
+	// Case 1: Error Normal (path already exists)
 	args := []string{"init", tmpDir + "/exists", "--tenant", "test"}
 	_, _, err := invokeCmd(args...)
 	if err == nil {
 		t.Error("Expected error for existing path")
 	}
 
-	// Test 2: Error JSON
-	// We have to simulate the main Execute() error handling logic because
-	// invokeCmd calls RootCmd.Execute() which returns error, but
-	// the handling in main.go (which calls Execute()) contains the printJSONError logic.
-	// Wait, root.go defines Execute().
-	// But invokeCmd calls RootCmd.Execute() directly, bypassing root.go Execute().
+	// We also verify our internal helper functions for JSON error printing
+	// to ensure consistency even if the Cobra execution flow differs.
 
-	// We need to verify printErrorJSON.
-	// We can manually call printErrorJSON for test coverage or structural refactor.
-	// Or we can mock the behavior.
-
-	// Let's test the helper functions directly ensures 100% on them.
-
-	// Test printJSON
+	// Helper verification: printJSON
 	func() {
-		// Capture stdout
 		old := os.Stdout
 		r, w, _ := os.Pipe()
 		os.Stdout = w
@@ -137,9 +133,8 @@ func TestInitCmd_ErrorIntegration(t *testing.T) {
 		}
 	}()
 
-	// Test printErrorJSON
+	// Helper verification: printErrorJSON
 	func() {
-		// Capture stderr
 		old := os.Stderr
 		r, w, _ := os.Pipe()
 		os.Stderr = w
@@ -156,6 +151,7 @@ func TestInitCmd_ErrorIntegration(t *testing.T) {
 	}()
 }
 
+// TestPrintJSON_Error ensures we handle encoding errors gracefully (though unlikely with strings).
 func TestPrintJSON_Error(t *testing.T) {
 	// Capture stderr to avoid polluting test output
 	oldStderr := os.Stderr
@@ -169,6 +165,8 @@ func TestPrintJSON_Error(t *testing.T) {
 	}
 }
 
+// TestExecute_Scenarios table-drives tests for top-level command execution issues.
+// It covers missing arguments, unknown commands, and bad flag combinations.
 func TestExecute_Scenarios(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -196,7 +194,7 @@ func TestExecute_Scenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Setup
+			// Reset Cobra args
 			RootCmd.SetArgs(nil)
 
 			// Capture stderr for output checking

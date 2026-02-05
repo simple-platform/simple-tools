@@ -5,9 +5,17 @@ defmodule SCLParserTest do
 
   alias SCLParser, as: Parser
 
-  #
-  # Positive Tests
-  #
+  # ============================================================================
+  # Positive Parsing Scenarios
+  # ============================================================================
+  # These tests cover valid SCL input that should produce a successful AST.
+  # We test various combinations of:
+  # - Root level key-values
+  # - Nested blocks
+  # - Comments (inline and full line)
+  # - Quoted vs unquoted strings
+  # - Basic data types (boolean, integer, float)
+  # ============================================================================
   describe "Positive Parsing Scenarios" do
     test "empty string returns empty AST" do
       assert {:ok, []} = Parser.parse("")

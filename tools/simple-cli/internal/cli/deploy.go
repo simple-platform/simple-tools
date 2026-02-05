@@ -21,6 +21,9 @@ var (
 	deployNoInstall bool
 )
 
+// deployCmd represents the 'deploy' command.
+// It handles the full deployment lifecycle: config loading, version bumping,
+// file hashing, manifest synchronization, artifact upload, and deployment triggering.
 var deployCmd = &cobra.Command{
 	Use:   "deploy <app-path>",
 	Short: "Deploy an app to Simple Platform",
@@ -42,6 +45,17 @@ Examples:
 	},
 }
 
+func init() {
+	RootCmd.AddCommand(deployCmd)
+	deployCmd.Flags().StringVar(&deployEnv, "env", "", "target environment (required: dev, staging, or prod)")
+	deployCmd.Flags().StringVar(&deployBump, "bump", "", "version bump type: patch|minor|major (required for first deploy after prod)")
+	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "show what would be deployed without deploying")
+	deployCmd.Flags().BoolVar(&deployNoInstall, "no-install", false, "skip automatic installation after deploy")
+	_ = deployCmd.MarkFlagRequired("env")
+}
+
+// runDeploy executes the main deployment logic.
+// It orchestrates local preparation and remote communication with the DevOps service.
 func runDeploy(fsys fsx.FileSystem, args []string) error {
 	appPath := args[0]
 	start := time.Now()
@@ -56,13 +70,14 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 		return fmt.Errorf("app path '%s' not found", appPath)
 	}
 
-	// Ensure scl-parser is available (downloads if needed)
+	// Ensure scl-parser is available (downloads if needed) for config parsing
 	parserPath, err := build.EnsureSCLParser(nil)
 	if err != nil {
 		return fmt.Errorf("failed to ensure scl-parser: %w", err)
 	}
 
 	// === PHASE 1: Config & Auth ===
+	// Load configuration to determine endpoints and credentials.
 	var cfg *config.SimpleSCL
 	var env *config.Environment
 	var cfgErr, authErr error
@@ -88,6 +103,7 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	}
 
 	// === PHASE 2: Version & Files (parallel) ===
+	// Calculate new version and hash all files concurrently for speed.
 	var newVersion string
 	var files map[string]deploy.FileInfo
 	var versionErr, filesErr error
@@ -125,6 +141,7 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	}
 
 	// === PHASE 3: Connect & Deploy ===
+	// Establish connection to DevOps service.
 	client := deploy.NewClient(deploy.ClientConfig{
 		Endpoint: env.DevOpsEndpoint(),
 		JWT:      jwt,
@@ -132,15 +149,15 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	})
 
 	if err := client.Connect(); err != nil {
-		// potential auth failure (expired token)
-		// Check for auth failure error from phoenix socket
+		// Handle potential auth failure (expired token)
+		// If 401/403, we try to refresh the token and reconnect once.
 		var authErr *deploy.AuthFailedError
 		if errors.As(err, &authErr) { // 401/403
 			if !jsonOutput {
 				fmt.Println("🔄 Auth token expired, refreshing...")
 			}
 
-			// 1. Clear token cache
+			// 1. Clear token cache to force fresh prompt/login if needed
 			if err := auth.ClearCache(deployEnv); err != nil {
 				return fmt.Errorf("failed to clear token cache: %w", err)
 			}
@@ -169,7 +186,7 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	}
 	defer client.Close()
 
-	// Get app ID from app.scl
+	// Get app ID from app.scl to verify we are deploying the correct app
 	appID, err := deploy.ExtractAppID(parserPath, appPath)
 	if err != nil {
 		return err
@@ -179,7 +196,7 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 		return err
 	}
 
-	// Send manifest
+	// Send manifest to server to check which files are missing (delta upload)
 	neededFiles, err := client.SendManifest(files, newVersion)
 	if err != nil {
 		return err
@@ -194,13 +211,14 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 		return err
 	}
 
-	// Trigger deploy
+	// Trigger deploy on server (finalize version)
 	result, err := client.Deploy()
 	if err != nil {
 		return err
 	}
 
 	// === PHASE 4: Auto-Install ===
+	// Optionally trigger installation immediately after successful deployment
 	var installResult *deploy.InstallResult
 	if !deployNoInstall {
 		if !jsonOutput {
@@ -246,6 +264,7 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	return nil
 }
 
+// dryRunOutput prints the files that would be deployed without actually deploying.
 func dryRunOutput(files map[string]deploy.FileInfo, version string) error {
 	if jsonOutput {
 		fileList := make([]map[string]interface{}, 0, len(files))
@@ -273,12 +292,3 @@ func dryRunOutput(files map[string]deploy.FileInfo, version string) error {
 
 // findSCLParser is deprecated - kept for test compatibility
 // Use build.EnsureSCLParser() instead which handles automatic download
-
-func init() {
-	RootCmd.AddCommand(deployCmd)
-	deployCmd.Flags().StringVar(&deployEnv, "env", "", "target environment (required: dev, staging, or prod)")
-	deployCmd.Flags().StringVar(&deployBump, "bump", "", "version bump type: patch|minor|major (required for first deploy after prod)")
-	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "show what would be deployed without deploying")
-	deployCmd.Flags().BoolVar(&deployNoInstall, "no-install", false, "skip automatic installation after deploy")
-	_ = deployCmd.MarkFlagRequired("env")
-}

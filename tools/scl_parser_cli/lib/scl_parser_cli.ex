@@ -1,9 +1,16 @@
 defmodule SCLParserCLI do
   @moduledoc """
   CLI entry point for parsing SCL files and outputting JSON.
+
+  This CLI tool serves as a bridge, allowing other tools (like the Go-based Simple CLI)
+  to leverage the Elixir-based SCL parser by invoking this binary and consuming the JSON output.
   """
 
   # coveralls-ignore-start
+  @doc """
+  Main entry point for the CLI. wrapper around `run/1` that handles system exit codes.
+  """
+  @spec main([String.t()]) :: no_return()
   def main(args) do
     case run(args) do
       :ok -> System.halt(0)
@@ -13,9 +20,14 @@ defmodule SCLParserCLI do
 
   # coveralls-ignore-stop
 
-  @doc false
   @version Mix.Project.config()[:version]
 
+  @doc """
+  Runs the CLI command logic with the given arguments.
+
+  Returns `:ok` on success or `{:error, msg}` on failure.
+  """
+  @spec run([String.t()]) :: :ok | {:error, String.t()}
   def run(args) do
     case parse_args(args) do
       {:ok, :help} ->

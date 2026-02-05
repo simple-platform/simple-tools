@@ -1,4 +1,5 @@
 // Package config provides configuration parsing for Simple Platform projects.
+// It handles loading various configuration files, such as simple.scl and .env.
 package config
 
 import (
@@ -12,55 +13,59 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// SimpleSCL represents the parsed simple.scl configuration file.
-// It contains tenant name and environment definitions for deployment targets.
+// SimpleSCL represents the parsed structure of a simple.scl configuration file.
+// It contains critical deployment information such as tenant name and environment definitions.
 type SimpleSCL struct {
 	Tenant       string                  // Tenant name (e.g., "acme")
-	Environments map[string]*Environment // Environment configurations
+	Environments map[string]*Environment // Environment configurations keyed by environment name
 }
 
-// Environment represents a deployment target configuration.
+// Environment represents a specific deployment target configuration.
 type Environment struct {
 	Name     string // Environment name (e.g., "dev", "staging", "prod")
-	Endpoint string // Base endpoint (e.g., "acme-dev.on.simple.dev")
-	APIKey   string // API key or $ENV_VAR reference
+	Endpoint string // Base endpoint URL (e.g., "acme-dev.on.simple.dev") (can be $ENV_VAR)
+	APIKey   string // API key for authentication (usually a $ENV_VAR reference)
 }
 
-// DevOpsEndpoint returns the WebSocket URL for DevOps channel.
+// DevOpsEndpoint returns the WebSocket URL for the DevOps control plane.
 // Format: wss://devops.<endpoint>/socket/websocket
 func (e *Environment) DevOpsEndpoint() string {
 	return fmt.Sprintf("devops.%s", e.Endpoint)
 }
 
-// IdentityEndpoint returns the HTTP URL for identity/auth.
+// IdentityEndpoint returns the HTTP URL for the Identity/Auth service.
 // Format: identity.<endpoint>
 func (e *Environment) IdentityEndpoint() string {
 	return fmt.Sprintf("identity.%s", e.Endpoint)
 }
 
-// SCLParser abstracts the scl-parser CLI for testing.
+// SCLParser abstracts the underlying SCL parsing logic.
+// This interface allows for mocking the external 'scl-parser' CLI tool during tests.
 type SCLParser interface {
 	Parse(path string) ([]SCLBlock, error)
 }
 
-// DefaultSCLParser uses the scl-parser CLI binary.
+// DefaultSCLParser is the production implementation of SCLParser.
+// It shells out to the 'scl-parser' binary to parse SCL files into JSON.
 type DefaultSCLParser struct {
 	ParserPath string
 }
 
-// SCLBlock represents an element in the SCL AST.
-// The scl-parser outputs two types:
-//   - "kv" (key-value): has Key and Value fields
-//   - "block": has Key, Name (string), and Children
+// SCLBlock represents a node in the SCL Abstract Syntax Tree (AST).
+// The scl-parser tool outputs a flat list of these blocks.
+// Types:
+//   - "kv" (key-value): A simple property (Key=Value).
+//   - "block": A nested structure (Key { ... Children ... }).
 type SCLBlock struct {
 	Type     string     `json:"type"`     // "kv" or "block"
-	Key      string     `json:"key"`      // e.g., "tenant", "env"
-	Name     string     `json:"name"`     // For blocks: the block name (e.g., "dev")
-	Value    any        `json:"value"`    // For kv: the value
-	Children []SCLBlock `json:"children"` // For blocks: child elements
+	Key      string     `json:"key"`      // Identifier (e.g., "tenant", "env")
+	Name     string     `json:"name"`     // Optional name for blocks (e.g., "dev" in "env dev { ... }")
+	Value    any        `json:"value"`    // Value for KV types
+	Children []SCLBlock `json:"children"` // Child nodes for block types
 }
 
-// Parse executes scl-parser CLI and returns the AST.
+// Parse executes the scl-parser CLI tool against the given file path.
+// It returns the AST as a slice of SCLBlocks.
 func (p *DefaultSCLParser) Parse(path string) ([]SCLBlock, error) {
 	cmd := exec.Command(p.ParserPath, path)
 	output, err := cmd.Output()
@@ -79,13 +84,14 @@ func (p *DefaultSCLParser) Parse(path string) ([]SCLBlock, error) {
 	return blocks, nil
 }
 
-// Loader handles loading and parsing of simple.scl files.
+// Loader is responsible for discovering, reading, and parsing config files.
 type Loader struct {
 	Parser     SCLParser
 	FileReader func(path string) ([]byte, error)
 }
 
-// NewLoader creates a Loader with default dependencies.
+// NewLoader creates a new Loader instance.
+// parserPath is the absolute path to the scl-parser binary.
 func NewLoader(parserPath string) *Loader {
 	return &Loader{
 		Parser:     &DefaultSCLParser{ParserPath: parserPath},
@@ -93,7 +99,8 @@ func NewLoader(parserPath string) *Loader {
 	}
 }
 
-// LoadSimpleSCL parses simple.scl from the given directory.
+// LoadSimpleSCL loads and parses 'simple.scl' from the specified directory.
+// It also attempts to load a '.env' file if present to populate environment variables.
 func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	path := filepath.Join(dir, "simple.scl")
 
@@ -105,7 +112,7 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 		return nil, fmt.Errorf("cannot access simple.scl: %w", err)
 	}
 
-	// Try to load .env file if it exists
+	// Try to load .env file if it exists, but don't fail if it's missing or invalid
 	envPath := filepath.Join(dir, ".env")
 	if _, err := os.Stat(envPath); err == nil {
 		if err := godotenv.Load(envPath); err != nil {
@@ -122,21 +129,22 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	return extractConfig(blocks)
 }
 
-// GetEnv returns the environment config with $ENV_VAR values resolved.
+// GetEnv retrieves the configuration for a named environment.
+// It resolves any environment variables references (starting with $) in values.
 func (s *SimpleSCL) GetEnv(name string) (*Environment, error) {
 	env, ok := s.Environments[name]
 	if !ok {
 		return nil, fmt.Errorf("environment '%s' not defined in simple.scl", name)
 	}
 
-	// Create a copy to avoid modifying the original
+	// Create a copy to avoid modifying the original during resolution
 	resolved := &Environment{
 		Name:     env.Name,
 		Endpoint: resolveEnvVar(env.Endpoint),
 		APIKey:   resolveEnvVar(env.APIKey),
 	}
 
-	// Validate API key is set
+	// Validate API key availability after resolution
 	if resolved.APIKey == "" {
 		if strings.HasPrefix(env.APIKey, "$") {
 			return nil, fmt.Errorf("environment variable %s not set", strings.TrimPrefix(env.APIKey, "$"))
@@ -147,7 +155,8 @@ func (s *SimpleSCL) GetEnv(name string) (*Environment, error) {
 	return resolved, nil
 }
 
-// resolveEnvVar resolves $ENV_VAR references to their values.
+// resolveEnvVar checks if a value starts with '$' and substitutes it with the OS environment variable.
+// Otherwise, it returns the value as is.
 func resolveEnvVar(value string) string {
 	if strings.HasPrefix(value, "$") {
 		envVar := strings.TrimPrefix(value, "$")
@@ -156,7 +165,7 @@ func resolveEnvVar(value string) string {
 	return value
 }
 
-// extractConfig parses the SCL AST to extract tenant and environment definitions.
+// extractConfig transforms the SCL AST into a strongly-typed SimpleSCL struct.
 func extractConfig(blocks []SCLBlock) (*SimpleSCL, error) {
 	cfg := &SimpleSCL{Environments: make(map[string]*Environment)}
 
@@ -168,7 +177,7 @@ func extractConfig(blocks []SCLBlock) (*SimpleSCL, error) {
 				cfg.Tenant = s
 			}
 		case "env":
-			// env is a block with Name and Children
+			// env is a block with Name (the env name) and Children (properties)
 			if block.Name != "" {
 				envName := block.Name
 				env := &Environment{Name: envName}

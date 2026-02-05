@@ -14,6 +14,7 @@ import (
 var tenantName string
 
 // initCmd represents the init command.
+// It scaffolds a new project structure, ensuring all necessary configuration files are present.
 var initCmd = &cobra.Command{
 	Use:   "init <path>",
 	Short: "Initialize a Simple Platform monorepo",
@@ -33,23 +34,30 @@ Example:
 	RunE: runInit,
 }
 
-// runInit executes the init command logic.
+func init() {
+	RootCmd.AddCommand(initCmd)
+	initCmd.Flags().StringVar(&tenantName, "tenant", "", "tenant name for deployment configuration (required)")
+	_ = initCmd.MarkFlagRequired("tenant")
+}
+
+// runInit executes the initialization logic.
+// It sets up the directory structure and optionally initializes a git repository.
 func runInit(cmd *cobra.Command, args []string) error {
-	// Validate tenant flag
+	// Validate tenant flag early
 	if tenantName == "" {
 		return fmt.Errorf("--tenant flag is required")
 	}
 
-	// Resolve target path to absolute
+	// Resolve target path to absolute to ensure consistent file operations
 	targetPath, err := filepath.Abs(args[0])
 	if err != nil {
 		return fmt.Errorf("invalid path %q: %w", args[0], err)
 	}
 
-	// Extract project name from path
+	// Extract project name from path (used in templates)
 	projectName := filepath.Base(targetPath)
 
-	// Create the monorepo structure
+	// Create the monorepo structure using embedded templates
 	cfg := scaffold.MonorepoConfig{
 		ProjectName: projectName,
 		TenantName:  tenantName,
@@ -58,10 +66,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to create monorepo: %w", err)
 	}
 
-	// Initialize git repo if not already inside one
+	// Initialize git repo if not already inside one.
 	// We check if the command runs inside the target path. If it fails, it means we are not in a git repo.
+	// This prevents nested git repositories unless explicitly intended by the user (who would likely not use 'simple init' inside a repo).
 	if err := exec.Command("git", "-C", targetPath, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
-		// Not inside a git repo, so initialize one. Treat failure as a hard error so the user knows init was incomplete.
+		// Not inside a git repo, so initialize one.
+		// Treat failure as a hard error so the user knows init was incomplete.
 		if err := exec.Command("git", "init", targetPath).Run(); err != nil {
 			return fmt.Errorf("failed to initialize git repository at %s (is git installed and on your PATH?): %w", targetPath, err)
 		}
@@ -88,10 +98,4 @@ func runInit(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func init() {
-	RootCmd.AddCommand(initCmd)
-	initCmd.Flags().StringVar(&tenantName, "tenant", "", "tenant name for deployment configuration (required)")
-	_ = initCmd.MarkFlagRequired("tenant")
 }

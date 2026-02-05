@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { handler } from '../index'
+import { handler } from '../src/index'
 import { createRequest } from './helpers'
 
 describe('{{.ActionName}}', () => {

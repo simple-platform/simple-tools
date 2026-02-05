@@ -1,3 +1,5 @@
+// Package ui implements the terminal user interface (TUI) for the Contextualizer.
+// It uses the Bubble Tea framework to manage state and render the interactive interface.
 package ui
 
 import (
@@ -15,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+// openDir opens the specified directory in the system's default file explorer.
 func openDir(path string) {
 	var cmd string
 	var args []string
@@ -33,7 +36,7 @@ func openDir(path string) {
 	_ = exec.Command(cmd, args...).Run()
 }
 
-// Styles
+// Styles definitions for consistent UI appearance.
 var (
 	titleStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#04B575"))
 	selectedItemStyle = lipgloss.NewStyle().PaddingLeft(2).Foreground(lipgloss.Color("170"))
@@ -42,38 +45,41 @@ var (
 	helpStyle         = blurredStyle
 )
 
+// state represents the different phases of the TUI application lifecycle.
 type state int
 
 const (
-	stateSelectDirs state = iota
-	stateSelectMode
-	stateProcessing
-	stateDone
+	stateSelectDirs state = iota // User is selecting directories to process
+	stateSelectMode              // User is selecting the output format
+	stateProcessing              // Application is generating context files
+	stateDone                    // Processing complete
 )
 
+// Model holds the TUI state and application configuration.
 type Model struct {
 	config    *config.Config
 	processor *processor.Processor
 	state     state
 	cwd       string
 
-	// Directory Selection
+	// Directory Selection state
 	availableDirs []string
 	selectedDirs  map[string]struct{}
 	cursor        int
 
-	// Output Mode Selection
+	// Output Mode Selection state
 	outputModes []string
 	modeCursor  int
 	outputMode  string
 
-	// Processing
+	// Processing state details
 	err error
 
-	// Window size
+	// Terminal dimensions
 	width, height int
 }
 
+// NewModel creates an initial TUI model with default settings.
 func NewModel(cfg *config.Config, proc *processor.Processor, wd string, subDirs []string) Model {
 	m := Model{
 		config:        cfg,
@@ -85,14 +91,15 @@ func NewModel(cfg *config.Config, proc *processor.Processor, wd string, subDirs 
 		outputModes:   []string{"multiple", "single"},
 	}
 
-	// Pre-select if configured? For now empty default.
 	return m
 }
 
+// Init handles any initial I/O setup. None needed here.
 func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+// Update handles incoming messages (keypresses, window resizes, etc.) and transitions state.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -123,8 +130,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case stateSelectMode:
 		return m.updateSelectMode(msg)
 	case stateProcessing:
-		// Logic would go here to kick off processing command
-		// simplified for this snippet
+		// Logic handles transition via cmds, no user input handling needed here except quit
 		return m, nil
 	case stateDone:
 		return m, tea.Quit
@@ -133,6 +139,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// updateSelectDirs handles input during directory selection phase.
 func (m Model) updateSelectDirs(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -156,13 +163,14 @@ func (m Model) updateSelectDirs(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if len(m.selectedDirs) == 0 {
 				return m, nil // Must select at least one
 			}
-			// Determine next state
+			// Transition to mode selection
 			m.state = stateSelectMode
 		}
 	}
 	return m, nil
 }
 
+// updateSelectMode handles input during output mode selection.
 func (m Model) updateSelectMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
@@ -184,9 +192,9 @@ func (m Model) updateSelectMode(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// startProcessingCmd triggers the async processing logic.
 func (m Model) startProcessingCmd() tea.Msg {
-	// This runs in a separate goroutine
-	// We iterate over selected dirs and process them
+	// Processing happens in a separate goroutine implicitly via Bubble Tea command pattern.
 
 	// Clear output dir to avoid stale files
 	if err := os.RemoveAll(m.config.OutputDir); err != nil {
@@ -198,7 +206,7 @@ func (m Model) startProcessingCmd() tea.Msg {
 		return processingFinishedMsg{err: err}
 	}
 
-	// Single Mode
+	// Single Mode: Combine all contents into one file
 	if m.outputMode == "single" {
 		var combined strings.Builder
 		for dir := range m.selectedDirs {
@@ -215,7 +223,7 @@ func (m Model) startProcessingCmd() tea.Msg {
 			return processingFinishedMsg{err: err}
 		}
 	} else {
-		// Multiple Mode
+		// Multiple Mode: Create a file for each selected directory
 		for dir := range m.selectedDirs {
 			content, err := m.processor.ProcessDirectory(dir)
 			if err != nil {
@@ -232,11 +240,13 @@ func (m Model) startProcessingCmd() tea.Msg {
 	return processingFinishedMsg{success: true}
 }
 
+// processingFinishedMsg signals completion of the background task.
 type processingFinishedMsg struct {
 	err     error
 	success bool
 }
 
+// View directs the rendering logic based on the current state.
 func (m Model) View() string {
 	var s strings.Builder
 

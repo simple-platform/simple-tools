@@ -136,7 +136,7 @@ func TestNewActionCmd_Success(t *testing.T) {
 	actionDir := filepath.Join(appDir, "actions", "send-email")
 	filesToCheck := []string{
 		"package.json",
-		"index.ts",
+		"src/index.ts",
 		"tsconfig.json",
 		"vitest.config.ts",
 		"tests/helpers.ts",
@@ -253,6 +253,35 @@ func TestNewActionCmd_InvalidEnv(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid execution environment") {
 		t.Errorf("Unexpected error: %v", err)
+	}
+}
+
+func TestNewActionCmd_ScopeWithAt(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+
+	oldWd, _ := os.Getwd()
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	// Pass scope with @
+	args := []string{"new", "action", "com.example.test", "at-scope-action", "At Scope Action", "--scope", "@mycompany", "--env", "server"}
+	_, _, err := invokeCmd(args...)
+	if err != nil {
+		t.Fatalf("New Action failed: %v", err)
+	}
+
+	// Verify package.json content has single @
+	actionDir := filepath.Join(appDir, "actions", "at-scope-action")
+	pkgJson, _ := os.ReadFile(filepath.Join(actionDir, "package.json"))
+	if strings.Contains(string(pkgJson), "@@mycompany") {
+		t.Error("package.json contains double @ in scope")
+	}
+	if !strings.Contains(string(pkgJson), "@mycompany/action-at-scope-action") {
+		t.Error("package.json should contain correct single @ scope")
 	}
 }
 

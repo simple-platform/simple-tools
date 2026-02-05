@@ -15,7 +15,11 @@ func TestValidateLanguage(t *testing.T) {
 	}
 
 	// 2. With index.ts -> OK
-	indexFile := filepath.Join(tmpDir, "index.ts")
+	srcDir := filepath.Join(tmpDir, "src")
+	if err := os.Mkdir(srcDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	indexFile := filepath.Join(srcDir, "index.ts")
 	if err := os.WriteFile(indexFile, []byte{}, 0644); err != nil {
 		t.Fatal(err)
 	}
