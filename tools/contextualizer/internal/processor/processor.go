@@ -1,3 +1,5 @@
+// Package processor handles the scanning, reading, and filtering of files
+// to generate the context string.
 package processor
 
 import (
@@ -8,15 +10,18 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"contextualizer/internal/config"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
+// Processor encapsulates the state needed to process a project directory.
 type Processor struct {
-	Config      *config.Config
-	ProjectRoot string
+	Config      *config.Config // Configuration including ignore patterns
+	ProjectRoot string         // Absolute path to the project root
 }
 
+// New creates a new Processor instance.
 func New(cfg *config.Config, root string) *Processor {
 	return &Processor{
 		Config:      cfg,
@@ -24,7 +29,8 @@ func New(cfg *config.Config, root string) *Processor {
 	}
 }
 
-// ProcessDirectory walks the directory and returns the combined content
+// ProcessDirectory walks the specified directory recursively and returns the combined content of all valid files.
+// It respects ignore patterns and skips binary files or files exceeding size limits.
 func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 	var sb strings.Builder
 
@@ -37,11 +43,11 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 		if err != nil {
 			return err
 		}
-		
-		// Use slash for consistent matching
+
+		// Normalize separators to slashes for consistent matching logic across OSs
 		relPath = filepath.ToSlash(relPath)
 
-		// Check ignore
+		// Check if the path should be ignored
 		if p.shouldIgnore(relPath, d.IsDir()) {
 			if d.IsDir() {
 				return filepath.SkipDir
@@ -53,15 +59,15 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 			return nil
 		}
 
-		// It's a file
+		// It's a file, check metadata first
 		info, err := d.Info()
 		if err != nil {
 			return nil // Skip if can't get info
 		}
-		
-		// Skip if too large? (Optional, but TS didn't seem to enforce size limit, just binary check)
-		if info.Size() > 10*1024*1024 { // 10MB limit safety
-		    sb.WriteString(fmt.Sprintf("===== %s (Skipped: Too large) =====\n\n", relPath))
+
+		// Skip if too large (10MB limit is a safety guard to prevent memory exhaustion)
+		if info.Size() > 10*1024*1024 {
+			sb.WriteString(fmt.Sprintf("===== %s (Skipped: Too large) =====\n\n", relPath))
 			return nil
 		}
 
@@ -71,10 +77,11 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 			return nil
 		}
 		if isBinary {
-			// Skip binary silent or with message? TS skips silently.
+			// Skip binary files silently to avoid cluttering the context
 			return nil
 		}
 
+		// Append formatted content with header
 		sb.WriteString(fmt.Sprintf("===== %s =====\n%s\n\n", relPath, content))
 
 		return nil
@@ -83,25 +90,25 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 	return sb.String(), err
 }
 
+// shouldIgnore checks if a given path matches any of the configured ignore patterns.
+// It supports doublestar globs (e.g., **/*.txt) and basic directory matching.
 func (p *Processor) shouldIgnore(path string, isDir bool) bool {
-    // Basic ignore implementation matching TS logic (check patterns)
-    // In TS: "node_modules/" matches directory.
-    
-    pathToCheck := path
-    if isDir && !strings.HasSuffix(pathToCheck, "/") {
-        pathToCheck += "/"
-    }
+	// Basic ignore implementation matching TS logic (check patterns)
+	// In TS: "node_modules/" matches directory.
+
+	pathToCheck := path
+	if isDir && !strings.HasSuffix(pathToCheck, "/") {
+		pathToCheck += "/"
+	}
 
 	for _, pattern := range p.Config.Ignore {
-		// Handle negation if needed (simplified for now: TS supported negation)
-		// Assuming standard glob behavior
-		
 		matched, _ := doublestar.Match(pattern, pathToCheck)
 		if matched {
 			return true
 		}
 
 		// Try recursive match if not absolute
+		// e.g. "dist/" should match "sub/dist/" or "dist/"
 		if !strings.HasPrefix(pattern, "/") && !strings.HasPrefix(pattern, "**/") {
 			matched, _ := doublestar.Match("**/"+pattern, pathToCheck)
 			if matched {
@@ -110,16 +117,17 @@ func (p *Processor) shouldIgnore(path string, isDir bool) bool {
 		}
 		// Also check if the pattern matches a parent directory
 		// e.g. pattern "node_modules/" should match "node_modules/foo.js"
-		// This is implicitly handled if we skip the dir in WalkDir, but for file check:
 		if !isDir && strings.HasSuffix(pattern, "/") {
-		    if strings.HasPrefix(pathToCheck, pattern) {
-		        return true
-		    }
+			if strings.HasPrefix(pathToCheck, pattern) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
+// readFile reads the file content and checks if it appears to be binary.
+// It uses a simple heuristic: valid UTF-8 and no null bytes in the first 1KB.
 func readFile(path string) (string, bool, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -129,12 +137,12 @@ func readFile(path string) (string, bool, error) {
 	if !utf8.Valid(data) {
 		return "", true, nil // Treat as binary
 	}
-	
-	// Heuristic for binary (null byte check)
+
+	// Check for null bytes as a heuristic for binary content
 	for i := 0; i < len(data) && i < 1024; i++ {
-	    if data[i] == 0 {
-	        return "", true, nil
-	    }
+		if data[i] == 0 {
+			return "", true, nil
+		}
 	}
 
 	return string(data), false, nil

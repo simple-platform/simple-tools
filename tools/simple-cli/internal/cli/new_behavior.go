@@ -9,7 +9,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// newBehaviorCmd represents the new behavior command
+// newBehaviorCmd represents the 'new behavior' command.
+// It scaffolds a new record behavior script and logs instructions.
 var newBehaviorCmd = &cobra.Command{
 	Use:   "behavior <app-id> <table-name>",
 	Short: "Create a new record behavior",
@@ -23,6 +24,7 @@ Arguments:
 	RunE:    runNewBehavior,
 }
 
+// runNewBehavior executes the logic to scaffold a new behavior.
 func runNewBehavior(cmd *cobra.Command, args []string) error {
 	appID := args[0]
 	tableName := args[1]

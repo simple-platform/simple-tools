@@ -10,7 +10,6 @@ func BundleJS(dir, entryPoint, outFile string, minify bool, defines map[string]s
 	args := []string{
 		entryPoint,
 		"--bundle",
-		"--platform=node",
 		"--outfile=" + outFile,
 	}
 

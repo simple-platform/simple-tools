@@ -378,6 +378,11 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		return fmt.Errorf("failed to create tests directory: %w", err)
 	}
 
+	srcPath := filepath.Join(actionPath, "src")
+	if err := fsys.MkdirAll(srcPath, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create src directory: %w", err)
+	}
+
 	// Template data
 	// ActionNameScl replaces hyphens with underscores for SCL identifiers
 	data := map[string]string{
@@ -395,7 +400,7 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		dst string
 	}{
 		{"templates/action/package.json", filepath.Join(actionPath, "package.json")},
-		{"templates/action/index.ts", filepath.Join(actionPath, "index.ts")},
+		{"templates/action/index.ts", filepath.Join(actionPath, "src", "index.ts")},
 		{"templates/action/tsconfig.json", filepath.Join(actionPath, "tsconfig.json")},
 		{"templates/action/vitest.config.ts", filepath.Join(actionPath, "vitest.config.ts")},
 		{"templates/action/tests/helpers.ts", filepath.Join(testsPath, "helpers.ts")},

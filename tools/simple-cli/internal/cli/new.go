@@ -6,18 +6,21 @@ import (
 	"regexp"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-// newCmd represents the new command
+// newCmd represents the 'new' parent command.
+// It groups all scaffolding subcommands under a single entry point.
 var newCmd = &cobra.Command{
 	Use:   "new",
 	Short: "Scaffold new components",
 	Long:  `Create new applications, actions, or other components within the Simple Platform monorepo.`,
 }
 
-// newAppCmd represents the new app command
+// newAppCmd represents the 'new app' command.
+// It scaffolds a complete application structure including directory layout and config files.
 var newAppCmd = &cobra.Command{
 	Use:   "app <app-id> <name>",
 	Short: "Create a new application",
@@ -31,6 +34,7 @@ Arguments:
 	RunE:    runNewApp,
 }
 
+// runNewApp executes the logic to scaffold a new application.
 func runNewApp(cmd *cobra.Command, args []string) error {
 	appID := args[0]
 	name := args[1]
@@ -63,7 +67,8 @@ func runNewApp(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// newActionCmd represents the new action command
+// newActionCmd represents the 'new action' command.
+// It scaffolds a new action (TypeScript function) within an existing application.
 var newActionCmd = &cobra.Command{
 	Use:   "action <app> <name> <display_name>",
 	Short: "Create a new action",
@@ -84,7 +89,8 @@ var validExecutionEnvs = []string{"server", "client", "both"}
 // actionNameRegex validates action names: all lowercase, starts with letter, only letters/numbers/hyphens
 var actionNameRegex = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
 
-// validateActionName checks that the action name follows the naming conventions
+// validateActionName checks that the action name follows the naming conventions.
+// It enforces kebab-case to ensure consistency across the platform.
 func validateActionName(name string) error {
 	if !actionNameRegex.MatchString(name) {
 		return fmt.Errorf("invalid action name: %q. Must be all lowercase, start with a letter, and contain only letters, numbers, and hyphens", name)
@@ -92,6 +98,7 @@ func validateActionName(name string) error {
 	return nil
 }
 
+// runNewAction executes the logic to scaffold a new action.
 func runNewAction(cmd *cobra.Command, args []string) error {
 	appID := args[0]
 	actionName := args[1]
@@ -100,6 +107,7 @@ func runNewAction(cmd *cobra.Command, args []string) error {
 	lang, _ := cmd.Flags().GetString("lang")
 	desc, _ := cmd.Flags().GetString("desc")
 	scope, _ := cmd.Flags().GetString("scope")
+	scope = strings.TrimPrefix(scope, "@")
 	env, _ := cmd.Flags().GetString("env")
 
 	// Validate language
@@ -220,6 +228,7 @@ func init() {
 // Trigger Commands
 // -----------------------------------------------------------
 
+// newTriggerTimedCmd represents the 'new trigger:timed' command.
 var newTriggerTimedCmd = &cobra.Command{
 	Use:   "trigger:timed <app> <name> <display_name>",
 	Short: "Create a timed trigger",
@@ -229,6 +238,7 @@ var newTriggerTimedCmd = &cobra.Command{
 	},
 }
 
+// newTriggerDbCmd represents the 'new trigger:db' command.
 var newTriggerDbCmd = &cobra.Command{
 	Use:   "trigger:db <app> <name> <display_name>",
 	Short: "Create a database event trigger",
@@ -238,6 +248,7 @@ var newTriggerDbCmd = &cobra.Command{
 	},
 }
 
+// newTriggerWebhookCmd represents the 'new trigger:webhook' command.
 var newTriggerWebhookCmd = &cobra.Command{
 	Use:   "trigger:webhook <app> <name> <display_name>",
 	Short: "Create a webhook trigger",
@@ -247,6 +258,7 @@ var newTriggerWebhookCmd = &cobra.Command{
 	},
 }
 
+// runNewTrigger executes the logic to scaffold a new trigger of a specific type.
 func runNewTrigger(cmd *cobra.Command, args []string, triggerType string) error {
 	appID := args[0]
 	triggerName := args[1]

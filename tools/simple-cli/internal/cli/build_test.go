@@ -8,8 +8,12 @@ import (
 	"testing"
 )
 
+// TestRunBuild verifies the `simple build` command logic.
+// It uses extensive mocking of the `build` package functions to avoid invalidating
+// the test environment or taking excessive time with actual builds only to test CLI parsing.
 func TestRunBuild(t *testing.T) {
-	// Global Mocks for Build Package
+	// === MOCKING START ===
+	// Store original functions to restore them after the test
 	origDeps := build.EnsureDependenciesFunc
 	origBundle := build.BundleJSFunc
 	origAsync := build.BundleAsyncFunc
@@ -24,13 +28,14 @@ func TestRunBuild(t *testing.T) {
 		build.OptimizeWasmFunc = origOpt
 	}()
 
-	// No-op mocks
+	// Inject no-op mocks that simulate success
 	build.EnsureDependenciesFunc = func(dir string) error { return nil }
 	build.BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
 	build.BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	build.CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 	build.OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	// Also mock tools ensuring
+
+	// Mock tool-check functions to avoid needing actual binaries (scl-parser, javy, etc.) in the test environment
 	origSCL := build.EnsureSCLParserFunc
 	origJavy := build.EnsureJavyFunc
 	origWasm := build.EnsureWasmOptFunc
@@ -42,7 +47,9 @@ func TestRunBuild(t *testing.T) {
 	build.EnsureSCLParserFunc = func(f func(string)) (string, error) { return "scl", nil }
 	build.EnsureJavyFunc = func(f func(string)) (string, error) { return "javy", nil }
 	build.EnsureWasmOptFunc = func(f func(string)) (string, error) { return "wasm-opt", nil }
+	// === MOCKING END ===
 
+	// Define test cases covering various usage scenarios
 	tests := []struct {
 		name     string
 		args     []string
@@ -53,7 +60,7 @@ func TestRunBuild(t *testing.T) {
 		{
 			name:     "build all success",
 			args:     []string{},
-			buildAll: true,
+			buildAll: true, // User passed --all
 			wantErr:  false,
 		},
 		{
@@ -84,18 +91,21 @@ func TestRunBuild(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Setup
+			// Update global flag state for this run
 			buildAll = tt.buildAll
-			// Bypass UI in tests to avoid TTY error
+
+			// Bypass UI output during tests to clean up logs and avoid TTY checks
 			oldJSON := jsonOutput
 			jsonOutput = true
 			defer func() { jsonOutput = oldJSON }()
+
+			// Isolate filesystem changes
 			tmpDir := t.TempDir()
 			oldWd, _ := os.Getwd()
 			_ = os.Chdir(tmpDir)
 			defer func() { _ = os.Chdir(oldWd) }()
 
-			// Create dummy targets for success cases
+			// Create dummy targets for success cases so the builder finds them
 			if !tt.wantErr {
 				if tt.name == "build target success" {
 					_ = os.MkdirAll("myapp/action", 0755)
@@ -107,8 +117,10 @@ func TestRunBuild(t *testing.T) {
 				}
 			}
 
-			// Capture output
+			// Execution
 			err := runBuild(fsx.OSFileSystem{}, tt.args)
+
+			// Verify results
 			if (err != nil) != tt.wantErr {
 				t.Errorf("runBuild() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -120,6 +132,7 @@ func TestRunBuild(t *testing.T) {
 			}
 		})
 	}
-	// Reset global
+
+	// Reset global state
 	buildAll = false
 }

@@ -8,6 +8,7 @@ import (
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
 	"simple-cli/internal/ui"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -18,6 +19,8 @@ var (
 	concurrency int
 )
 
+// buildCmd represents the 'build' command.
+// It compiles actions or applications logic (often using esbuild for JS/TS) into artifacts.
 var buildCmd = &cobra.Command{
 	Use:   "build [target]",
 	Short: "Build an app or action",
@@ -31,6 +34,14 @@ Examples:
 	},
 }
 
+func init() {
+	RootCmd.AddCommand(buildCmd)
+	buildCmd.Flags().BoolVar(&buildAll, "all", false, "build all actions in all apps")
+	buildCmd.Flags().IntVar(&concurrency, "concurrency", 4, "number of parallel builds")
+}
+
+// runBuild executes the build process.
+// It orchestrates tool setup, target resolution, and parallel build execution.
 func runBuild(fsys fsx.FileSystem, args []string) error {
 	// Validate arguments first
 	if buildAll {
@@ -51,6 +62,8 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 	manager := build.NewBuildManager(opts)
 
 	// Phase 1: Ensure Tools
+	// We need specific binaries (scl-parser, javy, wasm-opt, esbuild) to be present.
+	// This step downloads them if missing.
 	toolKeys := []string{"scl-parser", "javy", "wasm-opt"}
 	if !jsonOutput {
 		if err := runWithProgress(toolKeys, func(report build.ProgressReporter) {
@@ -73,6 +86,7 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 	return buildTarget(manager, fsys, target)
 }
 
+// runWithProgress runs a function while displaying a progress UI (Bubble Tea).
 func runWithProgress(keys []string, runFn func(build.ProgressReporter)) error {
 	model := ui.NewModel(keys)
 	p := tea.NewProgram(model)
@@ -94,6 +108,7 @@ func runWithProgress(keys []string, runFn func(build.ProgressReporter)) error {
 	return err
 }
 
+// buildAllApps traverses the 'apps' directory to find and build all actions in all apps.
 func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 	appsDir := "apps"
 	if !scaffold.PathExists(fsys, appsDir) {
@@ -134,6 +149,7 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 	return runBuildActions(manager, allActionDirs)
 }
 
+// buildTarget resolves a single target (app, action, or shorthand) and builds it.
 func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string) error {
 	targetPath := target
 	if !scaffold.PathExists(fsys, targetPath) {
@@ -141,6 +157,17 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 		// This assumes running from root
 		// If target is like "com.example.todo", check apps/com.example.todo
 		targetPath = filepath.Join("apps", target)
+	}
+
+	if !scaffold.PathExists(fsys, targetPath) {
+		// Try handling "app/action" shorthand by checking "apps/app/actions/action"
+		parts := strings.Split(target, "/")
+		if len(parts) == 2 {
+			implicitPath := filepath.Join("apps", parts[0], "actions", parts[1])
+			if scaffold.PathExists(fsys, implicitPath) {
+				targetPath = implicitPath
+			}
+		}
 	}
 
 	if !scaffold.PathExists(fsys, targetPath) {
@@ -172,6 +199,7 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 	return runBuildActions(manager, actionDirs)
 }
 
+// runBuildActions executes the build for a list of action directories.
 func runBuildActions(manager *build.BuildManager, actionDirs []string) error {
 	var results []build.ActionBuildResult
 	ctx := context.Background()
@@ -228,10 +256,4 @@ func runBuildActions(manager *build.BuildManager, actionDirs []string) error {
 		return fmt.Errorf("%d action(s) failed to build", failures)
 	}
 	return nil
-}
-
-func init() {
-	RootCmd.AddCommand(buildCmd)
-	buildCmd.Flags().BoolVar(&buildAll, "all", false, "build all actions in all apps")
-	buildCmd.Flags().IntVar(&concurrency, "concurrency", 4, "number of parallel builds")
 }

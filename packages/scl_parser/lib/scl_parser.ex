@@ -54,6 +54,7 @@ defmodule SCLParser do
   - `{:ok, ast}` on success
   - `{:error, {message, line, col}}` on failure
   """
+  @spec parse(String.t()) :: {:ok, list()} | {:error, {String.t(), integer(), integer()}}
   def parse(input) when is_binary(input) do
     with {:ok, tokens} <- tokenize(input),
          {:ok, raw_ast} <- parse_tokens(tokens) do
@@ -86,6 +87,7 @@ defmodule SCLParser do
 
   Returns `{:ok, tokens}` or `{:error, {message, line, col}}`.
   """
+  @spec tokenize(String.t()) :: {:ok, list(tuple())} | {:error, {String.t(), integer(), integer()}}
   def tokenize(input) do
     do_tokenize(input, 1, 1, [])
   end
@@ -390,6 +392,7 @@ defmodule SCLParser do
 
   Returns `{:ok, raw_ast}` or `{:error, {message, line, col}}`.
   """
+  @spec parse_tokens(list(tuple())) :: {:ok, list()} | {:error, {String.t(), integer(), integer()}}
   def parse_tokens(tokens),
     do: parse_root_statements(tokens, [])
 
@@ -625,6 +628,7 @@ defmodule SCLParser do
   Converts the raw AST from `parse_tokens/1` into a final typed AST with
   booleans, numbers, atoms, etc. in the correct Elixir data types.
   """
+  @spec interpret(list()) :: list()
   def interpret(raw_ast),
     do: Enum.map(raw_ast, &interpret_stmt/1)
 

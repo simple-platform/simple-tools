@@ -62,7 +62,7 @@ func ParseExecutionEnvironment(sclParserPath, actionDir string) (string, error) 
 
 // ValidateLanguage ensures only TypeScript is supported
 func ValidateLanguage(actionDir string) error {
-	if !fileExists(filepath.Join(actionDir, "index.ts")) {
+	if !fileExists(filepath.Join(actionDir, "src", "index.ts")) {
 		return fmt.Errorf("unsupported language: only TypeScript actions are supported")
 	}
 	return nil

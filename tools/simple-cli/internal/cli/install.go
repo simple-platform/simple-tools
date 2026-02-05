@@ -15,6 +15,9 @@ var (
 	installEnv string
 )
 
+// installCmd represents the command to install a deployed app.
+// This is distinct from 'deploy'; it triggers the installation process (migrations, etc.)
+// for an already uploaded artifact.
 var installCmd = &cobra.Command{
 	Use:   "install [APP_ID]",
 	Short: "Install an app to an environment",
@@ -34,6 +37,14 @@ Examples:
 	},
 }
 
+func init() {
+	RootCmd.AddCommand(installCmd)
+	installCmd.Flags().StringVar(&installEnv, "env", "", "target environment (required: dev, staging, or prod)")
+	_ = installCmd.MarkFlagRequired("env")
+}
+
+// runInstall executes the installation logic.
+// It connects to the DevOps server and requests an install for the given app ID.
 func runInstall(appID string) error {
 	start := time.Now()
 
@@ -43,12 +54,14 @@ func runInstall(appID string) error {
 	}
 
 	// Ensure scl-parser is available (for config loading)
+	// We need this to parse simple.scl to find the environment endpoints.
 	parserPath, err := build.EnsureSCLParser(nil)
 	if err != nil {
 		return fmt.Errorf("failed to ensure scl-parser: %w", err)
 	}
 
 	// === PHASE 1: Config & Auth ===
+	// Load configuration to determine where to connect (DevOps endpoint) and how to authenticate.
 	var cfg *config.SimpleSCL
 	var env *config.Environment
 	var cfgErr, authErr error
@@ -67,7 +80,8 @@ func runInstall(appID string) error {
 		return cfgErr
 	}
 
-	// Get JWT
+	// Get JWT (cached for token lifetime)
+	// Authentication is required to allow the CLI into the DevOps channel.
 	auth := deploy.NewAuthenticator()
 	jwt, authErr = auth.GetJWT(env.IdentityEndpoint(), env.APIKey, installEnv)
 	if authErr != nil {
@@ -75,6 +89,7 @@ func runInstall(appID string) error {
 	}
 
 	// === PHASE 2: Connect & Install ===
+	// Establish WebSocket connection to DevOps service.
 	client := deploy.NewClient(deploy.ClientConfig{
 		Endpoint: env.DevOpsEndpoint(),
 		JWT:      jwt,
@@ -94,7 +109,7 @@ func runInstall(appID string) error {
 		fmt.Printf("🚀 Installing %s to %s...\n", appID, installEnv)
 	}
 
-	// Trigger install
+	// Trigger remote install process via WebSocket
 	result, err := client.Install()
 	if err != nil {
 		return err
@@ -114,10 +129,4 @@ func runInstall(appID string) error {
 
 	fmt.Printf("✅ Installed %s (Version: %s) to %s in %s\n", result.AppID, result.Version, installEnv, duration.Round(time.Millisecond))
 	return nil
-}
-
-func init() {
-	RootCmd.AddCommand(installCmd)
-	installCmd.Flags().StringVar(&installEnv, "env", "", "target environment (required: dev, staging, or prod)")
-	_ = installCmd.MarkFlagRequired("env")
 }

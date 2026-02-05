@@ -7,17 +7,26 @@ import (
 	"path/filepath"
 )
 
+// ConfigFileName is the default name of the configuration file.
 const ConfigFileName = "contextualizer.json"
 
+// Config represents the runtime configuration for the Contextualizer.
+// It matches the JSON structure of contextualizer.json.
 type Config struct {
-	OutputDir           string   `json:"outputDir"`
-	TopLevelDirs        []string `json:"topLevelDirs"`
-	Ignore              []string `json:"ignore"`
-	ProcessTopLevelDirs bool     `json:"processTopLevelDirs"`
-	OpenOutputDirectory bool     `json:"openOutputDirectory"`
+	// OutputDir is the directory where context files will be saved (e.g., ".context").
+	OutputDir string `json:"outputDir"`
+	// TopLevelDirs defines which root directories to scan for sub-projects (e.g., "src", "apps").
+	TopLevelDirs []string `json:"topLevelDirs"`
+	// Ignore is a list of glob patterns to exclude from processing.
+	Ignore []string `json:"ignore"`
+	// ProcessTopLevelDirs determines if files directly in TopLevelDirs should be included.
+	ProcessTopLevelDirs bool `json:"processTopLevelDirs"`
+	// OpenOutputDirectory controls whether to open the output dir in the OS file explorer after completion.
+	OpenOutputDirectory bool `json:"openOutputDirectory"`
 }
 
-// DefaultIgnorePatterns matches the legacy/TS defaults
+// DefaultIgnorePatterns provides a sensible set of defaults for web/software projects.
+// It includes common build artifacts, dependency directories, and binary file types.
 var DefaultIgnorePatterns = []string{
 	// Directories
 	"node_modules/",
@@ -77,6 +86,7 @@ var DefaultIgnorePatterns = []string{
 	"*.lock",
 }
 
+// DefaultConfig serves as the baseline configuration for new projects.
 var DefaultConfig = Config{
 	OutputDir:           ".context",
 	TopLevelDirs:        []string{"src"},
@@ -85,6 +95,8 @@ var DefaultConfig = Config{
 	OpenOutputDirectory: true,
 }
 
+// Load attempts to read and parse the contextualizer.json file from the current directory.
+// It returns an error if the file is missing or invalid.
 func Load() (*Config, error) {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -100,14 +112,14 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("failed to read config file: %w", err)
 	}
 
-	// Let's copy that behavior: Start with defaults, then unmarshal over it.)
+	// Start with defaults, then overwrite with loaded JSON values.
 	cfg := DefaultConfig
 
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config file: %w", err)
 	}
 
-	// Ensure output dir is ignored
+	// Automatically ensure the output directory itself is ignored to prevent recursion.
 	outputDirPattern := cfg.OutputDir + "/"
 	alreadyIgnored := false
 	for _, p := range cfg.Ignore {
@@ -123,6 +135,7 @@ func Load() (*Config, error) {
 	return &cfg, nil
 }
 
+// GenerateDefault creates a default configuration structure and marshals it to JSON.
 func GenerateDefault() ([]byte, error) {
 	return json.MarshalIndent(DefaultConfig, "", "  ")
 }
