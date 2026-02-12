@@ -50,8 +50,8 @@
       }
     },
     "beam27Packages.elixir-ls@0.30.0": {
-      "last_modified": "2026-01-23T17:20:52Z",
-      "resolved": "github:NixOS/nixpkgs/a1bab9e494f5f4939442a57a58d0449a109593fe#beam27Packages.elixir-ls",
+      "last_modified": "2026-02-06T12:24:04Z",
+      "resolved": "github:NixOS/nixpkgs/ae67888ff7ef9dff69b3cf0cc0fbfbcd3a722abe#beam27Packages.elixir-ls",
       "source": "devbox-search",
       "version": "0.30.0",
       "systems": {
@@ -59,41 +59,41 @@
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/nm1f9syb8wzdnf1y1paih31wigah70r8-elixir-ls-0.30.0",
+              "path": "/nix/store/xpmrxlxidrxb6ss9rij8csl41qy1m8w7-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/nm1f9syb8wzdnf1y1paih31wigah70r8-elixir-ls-0.30.0"
+          "store_path": "/nix/store/xpmrxlxidrxb6ss9rij8csl41qy1m8w7-elixir-ls-0.30.0"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/hdkd42j0ak9rw6yny86wvv3r7vk0bqik-elixir-ls-0.30.0",
+              "path": "/nix/store/rnmry8v9yvqi3fa0raavhn63213jjawx-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/hdkd42j0ak9rw6yny86wvv3r7vk0bqik-elixir-ls-0.30.0"
+          "store_path": "/nix/store/rnmry8v9yvqi3fa0raavhn63213jjawx-elixir-ls-0.30.0"
         },
         "x86_64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/8q78spanbjrp29i6wn3lahg5cc6xlagq-elixir-ls-0.30.0",
+              "path": "/nix/store/zrnwxmak54mwz1z8xnwdv7324x58plrn-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/8q78spanbjrp29i6wn3lahg5cc6xlagq-elixir-ls-0.30.0"
+          "store_path": "/nix/store/zrnwxmak54mwz1z8xnwdv7324x58plrn-elixir-ls-0.30.0"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/n4r5sd9j7yykql8m2pcghshbrx7hjqwj-elixir-ls-0.30.0",
+              "path": "/nix/store/7x336j27azf298a2dglx7ms73w0yxkz7-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/n4r5sd9j7yykql8m2pcghshbrx7hjqwj-elixir-ls-0.30.0"
+          "store_path": "/nix/store/7x336j27azf298a2dglx7ms73w0yxkz7-elixir-ls-0.30.0"
         }
       }
     },
@@ -349,12 +349,12 @@
               "default": true
             },
             {
-              "name": "dev",
-              "path": "/nix/store/ssra385mmavxa4dj5wrp0z7q2pq1fkmd-nodejs-25.5.0-dev"
-            },
-            {
               "name": "libv8",
               "path": "/nix/store/74dzxfbsblw9d2r59k3cw0dgf5wrwsfz-nodejs-25.5.0-libv8"
+            },
+            {
+              "name": "dev",
+              "path": "/nix/store/ssra385mmavxa4dj5wrp0z7q2pq1fkmd-nodejs-25.5.0-dev"
             }
           ],
           "store_path": "/nix/store/nkz9f2dacg1yyr31m1av0b2awsc6akva-nodejs-25.5.0"
