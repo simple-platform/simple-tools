@@ -19,7 +19,6 @@ var {{.TriggerNameScl}}_trigger {
 }
 
 set dev_simple_system.trigger, {{.TriggerNameScl}} {
-  key {{.TriggerNameScl}}
   name "{{.DisplayName}}"
   description "{{.Description}}"
 }

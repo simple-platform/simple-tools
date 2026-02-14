@@ -26,9 +26,8 @@ type sclChild struct {
 func ParseExecutionEnvironment(sclParserPath, actionDir string) (string, error) {
 	// SCL file is at apps/<app>/records/10_actions.scl
 	// actionDir is apps/<app>/actions/<action>/
-	// SCL file is at apps/<app>/records/10_actions.scl
-	// actionDir is apps/<app>/actions/<action>/
 	appDir := filepath.Dir(filepath.Dir(actionDir))
+	actionName := filepath.Base(actionDir)
 	sclPath := filepath.Join(appDir, "records", "10_actions.scl")
 	if _, err := os.Stat(sclPath); os.IsNotExist(err) {
 		return "server", nil // default
@@ -45,15 +44,31 @@ func ParseExecutionEnvironment(sclParserPath, actionDir string) (string, error) 
 		return "server", nil
 	}
 
-	// Find execution_environment in first set block
+	// Find execution_environment in the correct set block
 	for _, block := range blocks {
 		if block.Key == "set" {
+			// Check if this block corresponds to the current action
+			// We must check the "name" property inside the block children
+			isTargetAction := false
 			for _, child := range block.Children {
-				if child.Key == "execution_environment" {
-					if str, ok := child.Value.(string); ok {
-						return str, nil
+				if child.Key == "name" {
+					if val, ok := child.Value.(string); ok && val == actionName {
+						isTargetAction = true
+						break
 					}
 				}
+			}
+
+			if isTargetAction {
+				for _, child := range block.Children {
+					if child.Key == "execution_environment" {
+						if str, ok := child.Value.(string); ok {
+							return str, nil
+						}
+					}
+				}
+				// Default to server if name matches but no env specified
+				return "server", nil
 			}
 		}
 	}
