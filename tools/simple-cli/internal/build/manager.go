@@ -222,7 +222,7 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		go func() {
 			defer wg.Done()
 			report("Bundling (Async)...")
-			asyncBundleErr = BundleAsyncFunc(actionDir, "index.ts", asyncBundle)
+			asyncBundleErr = BundleAsyncFunc(actionDir, "src/index.ts", asyncBundle)
 		}()
 	}
 	wg.Wait()
