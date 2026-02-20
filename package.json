@@ -1,7 +1,7 @@
 {
   "name": "@simple/tools",
   "type": "module",
-  "packageManager": "pnpm@10.28.2",
+  "packageManager": "pnpm@10.30.0",
   "description": "Simple Platform Tools",
   "license": "Apache-2.0",
   "prepare": "is-ci || npx simple-git-hooks",
