@@ -1,0 +1,6 @@
+set dev_simple_system.space, {{.SpaceNameScl}} {
+  name "{{.SpaceName}}"
+  display_name "{{.DisplayName}}"
+  description "{{.Description}}"
+  is_active true
+}

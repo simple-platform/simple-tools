@@ -150,6 +150,15 @@ func (c *FileCollector) collectPaths(appPath string) ([]string, error) {
 		}
 	}
 
+	// Spaces - dist/ build outputs only (source not deployed)
+	spacesDir := filepath.Join(appPath, "spaces")
+	spaceEntries, _ := os.ReadDir(spacesDir)
+	for _, entry := range spaceEntries {
+		if entry.IsDir() {
+			paths = append(paths, c.globFiles(appPath, filepath.Join("spaces", entry.Name(), "dist"))...)
+		}
+	}
+
 	return paths, nil
 }
 

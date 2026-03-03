@@ -15,4 +15,5 @@ YOU MUST READ `AGENTS.md` BEFORE ATTEMPTING ANY TASK.
 # COMMAND MAPPING
 *   "Create App" -> `simple new app`
 *   "Add Logic" -> `simple new action`
+*   "Create Custom UI / Frontend" -> `simple new space`
 *   "Deploy" -> `simple deploy`

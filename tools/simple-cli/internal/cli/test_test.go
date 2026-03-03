@@ -108,3 +108,25 @@ func TestTestCmd_BehaviorNotFound(t *testing.T) {
 		t.Errorf("Unexpected error: %v", err)
 	}
 }
+
+func TestTestCmd_SpaceNotFound(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Setup monorepo structure
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	_ = os.MkdirAll(filepath.Join(appDir, "spaces"), 0755)
+
+	oldWd, _ := os.Getwd()
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	args := []string{"test", "com.example.test", "--space", "missing-space"}
+	_, _, err := invokeTestCmd(args...)
+
+	if err == nil {
+		t.Error("Expected error for missing space")
+	}
+	if !strings.Contains(err.Error(), "space not found") {
+		t.Errorf("Unexpected error: %v", err)
+	}
+}

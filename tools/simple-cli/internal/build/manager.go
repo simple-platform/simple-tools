@@ -64,6 +64,10 @@ func NewBuildManager(opts BuildOptions) *BuildManager {
 	}
 }
 
+func (m *BuildManager) BuildConcurrency() int {
+	return m.options.Concurrency
+}
+
 func (m *BuildManager) EnsureTools(onProgress ProgressReporter) error {
 	m.toolsOnce.Do(func() {
 		var wg sync.WaitGroup

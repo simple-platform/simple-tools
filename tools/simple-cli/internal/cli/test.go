@@ -16,13 +16,14 @@ import (
 var testCmd = &cobra.Command{
 	Use:   "test [app-id]",
 	Short: "Run tests for applications",
-	Long: `Run Vitest tests for applications, actions, or record behaviors.
+	Long: `Run Vitest tests for applications, actions, spaces, or record behaviors.
 
 Examples:
   simple test                        # Run all tests
   simple test com.mycompany.crm      # Run tests for a specific app
   simple test com.mycompany.crm -a send-email    # Run tests for specific action
   simple test com.mycompany.crm -b order         # Run tests for specific behavior
+  simple test com.mycompany.crm -s analytics     # Run tests for specific space
 `,
 	// Limit to at most 1 argument (the app-id)
 	Args: cobra.MaximumNArgs(1),
@@ -32,6 +33,7 @@ Examples:
 func init() {
 	testCmd.Flags().StringP("action", "a", "", "Run tests for a specific action")
 	testCmd.Flags().StringP("behavior", "b", "", "Run tests for a specific record behavior")
+	testCmd.Flags().StringP("space", "s", "", "Run tests for a specific space")
 	testCmd.Flags().Bool("coverage", false, "Enable test coverage reporting")
 	testCmd.Flags().Bool("json", false, "Output results in JSON format")
 
@@ -43,6 +45,7 @@ func init() {
 func runTest(cmd *cobra.Command, args []string) error {
 	actionName, _ := cmd.Flags().GetString("action")
 	behaviorName, _ := cmd.Flags().GetString("behavior")
+	spaceName, _ := cmd.Flags().GetString("space")
 	coverage, _ := cmd.Flags().GetBool("coverage")
 	jsonMode, _ := cmd.Flags().GetBool("json")
 
@@ -62,7 +65,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("app not found: %s", appID)
 		}
 
-		// Narrow down to specific action or behavior if flags are set
+		// Narrow down to specific action, behavior, or space if flags are set
 		if actionName != "" {
 			targetPath = filepath.Join(targetPath, "actions", actionName)
 			if !scaffold.PathExists(fsys, targetPath) {
@@ -73,6 +76,11 @@ func runTest(cmd *cobra.Command, args []string) error {
 			targetPath = filepath.Join(targetPath, "scripts", "record-behaviors", behaviorName+".test.js")
 			if !scaffold.PathExists(fsys, targetPath) {
 				return fmt.Errorf("behavior test not found: %s in app %s", behaviorName, appID)
+			}
+		} else if spaceName != "" {
+			targetPath = filepath.Join(targetPath, "spaces", spaceName)
+			if !scaffold.PathExists(fsys, targetPath) {
+				return fmt.Errorf("space not found: %s in app %s", spaceName, appID)
 			}
 		}
 	} else {
