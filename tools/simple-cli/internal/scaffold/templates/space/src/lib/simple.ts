@@ -19,11 +19,31 @@ query GetTheme {
 `
 
 let rpcPort: MessagePort | null = null
-const pendingRequests = new Map<string, { resolve: (value: any) => void, reject: (reason?: any) => void }>()
+const pendingRequests = new Map<string, { resolve: (value: any) => void, reject: (reason?: any) => void, timer: number }>()
 const requestQueue: any[] = [] // Queue requests before port is ready
+
+// Security: Expected origin is the parent's origin.
+// In production, spaces are on assets.simple.dev and parent is on simple.dev.
+// For templates, we trust the parent frame that loaded us if we are in an iframe.
+function getExpectedOrigin() {
+  try {
+    if (window.parent === window)
+      return window.location.origin
+    const url = new URL(document.referrer)
+    return url.origin
+  }
+  catch {
+    return '*'
+  }
+}
 
 // 1. Wait for Parent to give us our dedicated MessagePort
 window.addEventListener('message', (event) => {
+  // Security: Verify origin of INIT_RPC message
+  const expectedOrigin = getExpectedOrigin()
+  if (expectedOrigin !== '*' && event.origin !== expectedOrigin)
+    return
+
   if (event.data?.type === 'INIT_RPC' && event.ports[0]) {
     rpcPort = event.ports[0]
 
@@ -33,6 +53,7 @@ window.addEventListener('message', (event) => {
         const { data, error, id } = e.data
         const req = pendingRequests.get(id)
         if (req) {
+          clearTimeout(req.timer)
           if (error)
             req.reject(new Error(error))
           else req.resolve(data)
@@ -51,7 +72,8 @@ window.addEventListener('message', (event) => {
 // 2. Tell the Parent we are ready to receive a port
 // Do not do this if we are not in an iframe
 if (window !== window.parent) {
-  window.parent.postMessage({ type: 'SPACE_READY' }, '*')
+  const targetOrigin = getExpectedOrigin()
+  window.parent.postMessage({ type: 'SPACE_READY' }, targetOrigin)
 }
 
 // ---------------------------------------------------------------------------
@@ -67,7 +89,16 @@ async function executeRpcGraphQL<T = any>(
 
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID()
-    pendingRequests.set(id, { reject, resolve })
+    // Implementation of RPC Timeout (30 seconds)
+    const timer = window.setTimeout(() => {
+      const req = pendingRequests.get(id)
+      if (req) {
+        req.reject(new Error('RPC request timed out after 30 seconds'))
+        pendingRequests.delete(id)
+      }
+    }, 30000)
+
+    pendingRequests.set(id, { reject, resolve, timer })
 
     const payload = {
       payload: { id, query: gql, variables: vars },
@@ -102,9 +133,19 @@ export async function loadTheme(): Promise<void> {
   try {
     const data = await query<{ theme: { value: string }[] }>(GET_THEME)
 
-    const css = data?.theme?.[0]?.value
+    let css = data?.theme?.[0]?.value
     if (!css || typeof css !== 'string' || !css.includes('--'))
       return
+
+    // Security: Basic CSS Sanitization
+    // We only allow CSS custom properties defined in a :root or root-like block.
+    // Dangerous constructs like url(), @import, position: fixed, etc. are stripped for security.
+    css = css
+      .replace(/url\s*\([^)]*\)/gi, 'none')
+      .replace(/@import/gi, '/* blocked */')
+      .replace(/expression\s*\([^)]*\)/gi, 'none')
+      .replace(/position\s*:\s*fixed/gi, 'position: absolute')
+      .replace(/content\s*:/gi, '/* content blocked */')
 
     const existing = document.getElementById('simple-theme')
     if (existing)

@@ -35,9 +35,12 @@ func TestFindSpaces(t *testing.T) {
 	}
 
 	createFile(t, filepath.Join(spacesDir, "space1", "package.json"))
+	createFile(t, filepath.Join(spacesDir, "space1", "vite.config.ts"))
 	createFile(t, filepath.Join(spacesDir, "space2", "package.json"))
+	createFile(t, filepath.Join(spacesDir, "space2", "index.html"))
 	createFile(t, filepath.Join(spacesDir, "not_space", "file.txt"))
 	createFile(t, filepath.Join(spacesDir, "nested", "space3", "package.json"))
+	createFile(t, filepath.Join(spacesDir, "nested", "space3", "vite.config.ts")) // Doesn't matter since not recursive
 
 	spaces, err := FindSpaces(appDir)
 	if err != nil {
@@ -80,8 +83,9 @@ func TestIsSpaceDir(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	createFile(t, filepath.Join(tmpDir, "package.json"))
+	createFile(t, filepath.Join(tmpDir, "vite.config.ts"))
 	if !IsSpaceDir(tmpDir) {
-		t.Error("IsSpaceDir() = false for dir with package.json")
+		t.Error("IsSpaceDir() = false for dir with package.json and vite.config.ts")
 	}
 
 	tmpDir2 := t.TempDir()

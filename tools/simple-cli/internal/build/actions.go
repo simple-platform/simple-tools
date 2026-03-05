@@ -33,13 +33,22 @@ func FindActions(appDir string) ([]string, error) {
 }
 
 func IsActionDir(path string) bool {
-	// Check for action.scl
+	// Check for action.scl - this is the definitive indicator of an action
 	if _, err := os.Stat(filepath.Join(path, "action.scl")); err == nil {
 		return true
 	}
-	// Check for package.json
+
+	// Check for package.json, but ensure it's not a Space
 	if _, err := os.Stat(filepath.Join(path, "package.json")); err == nil {
+		// If it's a Space (has vite.config.ts or index.html), it's not an Action
+		if _, err := os.Stat(filepath.Join(path, "vite.config.ts")); err == nil {
+			return false
+		}
+		if _, err := os.Stat(filepath.Join(path, "index.html")); err == nil {
+			return false
+		}
 		return true
 	}
+
 	return false
 }

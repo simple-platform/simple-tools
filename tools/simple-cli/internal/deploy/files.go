@@ -3,6 +3,7 @@ package deploy
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -134,7 +135,11 @@ func (c *FileCollector) collectPaths(appPath string) ([]string, error) {
 
 	// Actions - only WASM build outputs
 	actionsDir := filepath.Join(appPath, "actions")
-	entries, _ := os.ReadDir(actionsDir)
+	entries, err := os.ReadDir(actionsDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to read actions directory: %w", err)
+	}
+
 	for _, entry := range entries {
 		if entry.IsDir() {
 			// release.wasm
@@ -152,7 +157,11 @@ func (c *FileCollector) collectPaths(appPath string) ([]string, error) {
 
 	// Spaces - dist/ build outputs only (source not deployed)
 	spacesDir := filepath.Join(appPath, "spaces")
-	spaceEntries, _ := os.ReadDir(spacesDir)
+	spaceEntries, err := os.ReadDir(spacesDir)
+	if err != nil && !os.IsNotExist(err) {
+		return nil, fmt.Errorf("failed to read spaces directory: %w", err)
+	}
+
 	for _, entry := range spaceEntries {
 		if entry.IsDir() {
 			paths = append(paths, c.globFiles(appPath, filepath.Join("spaces", entry.Name(), "dist"))...)
@@ -169,7 +178,7 @@ func (c *FileCollector) globFiles(appPath, dir string) []string {
 
 	_ = filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
-			return nil // Skip errors
+			return err
 		}
 		if d.IsDir() {
 			// Skip coverage directories

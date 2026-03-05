@@ -39,9 +39,18 @@ func FindSpaces(appDir string) ([]string, error) {
 
 func IsSpaceDir(path string) bool {
 	// A space directory must contain a package.json
-	if _, err := os.Stat(filepath.Join(path, "package.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(path, "package.json")); err != nil {
+		return false
+	}
+
+	// It must also contain Vite-specific files to distinguish it from a JS action
+	if _, err := os.Stat(filepath.Join(path, "vite.config.ts")); err == nil {
 		return true
 	}
+	if _, err := os.Stat(filepath.Join(path, "index.html")); err == nil {
+		return true
+	}
+
 	return false
 }
 
