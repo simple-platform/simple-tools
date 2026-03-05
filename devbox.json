@@ -5,7 +5,7 @@
   },
   "packages": {
     "nodejs": "25.5.0",
-    "go": "1.25.5",
+    "go": "1.26.0",
     "golangci-lint": "2.8.0",
     "erlang": "27.2",
     "elixir": "1.18.1",
