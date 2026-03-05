@@ -1,10 +1,17 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"time"
+
+	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
 
@@ -73,8 +80,13 @@ func runTest(cmd *cobra.Command, args []string) error {
 			}
 		} else if behaviorName != "" {
 			// Behaviors are scripts specifically in scripts/record-behaviors
-			targetPath = filepath.Join(targetPath, "scripts", "record-behaviors", behaviorName+".test.js")
+			targetPath = filepath.Join(targetPath, "scripts", "record-behaviors")
 			if !scaffold.PathExists(fsys, targetPath) {
+				return fmt.Errorf("behavior tests not found in app %s", appID)
+			}
+			// Validate the specific behavior test file exists
+			testFile := filepath.Join(targetPath, behaviorName+".test.js")
+			if !scaffold.PathExists(fsys, testFile) {
 				return fmt.Errorf("behavior test not found: %s in app %s", behaviorName, appID)
 			}
 		} else if spaceName != "" {
@@ -88,60 +100,221 @@ func runTest(cmd *cobra.Command, args []string) error {
 		targetPath = "apps"
 	}
 
-	// Resolve absolute target path to ensure vitest runs in the correct context
+	// Resolve absolute target path to ensure we can verify it exists
 	absTarget, err := filepath.Abs(targetPath)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path: %w", err)
 	}
 
-	// Construct Vitest command arguments
+	// Phase 1: Discover all testable directories within the target path
+	var testDirs []string
+
+	// If the target is exactly an action, space, or scripts dir, test it directly
+	if filepath.Base(filepath.Dir(absTarget)) == "actions" || filepath.Base(filepath.Dir(absTarget)) == "spaces" || filepath.Base(absTarget) == "record-behaviors" {
+		testDirs = append(testDirs, targetPath) // Store the relative path
+	} else {
+		// Traverse targetPath to find all action, space, and behavior script directories
+		// e.g. target is "apps" or "apps/com.example.app"
+		appsToScan := []string{targetPath}
+
+		// If target is "apps", collect all individual apps
+		if filepath.Base(targetPath) == "apps" {
+			appsToScan = []string{}
+			entries, err := fsys.ReadDir(targetPath)
+			if err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						appsToScan = append(appsToScan, filepath.Join(targetPath, entry.Name()))
+					}
+				}
+			}
+		}
+
+		// Gather testable subdirectories for each app
+		for _, appDir := range appsToScan {
+			// Actions
+			actionsDir := filepath.Join(appDir, "actions")
+			if entries, err := fsys.ReadDir(actionsDir); err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						testDirs = append(testDirs, filepath.Join(actionsDir, entry.Name()))
+					}
+				}
+			}
+			// Spaces
+			spacesDir := filepath.Join(appDir, "spaces")
+			if entries, err := fsys.ReadDir(spacesDir); err == nil {
+				for _, entry := range entries {
+					if entry.IsDir() {
+						testDirs = append(testDirs, filepath.Join(spacesDir, entry.Name()))
+					}
+				}
+			}
+			// Record Behaviors (one test suite per app realistically)
+			behaviorsDir := filepath.Join(appDir, "scripts", "record-behaviors")
+			if scaffold.PathExists(fsys, behaviorsDir) {
+				// Only add if there are actual test files, otherwise vitest exits 1
+				hasTests := false
+				if entries, err := fsys.ReadDir(behaviorsDir); err == nil {
+					for _, e := range entries {
+						if strings.HasSuffix(e.Name(), ".test.js") || strings.HasSuffix(e.Name(), ".test.ts") {
+							hasTests = true
+							break
+						}
+					}
+				}
+				if hasTests {
+					testDirs = append(testDirs, behaviorsDir)
+				}
+			}
+		}
+	}
+
+	if len(testDirs) == 0 {
+		if jsonMode {
+			fmt.Println(`{"status":"success","message":"No tests found"}`)
+		} else {
+			fmt.Println("No tests found to run.")
+		}
+		return nil
+	}
+
+	// Construct Vitest command arguments base
 	reporterFlag := "--reporter=verbose"
 	if jsonMode {
 		reporterFlag = "--reporter=json"
 	}
 
-	// Strategy: Prefer local vitest binary in node_modules/.bin for version consistency.
-	// 1. Check target's node_modules (if inside an app)
-	// 2. Check root node_modules
-	// 3. Fallback to npx (system wide or on-demand install)
-	vitestBin := filepath.Join(absTarget, "node_modules", ".bin", "vitest")
+	var passed, failed int
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	// If not found in target, fallback to root node_modules (common in monorepos)
-	if _, err := os.Stat(vitestBin); os.IsNotExist(err) {
-		cwd, _ := os.Getwd()
-		vitestBin = filepath.Join(cwd, "node_modules", ".bin", "vitest")
+	// Limit concurrency to NumCPU
+	limit := runtime.NumCPU()
+	if limit < 1 {
+		limit = 1
+	}
+	sem := make(chan struct{}, limit)
+
+	for _, tDir := range testDirs {
+		wg.Add(1)
+		go func(tDir string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			var fullArgs []string
+
+			hasPackageJSON := scaffold.PathExists(fsys, filepath.Join(tDir, "package.json"))
+
+			// Use `npm run test` for directories containing a package.json (Actions and Spaces).
+			// This ensures package managers (npm/pnpm/yarn) naturally map their own
+			// workspace resolution graphs for hoisted dependencies like @simpleplatform/sdk.
+			if hasPackageJSON && behaviorName == "" {
+				// Only install dependencies if the node_modules directory is completely missing
+				hasNodeModules := scaffold.PathExists(fsys, filepath.Join(tDir, "node_modules"))
+				if !hasNodeModules {
+					if err := build.EnsureDependenciesFunc(tDir); err != nil {
+						mu.Lock()
+						if !jsonMode {
+							fmt.Printf("Error installing dependencies for %s: %v\n", filepath.Base(tDir), err)
+						}
+						failed++
+						mu.Unlock()
+						return
+					}
+				}
+
+				fullArgs = []string{"npm", "run", "test", "--"}
+				if jsonMode {
+					fullArgs = append(fullArgs, "--reporter=json")
+				} else {
+					fullArgs = append(fullArgs, "--reporter=verbose")
+				}
+				if coverage {
+					fullArgs = append(fullArgs, "--coverage")
+				}
+			} else {
+				// Fallback for record-behaviors or targets without a package.json test script
+				var vitestBin string
+				localBin := filepath.Join(tDir, "node_modules", ".bin", "vitest")
+				if _, err := os.Stat(localBin); err == nil {
+					vitestBin = localBin
+				} else {
+					cwd, _ := os.Getwd()
+					rootBin := filepath.Join(cwd, "node_modules", ".bin", "vitest")
+					if _, err := os.Stat(rootBin); err == nil {
+						vitestBin = rootBin
+					}
+				}
+
+				if vitestBin != "" {
+					fullArgs = []string{vitestBin, "run", reporterFlag}
+				} else {
+					fullArgs = []string{"npx", "vitest", "run", reporterFlag}
+				}
+
+				if coverage {
+					fullArgs = append(fullArgs, "--coverage")
+				}
+
+				if behaviorName != "" && filepath.Base(tDir) == "record-behaviors" {
+					fullArgs = append(fullArgs, behaviorName+".test.js")
+				}
+			}
+
+			// Execute FROM the target directory
+			execCmd := exec.Command(fullArgs[0], fullArgs[1:]...)
+			execCmd.Dir = tDir
+
+			// Vitest strips colors if not directly attached to a TTY.
+			// Force colors so the captured combined output retains syntax highlighting.
+			execCmd.Env = append(os.Environ(), "FORCE_COLOR=1")
+
+			var stdoutBuf bytes.Buffer
+			var stderrBuf bytes.Buffer
+			execCmd.Stdout = &stdoutBuf
+			execCmd.Stderr = &stderrBuf
+
+			startTime := time.Now()
+			err := execCmd.Run()
+			duration := time.Since(startTime)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if !jsonMode {
+				fmt.Printf("\n==> Testing %s (took %v)\n", filepath.Base(tDir), duration.Round(time.Millisecond))
+
+				// Always print standard output which contains the pretty Vitest reporting
+				if stdoutBuf.Len() > 0 {
+					fmt.Print(stdoutBuf.String())
+				}
+
+				// Only print stderr if the test actually errored (or if we need to see warnings?)
+				// Often Vitest sends warnings to stderr even during successful runs,
+				// but let's dump it if things failed to assist debugging.
+				if err != nil && stderrBuf.Len() > 0 {
+					fmt.Print(stderrBuf.String())
+				}
+			}
+
+			if err != nil {
+				failed++
+			} else {
+				passed++
+			}
+		}(tDir)
 	}
 
-	var fullArgs []string
-	if _, err := os.Stat(vitestBin); err == nil {
-		// Found binary, use absolute path to avoid ambiguity
-		fullArgs = []string{vitestBin, "run", reporterFlag}
-	} else {
-		// Fallback to npx to attempt execution using package.json dependencies
-		fullArgs = []string{"npx", "vitest", "run", reporterFlag}
+	wg.Wait()
+
+	if failed > 0 {
+		return fmt.Errorf("%d/%d test suites failed", failed, passed+failed)
 	}
 
-	if coverage {
-		fullArgs = append(fullArgs, "--coverage")
-	}
-
-	// Log command for transparency, unless in JSON mode where stdout must strictly be JSON
 	if !jsonMode {
-		fmt.Printf("Running: %v in %s\n", fullArgs, absTarget)
+		fmt.Printf("\n✅ All %d test suites passed.\n", passed)
 	}
-
-	execCmd := exec.Command(fullArgs[0], fullArgs[1:]...)
-	execCmd.Dir = absTarget // Set working directory to the target (or app root)
-	execCmd.Stdout = os.Stdout
-	execCmd.Stderr = os.Stderr
-
-	if err := execCmd.Run(); err != nil {
-		// Preserve vitest exit code if possible
-		if exitError, ok := err.(*exec.ExitError); ok {
-			os.Exit(exitError.ExitCode())
-		}
-		return fmt.Errorf("failed to run tests: %w", err)
-	}
-
 	return nil
 }

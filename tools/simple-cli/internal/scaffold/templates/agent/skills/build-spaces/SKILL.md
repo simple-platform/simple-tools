@@ -13,21 +13,27 @@ description: Guide to building custom React-based Spaces in Simple.
 
 ## 2. Directory Structure
 
-Spaces reside in the `spaces/` directory of an app:
+Spaces reside in the `spaces/` directory of an app within the `client-bnv` repository:
 
 ```
 apps/<app-id>/spaces/<space-name>/
 ├── package.json      # Dependencies (React, Vite)
 ├── vite.config.ts    # Vite bundler config
 ├── index.html        # Entry HTML
+├── tests/
+│   └── App.test.tsx  # Unit test for App component
 └── src/
+    ├── lib/
+    │   └── simple.ts # RPC SDK (auto-generated, do not modify)
+    ├── styles/
+    │   └── theme.css # Theme CSS variables
     ├── App.tsx       # Main React component
     └── main.tsx      # React DOM entry point
 ```
 
 ## 3. Scaffolding a Space
 
-Use the Simple CLI to generate a new space:
+Use the Simple CLI to generate a new space. The CLI should ONLY be used within the `client-bnv` repository as that is where apps and packages are deployed:
 
 ```bash
 simple new space <app-id> <space-name> <display-name>
@@ -35,22 +41,23 @@ simple new space <app-id> <space-name> <display-name>
 
 Example: `simple new space com.acme.crm customer-portal "Customer Portal"`
 
-## 4. API Communication
+## 4. API Communication (Secure RPC)
 
-To interact with Simple's backend, spaces use standard HTTP requests (e.g., built-in `fetch` or Axios). The environment injects necessary context (like authentication tokens or API URLs) when rendering the Space in an iframe.
+Spaces operate in an isolated, secure iframe served from `assets.simple.dev` with a strict Content Security Policy (CSP) that blocks external requests by default. Spaces _do not_ possess the parent application's authentication cookies.
+
+Therefore, Space developers **MUST NOT** use raw `fetch()` to query the Simple Backend. Instead, they must use the generated MessageChannel RPC SDK (`src/lib/simple.ts`), which asks the secure parent frame to resolve the query on its behalf.
 
 ### Fetching Data via GraphQL
 
+Use the `query` and `mutate` functions provided by the local Simple SDK.
+
 ```tsx
 import { useEffect, useState } from 'react'
+import { query } from './lib/simple'
 
 const GET_CUSTOMERS = `
   query GetCustomers {
-    customer {
-      id
-      first_name
-      last_name
-    }
+    customer { id first_name last_name }
   }
 `
 
@@ -59,24 +66,10 @@ function CustomerList() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    async function fetchCustomers() {
-      try {
-        const response = await fetch('/api/graphql', {
-          body: JSON.stringify({ query: GET_CUSTOMERS }),
-          headers: { 'Content-Type': 'application/json' },
-          method: 'POST'
-        })
-        const result = await response.json()
-        setData(result.data.customer || [])
-      }
-      catch (err) {
-        console.error(err)
-      }
-      finally {
-        setLoading(false)
-      }
-    }
-    fetchCustomers()
+    query(GET_CUSTOMERS)
+      .then(result => setData(result?.customer || []))
+      .catch(err => console.error('RPC Query Failed', err))
+      .finally(() => setLoading(false))
   }, [])
 
   if (loading)
@@ -96,55 +89,65 @@ function CustomerList() {
 }
 ```
 
-### Calling Actions
+### Mutations (Insert, Update, Delete)
 
-Custom Logic/Actions can be invoked via Simple's Action API.
+Use the `mutate` function for standard GraphQL mutations:
 
 ```tsx
-import { useState } from 'react'
+import { mutate } from './lib/simple'
 
-function ProcessButton({ orderId }: { orderId: string }) {
-  const [loading, setLoading] = useState(false)
-
-  const handleProcess = async () => {
-    setLoading(true)
-    try {
-      const response = await fetch(`/api/actions/process-order`, {
-        body: JSON.stringify({ order_id: orderId }),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST'
-      })
-      if (response.ok) {
-        alert('Order processed successfully!')
-      }
-      else {
-        throw new Error('Action failed')
-      }
-    }
-    catch (err) {
-      console.error(err)
-    }
-    finally {
-      setLoading(false)
-    }
+const INSERT_TASK = `
+  mutation InsertTask($title: String!) {
+    insert_my_app__task(object: { title: $title }) { id title }
   }
+`
 
-  return (
-    <button onClick={handleProcess} disabled={loading}>
-      {loading ? 'Processing...' : 'Process Order'}
-    </button>
-  )
+async function createTask(title: string) {
+  const result = await mutate(INSERT_TASK, { title })
+  return result?.insert_my_app__task
 }
 ```
 
-## 5. Local Development and Building
+> **Note:** Custom Logic (Actions) cannot be invoked from Spaces at this time. Only pure GraphQL queries and mutations (insert, update, delete) are supported.
 
-- **Dev Server:** Run `npm run dev` (or `pnpm dev`) inside the space directory to start the Vite development server.
-- **Building:** The `simple build` command at the workspace root automatically compiles all spaces for production deployment. You can also run `npm run build` directly inside the space directory.
+### Accessing External APIs
+
+If your Space needs to load images or make requests to external domains, you must declare those domains in the space's `permissions` field in `10_spaces.scl`. The parent app reads this JSON and injects it into the `<iframe csp="...">` attribute at runtime.
+
+Wildcard subdomains are supported using the `*.` prefix (e.g., `https://*.amazonaws.com`).
+
+````scl
+var my_space_permissions {
+  value ```
+  {
+    "network": ["https://api.stripe.com", "https://*.example.com"],
+    "images": ["https://*.amazonaws.com", "https://avatars.githubusercontent.com"]
+  }
+  ```
+}
+
+set dev_simple_system.space, my_space {
+  permissions `$var('my_space_permissions') |> $json()`
+  # ... other fields
+}
+````
+
+Once declared, you may then use standard `fetch()` for _those specific external domains_, and the browser's CSP engine will permit it.
+
+## 5. Building, Testing, and Deploying
+
+All commands are run from the `client-bnv` repository root using the `simple` CLI:
+
+- **Building:** `simple build` compiles all apps including their spaces.
+- **Testing:** `simple test` runs all tests including space unit tests.
+- **Deploying:** `simple deploy <app-id>` deploys the app and its spaces to a dev instance.
+
+> **Note:** There is currently no local live-preview for Spaces. To preview and debug a Space, deploy the app to a dev instance and load the deployed Space in the browser.
 
 ## 6. Best Practices
 
 - **UI Components:** Build reusable React components for a consistent look and feel across your space.
-- **Error Handling:** Always handle loading and error states returned by the SDK hooks to provide good UX.
-- **State Management:** For complex State, combine React Context or Redux with the data fetching capabilities of the Simple SDK.
-- **Styling:** If building complex interfaces, consider utilizing a robust UI library (like Material-UI, Chakra UI, or Radix UI + Tailwind) to speed up development.
+- **Error Handling:** Always handle loading and error states for queries and mutations to provide good UX.
+- **State Management:** For complex state, combine React Context or a state management library with the `query`/`mutate` SDK functions.
+- **Styling:** Consider a robust UI library (Material-UI, Chakra UI, Radix UI, etc.) for complex interfaces.
+- **SDK:** Never modify `src/lib/simple.ts` — it is auto-generated by the scaffold. Use only the exported `query` and `mutate` functions.

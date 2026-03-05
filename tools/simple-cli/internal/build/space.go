@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 )
 
+var ExecCommandFunc = exec.Command
+
 // FindSpaces searches for space directories within an app directory.
 // It looks for directories containing 'package.json' inside the 'spaces' subdirectory.
 func FindSpaces(appDir string) ([]string, error) {
@@ -69,11 +71,12 @@ func (m *BuildManager) BuildSpace(ctx context.Context, spaceDir string, onProgre
 
 	// Default vite build puts output in dist/ directory.
 	// We'll run `npm run build` which should be defined in package.json
-	cmd := exec.Command("npm", "run", "build")
+	cmd := ExecCommandFunc("npm", "run", "build")
 	cmd.Dir = spaceDir
 
-	if !m.options.Verbose {
-		// Output is suppressed if not in verbose mode, but we'll collect it on error
+	if !m.options.Verbose || onProgress != nil {
+		// Output is suppressed if not in verbose mode OR if using progress UI,
+		// but we'll collect it on error
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			report("Failed")
@@ -83,7 +86,7 @@ func (m *BuildManager) BuildSpace(ctx context.Context, spaceDir string, onProgre
 			}
 		}
 	} else {
-		// In verbose mode, pipe output to standard outputs
+		// In verbose mode without progress UI, pipe output to standard outputs
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		if err := cmd.Run(); err != nil {

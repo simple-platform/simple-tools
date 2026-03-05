@@ -24,15 +24,17 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 
 	mockTpl := &fsx.MockTemplateFS{
 		Files: map[string][]byte{
-			"templates/space/package.json":       []byte(`{"name": "{{.SpaceName}}"}`),
-			"templates/space/vite.config.ts":     []byte(`// vite config`),
-			"templates/space/vitest.config.ts":   []byte(`// vitest config`),
-			"templates/space/tsconfig.json":      []byte(`// ts config`),
-			"templates/space/index.html":         []byte(`<title>{{.DisplayName}}</title>`),
-			"templates/space/src/main.tsx":       []byte(`// main`),
-			"templates/space/src/App.tsx":        []byte(`<h1>{{.DisplayName}}</h1>`),
-			"templates/space/tests/App.test.tsx": []byte(`// test`),
-			"templates/space/10_spaces.scl":      []byte("set dev_simple_system.space, {{.SpaceNameScl}} { display_name \"{{.DisplayName}}\" }"),
+			"templates/space/package.json":         []byte(`{"name": "{{.SpaceName}}"}`),
+			"templates/space/vite.config.ts":       []byte(`// vite config`),
+			"templates/space/vitest.config.ts":     []byte(`// vitest config`),
+			"templates/space/tsconfig.json":        []byte(`// ts config`),
+			"templates/space/index.html":           []byte(`<title>{{.DisplayName}}</title>`),
+			"templates/space/src/lib/simple.ts":    []byte(`// simple sdk`),
+			"templates/space/src/styles/theme.css": []byte(`/* theme */`),
+			"templates/space/src/main.tsx":         []byte(`// main`),
+			"templates/space/src/App.tsx":          []byte(`<h1>{{.DisplayName}}</h1>`),
+			"templates/space/tests/App.test.tsx":   []byte(`// test`),
+			"templates/space/10_spaces.scl":        []byte("set dev_simple_system.space, {{.SpaceNameScl}} { display_name \"{{.DisplayName}}\" }"),
 		},
 	}
 
@@ -228,5 +230,138 @@ func TestAppendSpaceRecord_AppendToExisting(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "new-space") {
 		t.Errorf("Expected new space added, got: %s", string(content))
+	}
+}
+
+func TestAppendSpaceRecord_MissingTemplate(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn: func(name string) bool { return false },
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		ReadFileErr: errors.New("template not found"),
+	}
+
+	data := map[string]string{"SpaceName": "test"}
+	err := appendSpaceRecord(mockFS, mockTpl, "/path/10_spaces.scl", data)
+	if err == nil {
+		t.Fatal("Expected error for missing template")
+	}
+	if !strings.Contains(err.Error(), "failed to read space template") {
+		t.Errorf("Expected 'failed to read space template' error, got: %v", err)
+	}
+}
+
+func TestAppendSpaceRecord_BadTemplate(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn: func(name string) bool { return false },
+	}
+
+	// Invalid Go template syntax
+	mockTpl := &fsx.MockTemplateFS{
+		Files: map[string][]byte{
+			"templates/space/10_spaces.scl": []byte("{{.Invalid"),
+		},
+	}
+
+	data := map[string]string{"SpaceName": "test"}
+	err := appendSpaceRecord(mockFS, mockTpl, "/path/10_spaces.scl", data)
+	if err == nil {
+		t.Fatal("Expected error for bad template")
+	}
+	if !strings.Contains(err.Error(), "failed to parse space template") {
+		t.Errorf("Expected 'failed to parse space template' error, got: %v", err)
+	}
+}
+
+func TestAppendSpaceRecord_ReadFileError(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn:  func(name string) bool { return true }, // File "exists"
+		readErr: errors.New("disk read error"),
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		Files: map[string][]byte{
+			"templates/space/10_spaces.scl": []byte("set space, {{.SpaceName}}"),
+		},
+	}
+
+	data := map[string]string{"SpaceName": "test"}
+	err := appendSpaceRecord(mockFS, mockTpl, "/path/10_spaces.scl", data)
+	if err == nil {
+		t.Fatal("Expected error for ReadFile failure")
+	}
+	if !strings.Contains(err.Error(), "failed to read existing") {
+		t.Errorf("Expected 'failed to read existing' error, got: %v", err)
+	}
+}
+
+func TestAppendSpaceRecord_WriteFileError(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn:   func(name string) bool { return false },
+		writeErr: errors.New("disk write error"),
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		Files: map[string][]byte{
+			"templates/space/10_spaces.scl": []byte("set space, {{.SpaceName}}"),
+		},
+	}
+
+	data := map[string]string{"SpaceName": "test"}
+	err := appendSpaceRecord(mockFS, mockTpl, "/path/10_spaces.scl", data)
+	if err == nil {
+		t.Fatal("Expected error for WriteFile failure")
+	}
+	if !strings.Contains(err.Error(), "failed to write") {
+		t.Errorf("Expected 'failed to write' error, got: %v", err)
+	}
+}
+
+func TestCreateSpaceStructure_RecordsDirError(t *testing.T) {
+	mockFS := &mockWriteTrackingFS{
+		statFn: func(name string) bool {
+			// App exists, SCL does not, space dir does not
+			if strings.Contains(name, "10_spaces.scl") {
+				return false
+			}
+			return strings.Contains(name, "apps/com.test") && !strings.Contains(name, "spaces/my-space")
+		},
+		mkdirFn: func(path string) error {
+			if strings.Contains(path, "records") {
+				return errors.New("permission denied on records")
+			}
+			return nil
+		},
+	}
+
+	mockTpl := &fsx.MockTemplateFS{
+		Files: map[string][]byte{
+			"templates/space/package.json":         []byte(`{}`),
+			"templates/space/vite.config.ts":       []byte(`// vite`),
+			"templates/space/vitest.config.ts":     []byte(`// vitest`),
+			"templates/space/tsconfig.json":        []byte(`{}`),
+			"templates/space/index.html":           []byte(`<html>`),
+			"templates/space/src/lib/simple.ts":    []byte(`// sdk`),
+			"templates/space/src/styles/theme.css": []byte(`/* theme */`),
+			"templates/space/src/main.tsx":         []byte(`// main`),
+			"templates/space/src/App.tsx":          []byte(`// app`),
+			"templates/space/tests/App.test.tsx":   []byte(`// test`),
+			"templates/space/10_spaces.scl":        []byte("set dev_simple_system.space, {{.SpaceNameScl}} {}"),
+		},
+	}
+
+	cfg := SpaceConfig{
+		AppID:       "com.test",
+		SpaceName:   "my-space",
+		DisplayName: "My Space",
+	}
+
+	err := CreateSpaceStructure(mockFS, mockTpl, "/root", cfg)
+	if err == nil {
+		t.Fatal("Expected error when records dir mkdir fails")
+	}
+	if !strings.Contains(err.Error(), "failed to create records directory") {
+		t.Errorf("Expected 'failed to create records directory' error, got: %v", err)
 	}
 }

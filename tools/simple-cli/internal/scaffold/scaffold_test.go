@@ -439,13 +439,14 @@ func TestAppendActionRecord_AppendToExisting(t *testing.T) {
 	}
 }
 
-// mockWriteTrackingFS is a custom mock that tracks writes and allows custom stat behavior
 type mockWriteTrackingFS struct {
 	written  map[string][]byte
 	files    map[string][]byte
 	statFn   func(string) bool
 	mkdirErr error
+	mkdirFn  func(string) error // More granular mkdir control
 	writeErr error
+	readErr  error
 }
 
 func (m *mockWriteTrackingFS) Stat(name string) (fs.FileInfo, error) {
@@ -456,6 +457,9 @@ func (m *mockWriteTrackingFS) Stat(name string) (fs.FileInfo, error) {
 }
 
 func (m *mockWriteTrackingFS) MkdirAll(path string, perm os.FileMode) error {
+	if m.mkdirFn != nil {
+		return m.mkdirFn(path)
+	}
 	if m.mkdirErr != nil {
 		return m.mkdirErr
 	}
@@ -473,6 +477,9 @@ func (m *mockWriteTrackingFS) WriteFile(name string, data []byte, perm os.FileMo
 }
 
 func (m *mockWriteTrackingFS) ReadFile(name string) ([]byte, error) {
+	if m.readErr != nil {
+		return nil, m.readErr
+	}
 	if m.files != nil {
 		if content, ok := m.files[name]; ok {
 			return content, nil

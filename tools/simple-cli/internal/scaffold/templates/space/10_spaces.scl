@@ -1,6 +1,16 @@
+var {{.SpaceNameScl}}_permissions {
+  value ```
+  {
+    "network": [],
+    "images": []
+  }
+  ```
+}
+
 set dev_simple_system.space, {{.SpaceNameScl}} {
   name "{{.SpaceName}}"
   display_name "{{.DisplayName}}"
   description "{{.Description}}"
   is_active true
+  permissions `$var('{{.SpaceNameScl}}_permissions') |> $json()`
 }
