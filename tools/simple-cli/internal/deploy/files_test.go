@@ -42,6 +42,15 @@ func TestFileCollector_CollectFiles(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(actionDir, "release.wasm"), []byte("wasm-bytes"), 0644)
 	_ = os.WriteFile(filepath.Join(actionDir, "release.async.wasm"), []byte("async-wasm"), 0644)
 
+	// Create space with dist/
+	spaceDir := filepath.Join(dir, "spaces", "my-space", "dist")
+	_ = os.MkdirAll(spaceDir, 0755)
+	_ = os.WriteFile(filepath.Join(spaceDir, "index.html"), []byte("<html>"), 0644)
+	
+	spaceAssetsDir := filepath.Join(spaceDir, "assets")
+	_ = os.MkdirAll(spaceAssetsDir, 0755)
+	_ = os.WriteFile(filepath.Join(spaceAssetsDir, "index-abc.js"), []byte("js-bundle"), 0644)
+
 	// Create assets directory
 	assetsDir := filepath.Join(dir, "assets")
 	_ = os.MkdirAll(assetsDir, 0755)
@@ -62,6 +71,8 @@ func TestFileCollector_CollectFiles(t *testing.T) {
 		"records/seed.json",
 		"actions/my-action/build/release.wasm",
 		"actions/my-action/build/release.async.wasm",
+		"spaces/my-space/dist/index.html",
+		"spaces/my-space/dist/assets/index-abc.js",
 		"assets/image.png",
 	}
 

@@ -31,12 +31,12 @@ type Model struct {
 }
 
 func NewModel(toolNames []string) Model {
-	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
-
 	tools := make(map[string]*toolState)
 	for _, name := range toolNames {
+		s := spinner.New()
+		s.Spinner = spinner.Dot
+		s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+
 		tools[name] = &toolState{
 			name:    name,
 			status:  "Waiting...",
@@ -109,14 +109,16 @@ func (m Model) View() string {
 
 	for _, key := range m.keys {
 		state := m.tools[key]
+		// Pad status to ensure it overwrites longer previous statuses (e.g. "Done" vs "Optimizing (Sync)...")
+		paddedStatus := fmt.Sprintf("%-30s", state.status)
 		if state.done {
 			if state.err != nil {
 				s.WriteString(fmt.Sprintf("  ❌ %s: %v\n", state.name, state.err))
 			} else {
-				s.WriteString(fmt.Sprintf("  ✅ %s: %s\n", state.name, state.status))
+				s.WriteString(fmt.Sprintf("  ✅ %s: %s\n", state.name, paddedStatus))
 			}
 		} else {
-			s.WriteString(fmt.Sprintf("  %s %s: %s\n", state.spinner.View(), state.name, state.status))
+			s.WriteString(fmt.Sprintf("  %s %s: %s\n", state.spinner.View(), state.name, paddedStatus))
 		}
 	}
 

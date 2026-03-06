@@ -9,6 +9,7 @@ import (
 	"simple-cli/internal/scaffold"
 	"simple-cli/internal/ui"
 	"strings"
+	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
@@ -37,7 +38,7 @@ Examples:
 func init() {
 	RootCmd.AddCommand(buildCmd)
 	buildCmd.Flags().BoolVar(&buildAll, "all", false, "build all actions in all apps")
-	buildCmd.Flags().IntVar(&concurrency, "concurrency", 4, "number of parallel builds")
+	buildCmd.Flags().IntVar(&concurrency, "concurrency", 0, "number of parallel builds (default: number of CPU cores)")
 }
 
 // runBuild executes the build process.
@@ -77,7 +78,7 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 		}
 	}
 
-	// Phase 2: Build Actions
+	// Phase 2: Build Actions and Spaces in parallel
 	if buildAll {
 		return buildAllApps(manager, fsys)
 	}
@@ -108,7 +109,7 @@ func runWithProgress(keys []string, runFn func(build.ProgressReporter)) error {
 	return err
 }
 
-// buildAllApps traverses the 'apps' directory to find and build all actions in all apps.
+// buildAllApps traverses the 'apps' directory to find and build all actions and spaces in parallel.
 func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 	appsDir := "apps"
 	if !scaffold.PathExists(fsys, appsDir) {
@@ -121,32 +122,41 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 	}
 
 	var allActionDirs []string
+	var allSpaceDirs []string
 	for _, entry := range entries {
 		if entry.IsDir() {
 			appDir := filepath.Join(appsDir, entry.Name())
 			actionDirs, err := build.FindActions(appDir)
-			if err != nil {
-				continue
-			}
-			for _, actionDir := range actionDirs {
-				absDir, err := filepath.Abs(actionDir)
-				if err != nil {
-					continue
+			if err == nil {
+				for _, actionDir := range actionDirs {
+					absDir, err := filepath.Abs(actionDir)
+					if err == nil {
+						allActionDirs = append(allActionDirs, absDir)
+					}
 				}
-				allActionDirs = append(allActionDirs, absDir)
+			}
+			// Find spaces
+			spaceDirs, err := build.FindSpaces(appDir)
+			if err == nil {
+				for _, spaceDir := range spaceDirs {
+					absDir, err := filepath.Abs(spaceDir)
+					if err == nil {
+						allSpaceDirs = append(allSpaceDirs, absDir)
+					}
+				}
 			}
 		}
 	}
 
-	if len(allActionDirs) == 0 {
+	if len(allActionDirs) == 0 && len(allSpaceDirs) == 0 {
 		if jsonOutput {
-			return printJSON(map[string]interface{}{"status": "success", "actions": []string{}})
+			return printJSON(map[string]interface{}{"status": "success", "actions": []string{}, "spaces": []string{}})
 		}
-		fmt.Println("No actions found to build.")
+		fmt.Println("No actions or spaces found to build.")
 		return nil
 	}
 
-	return runBuildActions(manager, allActionDirs)
+	return runBuildAll(manager, allActionDirs, allSpaceDirs)
 }
 
 // buildTarget resolves a single target (app, action, or shorthand) and builds it.
@@ -183,77 +193,147 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 
 	// Check if it's an action dir (has action.scl)
 	if build.IsActionDir(targetPath) {
-		return runBuildActions(manager, []string{targetPath})
+		return runBuildAll(manager, []string{targetPath}, nil)
 	}
 
-	// Check if it's an app dir (has actions inside)
-	actionDirs, err := build.FindActions(targetPath)
-	if err != nil {
-		return fmt.Errorf("failed to find actions: %w", err)
+	// Check if it's a space dir (has package.json but not action.scl)
+	if build.IsSpaceDir(targetPath) {
+		return runBuildAll(manager, nil, []string{targetPath})
 	}
 
-	if len(actionDirs) == 0 {
-		return fmt.Errorf("no actions found in %s", target)
+	// Check if it's an app dir (has actions or spaces inside)
+	actionDirs, _ := build.FindActions(targetPath)
+	spaceDirs, _ := build.FindSpaces(targetPath)
+
+	if len(actionDirs) == 0 && len(spaceDirs) == 0 {
+		return fmt.Errorf("no actions or spaces found in %s", target)
 	}
 
-	return runBuildActions(manager, actionDirs)
+	return runBuildAll(manager, actionDirs, spaceDirs)
 }
 
-// runBuildActions executes the build for a list of action directories.
-func runBuildActions(manager *build.BuildManager, actionDirs []string) error {
-	var results []build.ActionBuildResult
+// runBuildAll builds actions and spaces together in a single parallel pool.
+// This ensures maximum utilization of CPU cores by not waiting for all actions
+// to finish before starting space builds.
+func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) error {
+	type buildResult struct {
+		name    string
+		isSpace bool
+		err     error
+	}
+
+	totalCount := len(actionDirs) + len(spaceDirs)
+	results := make([]buildResult, totalCount)
 	ctx := context.Background()
 
-	if !jsonOutput {
-		// Collect action names for UI
-		var actionNames []string
-		for _, dir := range actionDirs {
-			actionNames = append(actionNames, filepath.Base(dir))
+	// Collect all names for the progress UI
+	var allNames []string
+	for _, dir := range actionDirs {
+		allNames = append(allNames, "[Action] "+filepath.Base(dir))
+	}
+	for _, dir := range spaceDirs {
+		allNames = append(allNames, " [Space] "+filepath.Base(dir))
+	}
+
+	buildFn := func(report build.ProgressReporter) {
+		sem := make(chan struct{}, manager.BuildConcurrency())
+		var wg sync.WaitGroup
+
+		// Launch action builds
+		for i, dir := range actionDirs {
+			wg.Add(1)
+			go func(idx int, dir string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				var reporter build.ProgressReporter
+				if report != nil {
+					reporter = func(item, status string, done bool, err error) {
+						report("[Action] "+item, status, done, err)
+					}
+				}
+				res := manager.BuildAction(ctx, dir, reporter)
+				results[idx] = buildResult{name: res.ActionName, isSpace: false, err: res.Error}
+			}(i, dir)
 		}
 
-		err := runWithProgress(actionNames, func(report build.ProgressReporter) {
-			results = manager.BuildActions(ctx, actionDirs, report)
-		})
-		if err != nil {
+		// Launch space builds in the same pool
+		for i, dir := range spaceDirs {
+			wg.Add(1)
+			go func(idx int, dir string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				var reporter build.ProgressReporter
+				if report != nil {
+					reporter = func(item, status string, done bool, err error) {
+						report(" [Space] "+item, status, done, err)
+					}
+				}
+				res := manager.BuildSpace(ctx, dir, reporter)
+				results[idx] = buildResult{name: res.SpaceName, isSpace: true, err: res.Error}
+			}(len(actionDirs)+i, dir)
+		}
+
+		wg.Wait()
+	}
+
+	if !jsonOutput {
+		if err := runWithProgress(allNames, buildFn); err != nil {
 			return err
 		}
 	} else {
-		results = manager.BuildActions(ctx, actionDirs, nil)
+		buildFn(nil)
 	}
 
-	// Summarize
-	var successes, failures int
-	var failedActions []string
+	// Summarize results
+	var actionSuccesses, actionFailures, spaceSuccesses, spaceFailures int
+	var failedActions, failedSpaces []string
+	errors := make(map[string]string)
 
-	for _, result := range results {
-		if result.Error != nil {
-			failures++
-			failedActions = append(failedActions, result.ActionName)
+	for _, r := range results {
+		if r.isSpace {
+			if r.err != nil {
+				spaceFailures++
+				failedSpaces = append(failedSpaces, r.name)
+				errors[r.name] = r.err.Error()
+			} else {
+				spaceSuccesses++
+			}
 		} else {
-			successes++
-		}
-	}
-
-	if jsonOutput {
-		// Include error details for each failed action
-		errors := make(map[string]string)
-		for _, result := range results {
-			if result.Error != nil {
-				errors[result.ActionName] = result.Error.Error()
+			if r.err != nil {
+				actionFailures++
+				failedActions = append(failedActions, r.name)
+				errors[r.name] = r.err.Error()
+			} else {
+				actionSuccesses++
 			}
 		}
+	}
+
+	totalFailures := actionFailures + spaceFailures
+
+	if jsonOutput {
 		return printJSON(map[string]interface{}{
-			"status":   "complete",
-			"total":    len(results),
-			"success":  successes,
-			"failed":   failures,
-			"failures": failedActions,
-			"errors":   errors,
+			"status":         "complete",
+			"total":          totalCount,
+			"success":        actionSuccesses + spaceSuccesses,
+			"failed":         totalFailures,
+			"failedActions":  failedActions,
+			"failedSpaces":   failedSpaces,
+			"errors":         errors,
 		})
 	}
 
-	if failures > 0 {
-		return fmt.Errorf("%d action(s) failed to build", failures)
+	if totalFailures > 0 {
+		var parts []string
+		if actionFailures > 0 {
+			parts = append(parts, fmt.Sprintf("%d action(s)", actionFailures))
+		}
+		if spaceFailures > 0 {
+			parts = append(parts, fmt.Sprintf("%d space(s)", spaceFailures))
+		}
+		return fmt.Errorf("%s failed to build", strings.Join(parts, " and "))
 	}
 	return nil
 }
