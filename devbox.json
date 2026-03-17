@@ -5,7 +5,7 @@
   },
   "packages": {
     "nodejs": "25.7.0",
-    "go": "1.26.0",
+    "go": "1.26.1",
     "erlang": "27.2",
     "elixir": "1.18.1",
     "beam27Packages.elixir-ls": "0.30.0",
