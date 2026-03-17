@@ -56,6 +56,11 @@ func TestFileCollector_CollectFiles(t *testing.T) {
 	_ = os.MkdirAll(assetsDir, 0755)
 	_ = os.WriteFile(filepath.Join(assetsDir, "image.png"), []byte("image-data"), 0644)
 
+	// Create knowledge directory
+	knowledgeDir := filepath.Join(dir, "knowledge")
+	_ = os.MkdirAll(knowledgeDir, 0755)
+	_ = os.WriteFile(filepath.Join(knowledgeDir, "docs.md"), []byte("# Docs"), 0644)
+
 	collector := NewFileCollector()
 	files, err := collector.CollectFiles(dir)
 
@@ -74,6 +79,7 @@ func TestFileCollector_CollectFiles(t *testing.T) {
 		"spaces/my-space/dist/index.html",
 		"spaces/my-space/dist/assets/index-abc.js",
 		"assets/image.png",
+		"knowledge/docs.md",
 	}
 
 	for _, name := range expectedFiles {
@@ -316,6 +322,7 @@ func TestCollectPaths_EmptyDirectories(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(dir, "security"), 0755)
 	_ = os.MkdirAll(filepath.Join(dir, "scripts"), 0755)
 	_ = os.MkdirAll(filepath.Join(dir, "records"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "knowledge"), 0755)
 
 	collector := NewFileCollector()
 	paths, err := collector.collectPaths(dir)

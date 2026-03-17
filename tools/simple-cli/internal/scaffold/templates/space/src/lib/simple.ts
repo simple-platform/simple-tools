@@ -50,13 +50,48 @@ window.addEventListener('message', (event) => {
     // Listen for responses matching our UUIDs
     rpcPort.onmessage = (e) => {
       if (e.data?.type === 'GRAPHQL_RESPONSE') {
-        const { data, error, id } = e.data
+        const { data, error, errors, id } = e.data
+        const req = pendingRequests.get(id)
+        if (req) {
+          clearTimeout(req.timer)
+          if (error || errors) {
+            let errMsg = error || 'GraphQL Error'
+
+            // The platform often sends the detailed database constraints in an 'errors' array
+            // or specific issues under extensions.issues for VALIDATION_FAILED
+            if (Array.isArray(errors) && errors.length > 0) {
+              const rootError = errors[0]
+              const issues = rootError?.extensions?.issues
+              const details = rootError?.extensions?.details?.message
+              if (Array.isArray(issues) && issues.length > 0 && issues[0]?.message) {
+                errMsg = issues[0].message
+              }
+              else if (details) {
+                errMsg = details
+              }
+              else if (rootError?.message) {
+                errMsg = rootError.message
+              }
+            }
+
+            req.reject(new Error(errMsg))
+          }
+          else {
+            req.resolve(data)
+          }
+          pendingRequests.delete(id)
+        }
+      }
+
+      if (e.data?.type === 'DECRYPT_RESPONSE') {
+        const { error, id, value } = e.data
         const req = pendingRequests.get(id)
         if (req) {
           clearTimeout(req.timer)
           if (error)
             req.reject(new Error(error))
-          else req.resolve(data)
+          else
+            req.resolve(value)
           pendingRequests.delete(id)
         }
       }
@@ -124,6 +159,49 @@ export const query = executeRpcGraphQL
 
 /** Execute a GraphQL mutation. Returns the `data` object. */
 export const mutate = executeRpcGraphQL
+
+/**
+ * Decrypt a vault-encrypted field value for an existing record.
+ *
+ * The iframe cannot make authenticated requests directly, so this proxies the
+ * `GET /decrypt/:appId/:table/:recordId/:field` call through the parent host
+ * frame, which holds the session cookie.
+ *
+ * @param appId      Application ID (e.g., "dev.simple.system")
+ * @param tableName  Table name (e.g., "api_key")
+ * @param recordId   Record ID (e.g., "KEY000017")
+ * @param fieldName  Field name to decrypt (e.g., "api_key")
+ * @returns          Plain-text decrypted value
+ */
+export function decrypt(
+  appId: string,
+  tableName: string,
+  recordId: string,
+  fieldName: string,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID()
+    const timer = window.setTimeout(() => {
+      const req = pendingRequests.get(id)
+      if (req) {
+        req.reject(new Error('Decrypt request timed out after 30 seconds'))
+        pendingRequests.delete(id)
+      }
+    }, 30000)
+
+    pendingRequests.set(id, { reject, resolve, timer })
+
+    const payload = {
+      payload: { appId, fieldName, id, recordId, tableName },
+      type: 'DECRYPT_REQUEST',
+    }
+
+    if (rpcPort)
+      rpcPort.postMessage(payload)
+    else
+      requestQueue.push(payload)
+  })
+}
 
 /**
  * Loads tenant-specific theme overrides from the settings table via RPC.

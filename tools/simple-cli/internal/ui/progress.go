@@ -113,12 +113,12 @@ func (m Model) View() string {
 		paddedStatus := fmt.Sprintf("%-30s", state.status)
 		if state.done {
 			if state.err != nil {
-				s.WriteString(fmt.Sprintf("  ❌ %s: %v\n", state.name, state.err))
+				fmt.Fprintf(&s, "  ❌ %s: %v\n", state.name, state.err)
 			} else {
-				s.WriteString(fmt.Sprintf("  ✅ %s: %s\n", state.name, paddedStatus))
+				fmt.Fprintf(&s, "  ✅ %s: %s\n", state.name, paddedStatus)
 			}
 		} else {
-			s.WriteString(fmt.Sprintf("  %s %s: %s\n", state.spinner.View(), state.name, paddedStatus))
+			fmt.Fprintf(&s, "  %s %s: %s\n", state.spinner.View(), state.name, paddedStatus)
 		}
 	}
 
