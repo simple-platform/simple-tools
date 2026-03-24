@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/lithammer/shortuuid/v4"
 )
 
 // SignPopJWT creates a compact EdDSA-signed JWT for Proof-of-Possession authentication.
@@ -16,9 +16,10 @@ import (
 // cached. A fresh token is signed on every GetJWT call.
 //
 // Header: {"alg":"EdDSA","typ":"JWT"}
-// Claims: {"sub":<idSuffix>, "jti":<shortuuid>, "iat":<now>, "exp":<now+60>}
+// Claims: {"sub":"KEY"+idSuffix, "jti":<shortuuid>, "iat":<now>, "exp":<now+60>}
 //
-// The idSuffix is the bare API key identifier — the "KEY" DB prefix is NOT used.
+// The idSuffix is the bare API key identifier - the "KEY" DB prefix IS re-attached
+// for the "sub" claim to provide full identity alignment.
 func SignPopJWT(privateKey ed25519.PrivateKey, idSuffix string) (string, error) {
 	headerJSON, _ := json.Marshal(map[string]string{
 		"alg": "EdDSA",
@@ -29,8 +30,8 @@ func SignPopJWT(privateKey ed25519.PrivateKey, idSuffix string) (string, error) 
 
 	now := time.Now().Unix()
 	claimsJSON, _ := json.Marshal(map[string]interface{}{
-		"sub": idSuffix,            // bare suffix, e.g. "000001f097af4c"
-		"jti": uuid.New().String(), // standard UUID v4
+		"sub": "KEY" + idSuffix, // Prefixed, e.g. "KEY000001f097af4c"
+		"jti": shortuuid.New(),  // Base57 short UUID
 		"iat": now,
 		"exp": now + 60,
 	})

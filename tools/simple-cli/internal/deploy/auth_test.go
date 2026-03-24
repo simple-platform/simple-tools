@@ -674,8 +674,14 @@ func TestEnrollAndAuthenticate_RequestFormat(t *testing.T) {
 			}
 
 			payloadBytes, err := base64URLDecode(parts[2])
-			if err == nil && !strings.Contains(string(payloadBytes), `"jti":"`) {
-				t.Errorf("PoP JWT payload missing 'jti' claim: %s", string(payloadBytes))
+			if err == nil {
+				payload := string(payloadBytes)
+				if !strings.Contains(payload, `"jti":"`) {
+					t.Errorf("PoP JWT payload missing 'jti' claim: %s", payload)
+				}
+				if !strings.Contains(payload, `"sub":"KEYmytestid"`) {
+					t.Errorf("PoP JWT payload missing correct sub, got: %s", payload)
+				}
 			}
 		} else {
 			t.Errorf("Invalid PoP JWT format parts count: %d", len(parts))

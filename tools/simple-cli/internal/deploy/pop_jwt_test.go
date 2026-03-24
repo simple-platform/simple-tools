@@ -36,11 +36,12 @@ func TestSignPopJWT(t *testing.T) {
 	var claims map[string]interface{}
 	_ = json.Unmarshal(payloadBytes, &claims)
 
-	if claims["sub"] != "000001f097af4c" {
-		t.Errorf("sub = %v, want 000001f097af4c", claims["sub"])
+	if claims["sub"] != "KEY000001f097af4c" {
+		t.Errorf("sub = %v, want KEY000001f097af4c", claims["sub"])
 	}
-	if claims["jti"] == "" {
-		t.Error("jti is empty")
+	jti, ok := claims["jti"].(string)
+	if !ok || len(jti) == 0 || len(jti) > 22 { // shortuuid is typically 22 chars
+		t.Errorf("jti = %q, want non-empty short string", jti)
 	}
 
 	exp := int64(claims["exp"].(float64))
