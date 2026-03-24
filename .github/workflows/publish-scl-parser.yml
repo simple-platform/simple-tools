@@ -155,7 +155,7 @@ jobs:
       - name: Create GitHub Release
         env:
           VERSION: ${{ needs.check_release_commit.outputs.version }}
-        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
           tag_name: v${{ needs.check_release_commit.outputs.version }}-scl-parser
           name: SCL Parser ${{ needs.check_release_commit.outputs.version }}
