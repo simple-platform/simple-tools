@@ -2,6 +2,7 @@ package deploy
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"simple-cli/internal/keystore"
 )
 
 // TokenCache stores JWT tokens per environment with expiry.
@@ -45,27 +48,33 @@ type JWTDecoder interface {
 
 // Authenticator handles API key to JWT exchange and caching.
 type Authenticator struct {
-	Client  HTTPClient
-	Store   TokenStore
-	Decoder JWTDecoder
-	TimeNow func() time.Time
-	cache   *TokenCache
-	cacheMu sync.Mutex
+	Client          HTTPClient
+	Store           TokenStore
+	Decoder         JWTDecoder
+	TimeNow         func() time.Time
+	cache           *TokenCache
+	cacheMu         sync.Mutex
+	VerifySignature func(pub, msg, sig []byte) bool
 }
 
 // NewAuthenticator creates an Authenticator with default dependencies.
 func NewAuthenticator() *Authenticator {
 	return &Authenticator{
-		Client:  &http.Client{Timeout: 30 * time.Second},
-		Store:   &FileTokenStore{},
-		Decoder: &DefaultJWTDecoder{},
-		TimeNow: time.Now,
+		Client:          &http.Client{Timeout: 30 * time.Second},
+		Store:           &FileTokenStore{},
+		Decoder:         &DefaultJWTDecoder{},
+		TimeNow:         time.Now,
+		VerifySignature: VerifyEd25519,
 	}
 }
 
-// GetJWT returns a valid JWT for the environment, fetching if needed.
-// Token expiry is extracted from the JWT's exp claim.
-func (a *Authenticator) GetJWT(endpoint, apiKey, env string) (string, error) {
+// GetJWT returns a valid session JWT, fetching a new one if the cache is
+// empty or within 5 minutes of expiry.
+//
+// tenantEnvKey must be in the form "tenant::env" (e.g. "acme::dev").
+// This scopes the cache correctly so two tenants with the same env name
+// (e.g. "acme::dev" and "contoso::dev") do not collide on the same machine.
+func (a *Authenticator) GetJWT(ctx context.Context, endpoint, apiKey, tenantEnvKey string) (string, error) {
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
 
@@ -80,7 +89,7 @@ func (a *Authenticator) GetJWT(endpoint, apiKey, env string) (string, error) {
 	}
 
 	a.cache.mu.RLock()
-	cached, ok := a.cache.Tokens[env]
+	cached, ok := a.cache.Tokens[tenantEnvKey]
 	a.cache.mu.RUnlock()
 
 	// Check if cached token is still valid (with 5 min buffer before expiry)
@@ -89,13 +98,13 @@ func (a *Authenticator) GetJWT(endpoint, apiKey, env string) (string, error) {
 	}
 
 	// Exchange API key for JWT
-	token, err := a.exchangeAPIKeyForJWT(endpoint, apiKey)
+	token, err := a.enrollAndAuthenticate(ctx, endpoint, apiKey)
 	if err != nil {
 		return "", err
 	}
 
 	// Verify JWT Signature (Debugging step)
-	if err := a.VerifyJWT(endpoint, token); err != nil {
+	if err := a.VerifyJWT(ctx, endpoint, token); err != nil {
 		return "", fmt.Errorf("JWT verification failed: %w", err)
 	}
 
@@ -108,7 +117,7 @@ func (a *Authenticator) GetJWT(endpoint, apiKey, env string) (string, error) {
 
 	// Cache the token
 	a.cache.mu.Lock()
-	a.cache.Tokens[env] = CachedToken{
+	a.cache.Tokens[tenantEnvKey] = CachedToken{
 		AccessToken: token,
 		ExpiresAt:   expiresAt,
 	}
@@ -120,55 +129,138 @@ func (a *Authenticator) GetJWT(endpoint, apiKey, env string) (string, error) {
 	return token, nil
 }
 
-// exchangeAPIKeyForJWT calls the identity endpoint to exchange API key for JWT.
-func (a *Authenticator) exchangeAPIKeyForJWT(endpoint, apiKey string) (string, error) {
-	url := fmt.Sprintf("https://%s/auth/login", endpoint)
-
-	// Request body with api_key
-	body := fmt.Sprintf(`{"api_key":"%s"}`, apiKey)
-	req, err := http.NewRequest("POST", url, bytes.NewReader([]byte(body)))
+// enrollAndAuthenticate replaces exchangeAPIKeyForJWT.
+// It handles one-time machine enrollment and then signs a fresh PoP JWT
+// on every call to obtain a session JWT from the Identity Service.
+func (a *Authenticator) enrollAndAuthenticate(ctx context.Context, endpoint, rawAPIKey string) (string, error) {
+	idSuffix, err := ParseIDSuffix(rawAPIKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to create auth request: %w", err)
+		return "", fmt.Errorf("invalid api key format: %w", err)
 	}
 
+	kp, err := keystore.GenerateOrLoad(idSuffix)
+	if err != nil {
+		return "", fmt.Errorf("keypair error for %s: %w", idSuffix, err)
+	}
+
+	// Enrollment is idempotent — skip if .enrolled sentinel exists.
+	if !keystore.IsEnrolled(idSuffix) {
+		var enrollErr error
+		// 2-attempt retry for network resilience
+		for i := 0; i < 2; i++ {
+			enrollErr = a.enrollKey(ctx, endpoint, rawAPIKey, kp.PublicJWK)
+			if enrollErr == nil {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return "", fmt.Errorf("enrollment canceled: %w", ctx.Err())
+			case <-time.After(time.Duration(i+1) * 500 * time.Millisecond):
+			}
+		}
+		if enrollErr != nil {
+			return "", fmt.Errorf("enrollment failed after retries: %w", enrollErr)
+		}
+		if err := keystore.MarkEnrolled(idSuffix); err != nil {
+			return "", fmt.Errorf("failed to mark enrollment: %w", err)
+		}
+	}
+
+	// Sign a fresh PoP JWT — never cached, expires in 60 seconds.
+	popJWT, err := SignPopJWT(kp.PrivateKey, idSuffix)
+	if err != nil {
+		return "", fmt.Errorf("failed to sign PoP JWT: %w", err)
+	}
+
+	// Server expects: "si_<id_suffix>.<compact_signed_jwt>"
+	return a.loginWithPoP(ctx, endpoint, "si_"+idSuffix+"."+popJWT)
+}
+
+// enrollKey calls POST /auth/api-key/enroll to register this machine's public key.
+// This is called at most once per API key per machine.
+func (a *Authenticator) enrollKey(ctx context.Context, endpoint, rawAPIKey string, publicJWK map[string]string) error {
+	url := fmt.Sprintf("https://%s/auth/api-key/enroll", endpoint)
+	body, err := json.Marshal(map[string]interface{}{
+		"api_key":    rawAPIKey,
+		"public_key": publicJWK,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal enroll request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create enroll request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := a.Client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("auth request failed: %w", err)
+		return fmt.Errorf("enroll request failed: %w", err)
 	}
-	defer func() {
-		_ = resp.Body.Close()
-	}()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to read auth response: %w", err)
+		return fmt.Errorf("failed to read enroll response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("authentication failed: status %d, body: %s", resp.StatusCode, string(respBody))
+		return fmt.Errorf("enrollment rejected (%d): %s", resp.StatusCode, respBody)
+	}
+	return nil
+}
+
+// loginWithPoP calls POST /auth/login with the composed PoP auth string.
+func (a *Authenticator) loginWithPoP(ctx context.Context, endpoint, authString string) (string, error) {
+	url := fmt.Sprintf("https://%s/auth/login", endpoint)
+	body, err := json.Marshal(map[string]string{"api_key": authString})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal login request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("failed to create login request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := a.Client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("login request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read login response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("authentication failed (%d): %s", resp.StatusCode, respBody)
 	}
 
 	var result struct {
 		AccessToken string `json:"access_token"`
 	}
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("failed to parse auth response: %w", err)
-	}
 
-	if result.AccessToken == "" {
-		return "", fmt.Errorf("empty access token in response")
+	if err := json.Unmarshal(respBody, &result); err != nil || result.AccessToken == "" {
+		return "", fmt.Errorf("invalid auth response: %s", respBody)
 	}
 
 	return result.AccessToken, nil
 }
 
+// TenantEnvKey standardizes the cache key format isolating multiple tenants across the single cache map securely.
+func TenantEnvKey(tenant, env string) string {
+	return fmt.Sprintf("%s::%s", tenant, env)
+}
+
 // VerifyJWT checks the JWT signature against the Identity service's JWKS.
-func (a *Authenticator) VerifyJWT(endpoint, token string) error {
+func (a *Authenticator) VerifyJWT(ctx context.Context, endpoint, token string) error {
 	// Fetch JWKS
 	jwksURL := fmt.Sprintf("https://%s/.well-known/jwks.json", endpoint)
-	req, err := http.NewRequest("GET", jwksURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", jwksURL, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create JWKS request: %w", err)
 	}
@@ -252,7 +344,7 @@ func (a *Authenticator) VerifyJWT(endpoint, token string) error {
 		return fmt.Errorf("invalid Ed25519 public key length: %d", len(pubKeyBytes))
 	}
 
-	if !VerifyEd25519(pubKeyBytes, message, signature) {
+	if a.VerifySignature != nil && !a.VerifySignature(pubKeyBytes, message, signature) {
 		return fmt.Errorf("invalid JWT signature")
 	}
 
@@ -264,17 +356,22 @@ var VerifyEd25519 = func(publicKey []byte, message, signature []byte) bool {
 	return ed25519.Verify(publicKey, message, signature)
 }
 
-// ClearCache removes cached token for an environment.
-func (a *Authenticator) ClearCache(env string) error {
+// ClearCache removes the cached session JWT for the given tenantEnvKey.
+// tenantEnvKey format: "tenant::env" (e.g. "acme::dev")
+func (a *Authenticator) ClearCache(tenantEnvKey string) error {
 	a.cacheMu.Lock()
 	defer a.cacheMu.Unlock()
 
 	if a.cache == nil {
-		return nil
+		cache, err := a.Store.Load()
+		if err != nil {
+			cache = &TokenCache{Tokens: make(map[string]CachedToken)}
+		}
+		a.cache = cache
 	}
 
 	a.cache.mu.Lock()
-	delete(a.cache.Tokens, env)
+	delete(a.cache.Tokens, tenantEnvKey)
 	a.cache.mu.Unlock()
 
 	return a.Store.Save(a.cache)

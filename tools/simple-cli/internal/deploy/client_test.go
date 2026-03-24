@@ -60,7 +60,7 @@ func TestClient_JoinChannel_NotConnected(t *testing.T) {
 	if err == nil {
 		t.Error("JoinChannel() expected error when not connected")
 	}
-	if !containsString(err.Error(), "not connected") {
+	if !strings.Contains(err.Error(), "not connected") {
 		t.Errorf("JoinChannel() error = %v, want containing 'not connected'", err)
 	}
 }
@@ -74,7 +74,7 @@ func TestClient_SendManifest_NotJoined(t *testing.T) {
 	if err == nil {
 		t.Error("SendManifest() expected error when not joined")
 	}
-	if !containsString(err.Error(), "not joined") {
+	if !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("SendManifest() error = %v, want containing 'not joined'", err)
 	}
 }
@@ -88,7 +88,7 @@ func TestClient_SendFiles_NotJoined(t *testing.T) {
 	if err == nil {
 		t.Error("SendFiles() expected error when not joined")
 	}
-	if !containsString(err.Error(), "not joined") {
+	if !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("SendFiles() error = %v, want containing 'not joined'", err)
 	}
 }
@@ -99,7 +99,7 @@ func TestClient_SendFiles_EmptyList(t *testing.T) {
 	}
 
 	err := client.SendFiles(nil, []string{})
-	if err != nil && !containsString(err.Error(), "not joined") {
+	if err != nil && !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("SendFiles() unexpected error = %v", err)
 	}
 }
@@ -113,7 +113,7 @@ func TestClient_Deploy_NotJoined(t *testing.T) {
 	if err == nil {
 		t.Error("Deploy() expected error when not joined")
 	}
-	if !containsString(err.Error(), "not joined") {
+	if !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("Deploy() error = %v, want containing 'not joined'", err)
 	}
 }

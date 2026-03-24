@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -41,7 +42,7 @@ Examples:
   simple deploy apps/com.example.crm --env prod`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDeploy(fsx.OSFileSystem{}, args)
+		return runDeploy(cmd.Context(), fsx.OSFileSystem{}, args)
 	},
 }
 
@@ -56,7 +57,7 @@ func init() {
 
 // runDeploy executes the main deployment logic.
 // It orchestrates local preparation and remote communication with the DevOps service.
-func runDeploy(fsys fsx.FileSystem, args []string) error {
+func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 	appPath := args[0]
 	start := time.Now()
 
@@ -96,8 +97,9 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 	}
 
 	// Get JWT (cached for token lifetime)
+	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, deployEnv)
 	auth := deploy.NewAuthenticator()
-	jwt, authErr = auth.GetJWT(env.IdentityEndpoint(), env.APIKey, deployEnv)
+	jwt, authErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
 	if authErr != nil {
 		return fmt.Errorf("authentication failed: %w", authErr)
 	}
@@ -158,13 +160,13 @@ func runDeploy(fsys fsx.FileSystem, args []string) error {
 			}
 
 			// 1. Clear token cache to force fresh prompt/login if needed
-			if err := auth.ClearCache(deployEnv); err != nil {
+			if err := auth.ClearCache(tenantEnvKey); err != nil {
 				return fmt.Errorf("failed to clear token cache: %w", err)
 			}
 
 			// 2. Get new JWT (force refresh)
 			var newJWTErr error
-			jwt, newJWTErr = auth.GetJWT(env.IdentityEndpoint(), env.APIKey, deployEnv)
+			jwt, newJWTErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
 			if newJWTErr != nil {
 				return fmt.Errorf("re-authentication failed: %w", newJWTErr)
 			}

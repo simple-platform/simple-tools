@@ -2,13 +2,16 @@ package deploy
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,15 +20,29 @@ import (
 type MockHTTPClient struct {
 	Response  *http.Response
 	Responses []*http.Response // For sequential responses
-	Err       error
+	Errs      []error          // For sequential errors
 	Requests  []*http.Request
+	OnDo      func(req *http.Request)
 }
 
 func (m *MockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	m.Requests = append(m.Requests, req)
-	if m.Err != nil {
-		return nil, m.Err
+	if m.OnDo != nil {
+		m.OnDo(req)
 	}
+
+	if len(m.Errs) > 0 {
+		err := m.Errs[0]
+		if len(m.Errs) > 1 {
+			m.Errs = m.Errs[1:]
+		} else {
+			m.Errs = nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// Use sequential responses if available
 	if len(m.Responses) > 0 {
 		resp := m.Responses[0]
@@ -88,21 +105,21 @@ func createTestJWTWithAlg(exp int64, alg string) string {
 }
 
 func TestAuthenticator_GetJWT(t *testing.T) {
+	tmpConfig := t.TempDir()
+	t.Setenv("HOME", tmpConfig)
+
 	fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	futureExpiry := fixedTime.Add(1 * time.Hour)
 	// 32-byte key base64url encoded
 	validJWKS := `{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`
 
-	// Mock verification to always pass by default
-	originalVerify := VerifyEd25519
-	VerifyEd25519 = func(pub, msg, sig []byte) bool { return true }
-	defer func() { VerifyEd25519 = originalVerify }()
+	validAPIKey := "si_testid" + strings.Repeat("a", 64)
 
 	tests := []struct {
 		name            string
 		cachedToken     *CachedToken
 		httpResponses   []*http.Response
-		httpErr         error
+		httpErrs        []error
 		decoderExpiry   time.Time
 		decoderErr      error
 		verifyErr       bool
@@ -110,6 +127,7 @@ func TestAuthenticator_GetJWT(t *testing.T) {
 		wantErr         bool
 		errContains     string
 		expectHTTPCalls int
+		setupClient     func(m *MockHTTPClient, cancel context.CancelFunc)
 	}{
 		{
 			name: "cache hit - valid token",
@@ -124,71 +142,101 @@ func TestAuthenticator_GetJWT(t *testing.T) {
 		{
 			name: "cache miss - fetch new token and verify",
 			httpResponses: []*http.Response{
-				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(futureExpiry.Unix())))))},
-				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                         // Enroll
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(futureExpiry.Unix())))))}, // Login
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},                                                                // JWKS
 			},
 			decoderExpiry:   futureExpiry,
 			wantToken:       createTestJWT(futureExpiry.Unix()),
 			wantErr:         false,
-			expectHTTPCalls: 2,
+			expectHTTPCalls: 3,
 		},
 		{
 			name: "verification failed",
 			httpResponses: []*http.Response{
-				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(futureExpiry.Unix())))))},
-				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                         // Enroll
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(futureExpiry.Unix())))))}, // Login
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},                                                                // JWKS
 			},
 			verifyErr:       true,
 			wantErr:         true,
 			errContains:     "invalid JWT signature",
+			expectHTTPCalls: 3,
+		},
+		{
+			name:            "http error on enroll network",
+			httpErrs:        []error{&mockError{msg: "connection refused"}, &mockError{msg: "connection refused"}},
+			wantErr:         true,
+			errContains:     "enrollment failed after retries",
 			expectHTTPCalls: 2,
 		},
 		{
-			name:            "http error on token",
-			httpErr:         &mockError{msg: "connection refused"},
+			name: "http error on enroll 500",
+			httpResponses: []*http.Response{
+				{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("server error")))},
+				{StatusCode: 500, Body: io.NopCloser(bytes.NewReader([]byte("server error")))},
+			},
 			wantErr:         true,
-			errContains:     "auth request failed",
-			expectHTTPCalls: 1,
+			errContains:     "enrollment failed after retries",
+			expectHTTPCalls: 2,
+		},
+		{
+			name:            "context canceled between retries",
+			httpErrs:        []error{&mockError{msg: "connection refused"}, &mockError{msg: "connection refused"}},
+			wantErr:         true,
+			errContains:     "enrollment canceled",
+			expectHTTPCalls: 1, // Only 1 call because context cancels before retry
+			setupClient: func(m *MockHTTPClient, cancel context.CancelFunc) {
+				m.OnDo = func(req *http.Request) {
+					cancel()
+				}
+			},
 		},
 		{
 			name: "http error on jwks",
 			httpResponses: []*http.Response{
-				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(`{"access_token":"token"}`)))},
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte{}))},                           // Enroll
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(`{"access_token":"token"}`)))}, // Login
 			},
 			wantErr:         true,
-			expectHTTPCalls: 2,
+			expectHTTPCalls: 3,
 		},
 		{
 			name: "unsupported algorithm",
 			httpResponses: []*http.Response{
-				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWTWithAlg(futureExpiry.Unix(), "HS256")))))},
-				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                                         // Enroll
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWTWithAlg(futureExpiry.Unix(), "HS256")))))}, // Login
+				{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(validJWKS)))},                                                                                // JWKS
 			},
 			wantErr:         true,
 			errContains:     "unsupported algorithm: HS256",
-			expectHTTPCalls: 2,
+			expectHTTPCalls: 3,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Special handling for the "http error on jwks" case where we want the second call to return 404
+			// Clear keystore dir for each test so enrollment triggers
+			_ = os.RemoveAll(filepath.Join(tmpConfig, ".simple", "keys"))
+
+			// Special handling for the "http error on jwks" case where we want the last call to return 404
 			if tt.name == "http error on jwks" {
 				tt.httpResponses = []*http.Response{
-					{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(`{"access_token":"token"}`)))},
-					{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte{}))},
+					{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte{}))},                           // Enroll
+					{StatusCode: 200, Body: io.NopCloser(bytes.NewReader([]byte(`{"access_token":"token"}`)))}, // Login
+					{StatusCode: 404, Body: io.NopCloser(bytes.NewReader([]byte{}))},                           // JWKS
 				}
 				tt.errContains = "failed to fetch JWKS"
 			}
 
 			mockClient := &MockHTTPClient{
 				Responses: tt.httpResponses,
-				Err:       tt.httpErr,
+				Errs:      tt.httpErrs,
 			}
 
 			cache := &TokenCache{Tokens: make(map[string]CachedToken)}
 			if tt.cachedToken != nil {
-				cache.Tokens["dev"] = *tt.cachedToken
+				cache.Tokens["acme::dev"] = *tt.cachedToken
 			}
 
 			mockStore := &MockTokenStore{Cache: cache}
@@ -198,27 +246,27 @@ func TestAuthenticator_GetJWT(t *testing.T) {
 			}
 
 			auth := &Authenticator{
-				Client:  mockClient,
-				Store:   mockStore,
-				Decoder: mockDecoder,
-				TimeNow: func() time.Time { return fixedTime },
+				Client:          mockClient,
+				Store:           mockStore,
+				Decoder:         mockDecoder,
+				TimeNow:         func() time.Time { return fixedTime },
+				VerifySignature: func(_, _, _ []byte) bool { return !tt.verifyErr },
 			}
 
-			// Mock verify logic for this run
-			if tt.verifyErr {
-				VerifyEd25519 = func(_, _, _ []byte) bool { return false }
-			} else {
-				VerifyEd25519 = func(_, _, _ []byte) bool { return true }
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tt.setupClient != nil {
+				tt.setupClient(mockClient, cancel)
 			}
 
-			token, err := auth.GetJWT("devops.acme.simple.dev", "test-api-key", "dev")
+			token, err := auth.GetJWT(ctx, "devops.acme.simple.dev", validAPIKey, "acme::dev")
 
 			if tt.wantErr {
 				if err == nil {
 					t.Errorf("GetJWT() expected error, got nil")
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("GetJWT() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
@@ -301,7 +349,7 @@ func TestDefaultJWTDecoder_DecodeExpiry(t *testing.T) {
 					t.Errorf("DecodeExpiry() expected error, got nil")
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("DecodeExpiry() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
@@ -356,8 +404,8 @@ func TestAuthenticator_ClearCache(t *testing.T) {
 	mockStore := &MockTokenStore{
 		Cache: &TokenCache{
 			Tokens: map[string]CachedToken{
-				"dev":     {AccessToken: "dev-token"},
-				"staging": {AccessToken: "staging-token"},
+				"acme::dev":     {AccessToken: "dev-token"},
+				"acme::staging": {AccessToken: "staging-token"},
 			},
 		},
 	}
@@ -367,16 +415,16 @@ func TestAuthenticator_ClearCache(t *testing.T) {
 		cache: mockStore.Cache,
 	}
 
-	err := auth.ClearCache("dev")
+	err := auth.ClearCache("acme::dev")
 	if err != nil {
 		t.Errorf("ClearCache() unexpected error = %v", err)
 	}
 
-	if _, ok := mockStore.Cache.Tokens["dev"]; ok {
+	if _, ok := mockStore.Cache.Tokens["acme::dev"]; ok {
 		t.Error("ClearCache() did not remove dev token")
 	}
 
-	if _, ok := mockStore.Cache.Tokens["staging"]; !ok {
+	if _, ok := mockStore.Cache.Tokens["acme::staging"]; !ok {
 		t.Error("ClearCache() incorrectly removed staging token")
 	}
 
@@ -392,9 +440,13 @@ func TestAuthenticator_ClearCache_NilCache(t *testing.T) {
 		cache: nil,
 	}
 
-	err := auth.ClearCache("dev")
+	err := auth.ClearCache("acme::dev")
 	if err != nil {
 		t.Errorf("ClearCache() unexpected error = %v", err)
+	}
+
+	if mockStore.SaveCalls != 1 {
+		t.Errorf("ClearCache() save calls = %d, want 1", mockStore.SaveCalls)
 	}
 }
 
@@ -412,7 +464,7 @@ func TestFileTokenStore_LoadSave(t *testing.T) {
 	}
 
 	// Save some tokens
-	cache.Tokens["dev"] = CachedToken{
+	cache.Tokens["acme::dev"] = CachedToken{
 		AccessToken: "test-token",
 		ExpiresAt:   time.Now().Add(1 * time.Hour),
 	}
@@ -427,8 +479,8 @@ func TestFileTokenStore_LoadSave(t *testing.T) {
 		t.Fatalf("Load() after save unexpected error = %v", err)
 	}
 
-	if loaded.Tokens["dev"].AccessToken != "test-token" {
-		t.Errorf("Loaded token = %q, want %q", loaded.Tokens["dev"].AccessToken, "test-token")
+	if loaded.Tokens["acme::dev"].AccessToken != "test-token" {
+		t.Errorf("Loaded token = %q, want %q", loaded.Tokens["acme::dev"].AccessToken, "test-token")
 	}
 
 	// Verify file permissions
@@ -498,31 +550,32 @@ func TestNewAuthenticator(t *testing.T) {
 }
 
 func TestAuthenticator_GetJWT_StoreLoadError(t *testing.T) {
+	tmpConfig := t.TempDir()
+	t.Setenv("HOME", tmpConfig)
+	validAPIKey := "si_storeerr" + strings.Repeat("a", 64)
+
 	mockClient := &MockHTTPClient{
 		Responses: []*http.Response{
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte{}))}, // Enroll
 			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(time.Now().Add(1*time.Hour).Unix())))))},
 			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))},
 		},
 	}
-
-	// Mock verification to pass
-	originalVerify := VerifyEd25519
-	VerifyEd25519 = func(pub, msg, sig []byte) bool { return true }
-	defer func() { VerifyEd25519 = originalVerify }()
 
 	mockStore := &MockTokenStore{
 		LoadErr: &mockError{msg: "load error"},
 	}
 
 	auth := &Authenticator{
-		Client:  mockClient,
-		Store:   mockStore,
-		Decoder: &MockJWTDecoder{ExpiresAt: time.Now().Add(1 * time.Hour)},
-		TimeNow: time.Now,
+		Client:          mockClient,
+		Store:           mockStore,
+		Decoder:         &MockJWTDecoder{ExpiresAt: time.Now().Add(1 * time.Hour)},
+		TimeNow:         time.Now,
+		VerifySignature: func(_, _, _ []byte) bool { return true },
 	}
 
 	// Should still work, just starts fresh
-	token, err := auth.GetJWT("devops.acme.simple.dev", "test-api-key", "dev")
+	token, err := auth.GetJWT(context.Background(), "devops.acme.simple.dev", validAPIKey, "acme::dev")
 	if err != nil {
 		t.Errorf("GetJWT() unexpected error = %v", err)
 	}
@@ -549,54 +602,75 @@ func TestFileTokenStore_tokenCachePath(t *testing.T) {
 	}
 }
 
-func TestExchangeAPIKeyForJWT_RequestFormat(t *testing.T) {
+func TestEnrollAndAuthenticate_RequestFormat(t *testing.T) {
+	tmpConfig := t.TempDir()
+	t.Setenv("HOME", tmpConfig)
+	validAPIKey := "si_mytestid" + strings.Repeat("a", 64)
+
 	futureToken := createTestJWT(time.Now().Add(1 * time.Hour).Unix())
 	mockClient := &MockHTTPClient{
 		Responses: []*http.Response{
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, futureToken))))},
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))},
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                                                                 // Enroll
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, futureToken))))},                                                                // Login
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))}, // JWKS
 		},
 	}
 
-	// Mock verification
-	originalVerify := VerifyEd25519
-	VerifyEd25519 = func(pub, msg, sig []byte) bool { return true }
-	defer func() { VerifyEd25519 = originalVerify }()
-
 	auth := &Authenticator{
-		Client:  mockClient,
-		Store:   &MockTokenStore{},
-		Decoder: &MockJWTDecoder{ExpiresAt: time.Now().Add(1 * time.Hour)},
-		TimeNow: time.Now,
+		Client:          mockClient,
+		Store:           &MockTokenStore{},
+		Decoder:         &MockJWTDecoder{ExpiresAt: time.Now().Add(1 * time.Hour)},
+		TimeNow:         time.Now,
+		VerifySignature: func(_, _, _ []byte) bool { return true },
 	}
 
-	_, _ = auth.GetJWT("devops.tenant.simple.dev", "my-api-key", "prod")
+	_, _ = auth.GetJWT(context.Background(), "devops.tenant.simple.dev", validAPIKey, "acme::prod")
 
-	if len(mockClient.Requests) < 1 {
-		t.Fatalf("Expected at least 1 request, got %d", len(mockClient.Requests))
+	if len(mockClient.Requests) < 2 {
+		t.Fatalf("Expected at least 2 requests, got %d", len(mockClient.Requests))
 	}
 
-	req := mockClient.Requests[0]
-
-	// Check URL
-	if req.URL.String() != "https://devops.tenant.simple.dev/auth/login" {
-		t.Errorf("Request URL = %q, want %q", req.URL.String(), "https://devops.tenant.simple.dev/auth/login")
+	// Check Enroll request
+	enrollReq := mockClient.Requests[0]
+	if enrollReq.URL.String() != "https://devops.tenant.simple.dev/auth/api-key/enroll" {
+		t.Errorf("Request URL = %q, want %q", enrollReq.URL.String(), "https://devops.tenant.simple.dev/auth/api-key/enroll")
+	}
+	if enrollReq.Method != "POST" {
+		t.Errorf("Request Method = %q, want %q", enrollReq.Method, "POST")
+	}
+	enrollBody, _ := io.ReadAll(enrollReq.Body)
+	if !strings.Contains(string(enrollBody), `"api_key":"`+validAPIKey+`"`) {
+		t.Errorf("Enroll body missing api_key, got: %s", string(enrollBody))
+	}
+	if !strings.Contains(string(enrollBody), `"public_key"`) {
+		t.Errorf("Enroll body missing public_key, got: %s", string(enrollBody))
 	}
 
-	// Check method
-	if req.Method != "POST" {
-		t.Errorf("Request Method = %q, want %q", req.Method, "POST")
+	// Check Login request
+	loginReq := mockClient.Requests[1]
+	if loginReq.URL.String() != "https://devops.tenant.simple.dev/auth/login" {
+		t.Errorf("Request URL = %q, want %q", loginReq.URL.String(), "https://devops.tenant.simple.dev/auth/login")
+	}
+	if loginReq.Method != "POST" {
+		t.Errorf("Request Method = %q, want %q", loginReq.Method, "POST")
+	}
+	loginBody, _ := io.ReadAll(loginReq.Body)
+	if !strings.Contains(string(loginBody), `"api_key":"si_mytestid.`) {
+		t.Errorf("Login body missing PoP JWT format, got: %s", string(loginBody))
 	}
 
-	// Check headers
-	if req.Header.Get("x-api-key") != "" {
-		t.Errorf("x-api-key header should be empty, got %q", req.Header.Get("x-api-key"))
-	}
-
-	// Check body
-	body, _ := io.ReadAll(req.Body)
-	expectedBody := `{"api_key":"my-api-key"}`
-	if string(body) != expectedBody {
-		t.Errorf("Request body = %q, want %q", string(body), expectedBody)
+	var loginMap map[string]string
+	if err := json.Unmarshal(loginBody, &loginMap); err == nil {
+		parts := strings.Split(loginMap["api_key"], ".")
+		if len(parts) == 4 { // si_prefix.header.payload.sig
+			payloadBytes, err := base64URLDecode(parts[2])
+			if err == nil && !strings.Contains(string(payloadBytes), `"jti":"`) {
+				t.Errorf("PoP JWT payload missing 'jti' claim: %s", string(payloadBytes))
+			}
+		} else {
+			t.Errorf("Invalid PoP JWT format parts count: %d", len(parts))
+		}
+	} else {
+		t.Errorf("Failed to unmarshal login body: %v", err)
 	}
 }

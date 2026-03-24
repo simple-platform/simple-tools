@@ -3,6 +3,7 @@ package deploy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -123,7 +124,7 @@ func TestComputeNewVersion(t *testing.T) {
 						tt.current, tt.env, tt.bump)
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("ComputeNewVersion() error = %v, want containing %q",
 						err, tt.errContains)
 				}
@@ -311,7 +312,7 @@ func TestVersionManager_ParseAppSCL(t *testing.T) {
 					t.Errorf("ParseAppSCL() expected error, got nil")
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("ParseAppSCL() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
@@ -407,7 +408,7 @@ func TestVersionManager_BumpVersion(t *testing.T) {
 					t.Errorf("BumpVersion() expected error, got nil")
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("BumpVersion() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
@@ -454,7 +455,7 @@ func TestVersionManager_BumpVersion_WriteError(t *testing.T) {
 		t.Error("BumpVersion() expected error on write failure, got nil")
 		return
 	}
-	if !containsString(err.Error(), "write app.scl") {
+	if !strings.Contains(err.Error(), "write app.scl") {
 		t.Errorf("BumpVersion() error = %v, want containing 'write app.scl'", err)
 	}
 }
@@ -570,7 +571,7 @@ func TestDefaultSCLParser_Parse(t *testing.T) {
 	if err == nil {
 		t.Error("Parse() expected error for nonexistent parser, got nil")
 	}
-	if !containsString(err.Error(), "execution failed") {
+	if !strings.Contains(err.Error(), "execution failed") {
 		t.Errorf("Parse() error = %v, want containing 'execution failed'", err)
 	}
 }
@@ -638,11 +639,4 @@ func (e *mockError) Error() string {
 	return e.msg
 }
 
-func containsString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
+// Removed tightly scoped containsString implementation in favor of strings.Contains

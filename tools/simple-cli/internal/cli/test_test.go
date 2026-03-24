@@ -7,41 +7,16 @@ import (
 	"testing"
 )
 
-// invokeTestCmd is a helper to run test command
+// Removed custom invokeTestCmd abstraction to align with invokeCmd testing patterns.
+
+// invokeTestCmd resets local cobra flags against test pollution before handing off cleanly to invokeCmd.
 func invokeTestCmd(args ...string) (string, string, error) {
-	// We need to mock exec.Command to fundamentally test this without running actual vitest
-	// But since we can't easily mock exec.Command in this structure without injection,
-	// we will verify what we can: flag parsing and directory validation.
-	// For actual execution, we can rely on the integration test we did manually.
-	// However, we CAN test that runTest fails if directories are missing.
-
-	// For now, let's just test basic validation failures which verify our path logic
-	// before it hits exec.Command
-	// Use RootCmd to simulate full CLI execution including subcommands
-	cmd := RootCmd
-	// Reset flags to defaults to avoid pollution in RootCmd or subcommands is harder,
-	// but SetArgs on RootCmd should route correctly.
-	// We do need to handle output capturing if we want to check it, but for now we check errors.
-	// We do need to handle output capturing if we want to check it, but for now we check errors.
-	if err := testCmd.Flags().Set("action", ""); err != nil {
-		return "", "", err
-	}
-	if err := testCmd.Flags().Set("behavior", ""); err != nil {
-		return "", "", err
-	}
-	if err := testCmd.Flags().Set("coverage", "false"); err != nil {
-		return "", "", err
-	}
-	if err := testCmd.Flags().Set("json", "false"); err != nil {
-		return "", "", err
-	}
-	cmd.SetArgs(args)
-
-	// Capture output
-	// Note: We're not fully capturing stdout/stderr because runTest writes directly to os.Stdout/Stderr
-	// but we can catch errors
-	err := cmd.Execute()
-	return "", "", err
+	_ = testCmd.Flags().Set("action", "")
+	_ = testCmd.Flags().Set("behavior", "")
+	_ = testCmd.Flags().Set("space", "")
+	_ = testCmd.Flags().Set("coverage", "false")
+	_ = testCmd.Flags().Set("json", "false")
+	return invokeCmd(args...)
 }
 
 func TestTestCmd_AppNotFound(t *testing.T) {
