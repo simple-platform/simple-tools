@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -215,7 +216,7 @@ func TestLoader_LoadSimpleSCL(t *testing.T) {
 					t.Errorf("LoadSimpleSCL() expected error containing %q, got nil", tt.errContains)
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("LoadSimpleSCL() error = %v, want error containing %q", err, tt.errContains)
 				}
 				return
@@ -345,7 +346,7 @@ func TestSimpleSCL_GetEnv(t *testing.T) {
 					t.Errorf("GetEnv() expected error containing %q, got nil", tt.errContains)
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("GetEnv() error = %v, want error containing %q", err, tt.errContains)
 				}
 				return
@@ -504,7 +505,7 @@ func TestExtractEnvironments(t *testing.T) {
 					t.Errorf("extractConfig() expected error, got nil")
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("extractConfig() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
@@ -561,18 +562,7 @@ func (e *mockError) Error() string {
 	return e.msg
 }
 
-func containsString(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
+// Removed tightly scoped containsString implementations in favor of strings.Contains
 
 func TestDefaultSCLParser_Parse(t *testing.T) {
 	tests := []struct {
@@ -608,7 +598,7 @@ func TestDefaultSCLParser_Parse(t *testing.T) {
 					t.Errorf("Parse() expected error, got nil")
 					return
 				}
-				if tt.errContains != "" && !containsString(err.Error(), tt.errContains) {
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
 					t.Errorf("Parse() error = %v, want containing %q", err, tt.errContains)
 				}
 				return
@@ -638,7 +628,7 @@ func TestSimpleSCL_GetEnv_EmptyAPIKey(t *testing.T) {
 		t.Error("GetEnv() expected error for empty API key, got nil")
 		return
 	}
-	if !containsString(err.Error(), "not configured") {
+	if !strings.Contains(err.Error(), "not configured") {
 		t.Errorf("GetEnv() error = %v, want containing 'not configured'", err)
 	}
 }
@@ -656,7 +646,7 @@ func TestLoader_LoadSimpleSCL_StatError(t *testing.T) {
 		t.Error("LoadSimpleSCL() expected error for nonexistent path")
 		return
 	}
-	if !containsString(err.Error(), "not found") {
+	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("LoadSimpleSCL() error = %v, want containing 'not found'", err)
 	}
 }

@@ -226,8 +226,6 @@ func (c *Client) sendFile(path string, fi FileInfo) error {
 	}
 }
 
-
-
 // Deploy triggers the actual deployment.
 func (c *Client) Deploy() (*DeployResult, error) {
 	if c.channel == nil {

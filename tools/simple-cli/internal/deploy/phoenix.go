@@ -595,8 +595,6 @@ func (c *PhoenixChannel) Leave() error {
 
 // Legacy compatibility functions
 
-
-
 func decodeJSONMessage(data []byte) (*phoenixMessage, error) {
 	msg := decodeJSONMessageFast(data)
 	if msg == nil {

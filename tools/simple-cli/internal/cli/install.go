@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -33,7 +35,7 @@ Examples:
   simple install com.example.crm --env prod`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runInstall(args[0])
+		return runInstall(cmd.Context(), args[0])
 	},
 }
 
@@ -45,7 +47,7 @@ func init() {
 
 // runInstall executes the installation logic.
 // It connects to the DevOps server and requests an install for the given app ID.
-func runInstall(appID string) error {
+func runInstall(ctx context.Context, appID string) error {
 	start := time.Now()
 
 	// Validate --env flag is provided
@@ -82,8 +84,9 @@ func runInstall(appID string) error {
 
 	// Get JWT (cached for token lifetime)
 	// Authentication is required to allow the CLI into the DevOps channel.
+	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, installEnv)
 	auth := deploy.NewAuthenticator()
-	jwt, authErr = auth.GetJWT(env.IdentityEndpoint(), env.APIKey, installEnv)
+	jwt, authErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
 	if authErr != nil {
 		return fmt.Errorf("authentication failed: %w", authErr)
 	}
@@ -97,7 +100,38 @@ func runInstall(appID string) error {
 	})
 
 	if err := client.Connect(); err != nil {
-		return err
+		var authErr *deploy.AuthFailedError
+		if errors.As(err, &authErr) { // 401/403
+			if !jsonOutput {
+				fmt.Println("🔄 Auth token expired, refreshing...")
+			}
+
+			// 1. Clear token cache to force fresh prompt/login if needed
+			if err := auth.ClearCache(tenantEnvKey); err != nil {
+				return fmt.Errorf("failed to clear token cache: %w", err)
+			}
+
+			// 2. Get new JWT (force refresh)
+			var newJWTErr error
+			jwt, newJWTErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
+			if newJWTErr != nil {
+				return fmt.Errorf("re-authentication failed: %w", newJWTErr)
+			}
+
+			// 3. Re-create client with new JWT
+			client = deploy.NewClient(deploy.ClientConfig{
+				Endpoint: env.DevOpsEndpoint(),
+				JWT:      jwt,
+				Timeout:  30 * time.Second,
+			})
+
+			// 4. Retry connection once
+			if err := client.Connect(); err != nil {
+				return fmt.Errorf("connection failed after token refresh: %w", err)
+			}
+		} else {
+			return err
+		}
 	}
 	defer client.Close()
 

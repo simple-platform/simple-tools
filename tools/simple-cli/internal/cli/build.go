@@ -315,13 +315,13 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 
 	if jsonOutput {
 		return printJSON(map[string]interface{}{
-			"status":         "complete",
-			"total":          totalCount,
-			"success":        actionSuccesses + spaceSuccesses,
-			"failed":         totalFailures,
-			"failedActions":  failedActions,
-			"failedSpaces":   failedSpaces,
-			"errors":         errors,
+			"status":        "complete",
+			"total":         totalCount,
+			"success":       actionSuccesses + spaceSuccesses,
+			"failed":        totalFailures,
+			"failedActions": failedActions,
+			"failedSpaces":  failedSpaces,
+			"errors":        errors,
 		})
 	}
 

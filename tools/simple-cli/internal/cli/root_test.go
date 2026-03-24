@@ -22,11 +22,12 @@ func invokeCmd(args ...string) (string, string, error) {
 
 	// Swap stdout/stderr to capture output from functions that write directly to os.Stdout/Err
 	// (like fmt.Println called deep in the command logic)
-	oldStdout := os.Stdout
-	oldStderr := os.Stderr
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-	os.Stderr = w // Redirect stderr to same pipe for simplicity in this helper
+	oldOut := os.Stdout
+	oldErr := os.Stderr
+	outR, outW, _ := os.Pipe()
+	errR, errW, _ := os.Pipe()
+	os.Stdout, os.Stderr = outW, errW
+	defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
 
 	// Configure Cobra command to write to our buffers
 	// Note: We do both pipe capture (for fmt.Print) and SetOut (for cmd.Print) to be safe.
@@ -37,14 +38,12 @@ func invokeCmd(args ...string) (string, string, error) {
 	// Execute the command
 	err := RootCmd.Execute()
 
-	// Restore original stdout/stderr
-	_ = w.Close()
-	os.Stdout = oldStdout
-	os.Stderr = oldStderr
-	out, _ := io.ReadAll(r)
+	_ = outW.Close(); _ = errW.Close()
+	_, _ = io.Copy(outBuf, outR)
+	_, _ = io.Copy(errBuf, errR)
 
-	// Combine pipe output with buffer output to get the complete picture of what was printed.
-	fullOutput := string(out) + outBuf.String()
+	// Extract standard captured outputs
+	fullOutput := outBuf.String()
 	fullErr := errBuf.String()
 
 	return fullOutput, fullErr, err

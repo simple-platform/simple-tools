@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="../../LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="License"></a>
-  <a href="#installation"><img src="https://img.shields.io/badge/go-%3E%3D1.25-00ADD8.svg" alt="Go Version"></a>
+  <a href="#installation"><img src="https://img.shields.io/badge/go-%3E%3D1.25.5-00ADD8.svg" alt="Go Version"></a>
   <a href="#contributing"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg" alt="PRs Welcome"></a>
 </p>
 
@@ -34,7 +34,7 @@ curl -fsSL https://tools.simple.dev/simple-cli/install | bash
 
 ### Install from Source
 
-**Prerequisites**: Go 1.25.4 or later ([Download](https://golang.org/dl/))
+**Prerequisites**: Go 1.25.5 or later ([Download](https://golang.org/dl/))
 
 ```bash
 # Clone the repository
@@ -156,6 +156,65 @@ simple test com.mycompany.crm --action send-email
 # Test behavior
 simple test com.mycompany.crm --behavior order
 ```
+
+---
+
+### `simple auth`
+
+Manages Proof-of-Possession (PoP) machine authentication for the Simple Platform.
+
+---
+
+#### `simple auth status`
+
+Display currently enrolled cryptographic keypairs and cached JWT sessions.
+
+**Usage:**
+
+```bash
+simple auth status
+```
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--json` | `false` | Emit output as JSON for automation. |
+
+---
+
+#### `simple auth enroll`
+
+Generate a machine keypair and enroll it with the Identity service.
+
+**Usage:**
+
+```bash
+simple auth enroll --env <environment>
+```
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--json` | `false` | Emit output as JSON for automation. |
+
+---
+
+#### `simple auth logout`
+
+Clear the cached session token for an environment. The next deploy or install will re-authenticate automatically.
+
+**Usage:**
+
+```bash
+simple auth logout --env <environment>
+```
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--json` | `false` | Emit output as JSON for automation. |
 
 ---
 

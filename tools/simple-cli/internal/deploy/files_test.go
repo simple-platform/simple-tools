@@ -46,7 +46,7 @@ func TestFileCollector_CollectFiles(t *testing.T) {
 	spaceDir := filepath.Join(dir, "spaces", "my-space", "dist")
 	_ = os.MkdirAll(spaceDir, 0755)
 	_ = os.WriteFile(filepath.Join(spaceDir, "index.html"), []byte("<html>"), 0644)
-	
+
 	spaceAssetsDir := filepath.Join(spaceDir, "assets")
 	_ = os.MkdirAll(spaceAssetsDir, 0755)
 	_ = os.WriteFile(filepath.Join(spaceAssetsDir, "index-abc.js"), []byte("js-bundle"), 0644)
