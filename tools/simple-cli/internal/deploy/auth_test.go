@@ -98,7 +98,7 @@ func createTestJWT(exp int64) string {
 }
 
 func createTestJWTWithAlg(exp int64, alg string) string {
-	header := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"alg":"%s","typ":"at+jwt","kid":"test-key-id"}`, alg)))
+	header := base64.URLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"alg":"%s","typ":"at+jwt","kid":"KEYtestid"}`, alg)))
 	payload := base64.URLEncoding.EncodeToString([]byte(`{"exp":` + strconv.FormatInt(exp, 10) + `,"sub":"test"}`))
 	signature := base64.URLEncoding.EncodeToString([]byte("fake-signature"))
 	return header + "." + payload + "." + signature
@@ -111,7 +111,7 @@ func TestAuthenticator_GetJWT(t *testing.T) {
 	fixedTime := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
 	futureExpiry := fixedTime.Add(1 * time.Hour)
 	// 32-byte key base64url encoded
-	validJWKS := `{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`
+	validJWKS := `{"keys":[{"kty":"OKP","kid":"KEYtestid","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`
 
 	validAPIKey := "si_testid" + strings.Repeat("a", 64)
 
@@ -558,7 +558,7 @@ func TestAuthenticator_GetJWT_StoreLoadError(t *testing.T) {
 		Responses: []*http.Response{
 			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte{}))}, // Enroll
 			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, createTestJWT(time.Now().Add(1*time.Hour).Unix())))))},
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))},
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"KEYtestid","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))},
 		},
 	}
 
@@ -610,9 +610,9 @@ func TestEnrollAndAuthenticate_RequestFormat(t *testing.T) {
 	futureToken := createTestJWT(time.Now().Add(1 * time.Hour).Unix())
 	mockClient := &MockHTTPClient{
 		Responses: []*http.Response{
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                                                                 // Enroll
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, futureToken))))},                                                                // Login
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"test-key-id","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))}, // JWKS
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                                                              // Enroll
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, futureToken))))},                                                             // Login
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"KEYmytestid","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))}, // JWKS
 		},
 	}
 
@@ -642,8 +642,8 @@ func TestEnrollAndAuthenticate_RequestFormat(t *testing.T) {
 	if !strings.Contains(string(enrollBody), `"api_key":"`+validAPIKey+`"`) {
 		t.Errorf("Enroll body missing api_key, got: %s", string(enrollBody))
 	}
-	if !strings.Contains(string(enrollBody), `"public_key"`) {
-		t.Errorf("Enroll body missing public_key, got: %s", string(enrollBody))
+	if !strings.Contains(string(enrollBody), `"public_key"`) || !strings.Contains(string(enrollBody), `"kid":"KEYmytestid"`) {
+		t.Errorf("Enroll body missing public_key or correct kid, got: %s", string(enrollBody))
 	}
 
 	// Check Login request
@@ -663,6 +663,16 @@ func TestEnrollAndAuthenticate_RequestFormat(t *testing.T) {
 	if err := json.Unmarshal(loginBody, &loginMap); err == nil {
 		parts := strings.Split(loginMap["api_key"], ".")
 		if len(parts) == 4 { // si_prefix.header.payload.sig
+			// Verify header kid in PoP JWT
+			headerBytes, err := base64URLDecode(parts[1])
+			if err == nil {
+				var header map[string]string
+				_ = json.Unmarshal(headerBytes, &header)
+				if header["kid"] != "KEYmytestid" {
+					t.Errorf("PoP JWT header kid = %q, want KEYmytestid", header["kid"])
+				}
+			}
+
 			payloadBytes, err := base64URLDecode(parts[2])
 			if err == nil && !strings.Contains(string(payloadBytes), `"jti":"`) {
 				t.Errorf("PoP JWT payload missing 'jti' claim: %s", string(payloadBytes))

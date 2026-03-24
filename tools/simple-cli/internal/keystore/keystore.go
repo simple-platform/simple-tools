@@ -31,32 +31,29 @@ func Dir() string {
 	return filepath.Join(home, ".simple", "keys")
 }
 
-// keyDir returns the directory for a specific id_suffix.
-// e.g. ~/.simple/keys/000001f097af4c/
-func keyDir(idSuffix string) string {
-	return filepath.Join(Dir(), idSuffix)
+// keyDir returns the directory for a specific tenant and id_suffix.
+// e.g. ~/.simple/keys/acme/000001f097af4c/
+func keyDir(tenant, idSuffix string) string {
+	return filepath.Join(Dir(), tenant, idSuffix)
 }
 
 // IsEnrolled returns true when both private.pem and the .enrolled sentinel
-// exist for the given id_suffix. The sentinel is only written after a
-// successful POST /auth/api-key/enroll, so its presence means the server
-// has this machine's public key.
-func IsEnrolled(idSuffix string) bool {
-	_, e1 := os.Stat(filepath.Join(keyDir(idSuffix), "private.pem"))
-	_, e2 := os.Stat(filepath.Join(keyDir(idSuffix), ".enrolled"))
+// exist for the given tenant and id_suffix.
+func IsEnrolled(tenant, idSuffix string) bool {
+	dir := keyDir(tenant, idSuffix)
+	_, e1 := os.Stat(filepath.Join(dir, "private.pem"))
+	_, e2 := os.Stat(filepath.Join(dir, ".enrolled"))
 	return e1 == nil && e2 == nil
 }
 
-// GenerateAndSave creates a new Ed25519 keypair and persists it to disk.
-// The .enrolled sentinel is NOT written here — call MarkEnrolled only after
-// the server confirms enrollment (HTTP 200 from /auth/api-key/enroll).
-func GenerateAndSave(idSuffix string) (*Keypair, error) {
+// GenerateAndSave creates a new Ed25519 keypair and persists it to disk under the tenant-scoped directory.
+func GenerateAndSave(tenant, idSuffix string) (*Keypair, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("keygen failed: %w", err)
 	}
 
-	dir := keyDir(idSuffix)
+	dir := keyDir(tenant, idSuffix)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create key dir: %w", err)
 	}
@@ -91,9 +88,10 @@ func GenerateAndSave(idSuffix string) (*Keypair, error) {
 	return &Keypair{IDSuffix: idSuffix, PrivateKey: priv, PublicJWK: jwk}, nil
 }
 
-// Load reads an existing keypair from disk. Does not check enrollment status.
-func Load(idSuffix string) (*Keypair, error) {
-	privPath := filepath.Join(keyDir(idSuffix), "private.pem")
+// Load reads an existing keypair from disk for the given tenant. Does not check enrollment status.
+func Load(tenant, idSuffix string) (*Keypair, error) {
+	dir := keyDir(tenant, idSuffix)
+	privPath := filepath.Join(dir, "private.pem")
 	data, err := os.ReadFile(privPath)
 	if err != nil {
 		return nil, fmt.Errorf("private key not found for %s: %w", idSuffix, err)
@@ -111,7 +109,7 @@ func Load(idSuffix string) (*Keypair, error) {
 		return nil, fmt.Errorf("unexpected key type for %s", idSuffix)
 	}
 
-	jwkData, err := os.ReadFile(filepath.Join(keyDir(idSuffix), "public.jwk"))
+	jwkData, err := os.ReadFile(filepath.Join(dir, "public.jwk"))
 	if err != nil {
 		return nil, fmt.Errorf("public.jwk not found for %s: %w", idSuffix, err)
 	}
@@ -123,30 +121,28 @@ func Load(idSuffix string) (*Keypair, error) {
 	return &Keypair{IDSuffix: idSuffix, PrivateKey: priv, PublicJWK: jwk}, nil
 }
 
-func GenerateOrLoad(idSuffix string) (*Keypair, error) {
+func GenerateOrLoad(tenant, idSuffix string) (*Keypair, error) {
 	// Optimistic load
-	if kp, err := Load(idSuffix); err == nil {
+	if kp, err := Load(tenant, idSuffix); err == nil {
 		return kp, nil
 	}
 	// Try generation (handles O_EXCL race natively returning an error if created underneath us)
-	kp, err := GenerateAndSave(idSuffix)
+	kp, err := GenerateAndSave(tenant, idSuffix)
 	if errors.Is(err, ErrKeyAlreadyExists) {
-		return Load(idSuffix)
+		return Load(tenant, idSuffix)
 	}
 	return kp, err
 }
 
 // MarkEnrolled writes the .enrolled sentinel file after a successful
-// POST /auth/api-key/enroll. This is separate from key generation so that
-// a crash between generation and enrollment causes a clean retry.
-func MarkEnrolled(idSuffix string) error {
-	return os.WriteFile(filepath.Join(keyDir(idSuffix), ".enrolled"), []byte{}, 0600)
+// POST /auth/api-key/enroll for the given tenant.
+func MarkEnrolled(tenant, idSuffix string) error {
+	return os.WriteFile(filepath.Join(keyDir(tenant, idSuffix), ".enrolled"), []byte{}, 0600)
 }
 
-// DeleteKey removes the entire keypair directory, forcing re-generation
-// and re-enrollment on the next auth call. Used by `simple auth enroll`.
-func DeleteKey(idSuffix string) error {
-	return os.RemoveAll(keyDir(idSuffix))
+// DeleteKey removes the entire tenant-scoped keypair directory.
+func DeleteKey(tenant, idSuffix string) error {
+	return os.RemoveAll(keyDir(tenant, idSuffix))
 }
 
 // buildPublicJWK constructs the minimal OKP JWK for an Ed25519 public key.
@@ -154,7 +150,7 @@ func buildPublicJWK(pub ed25519.PublicKey, idSuffix string) map[string]string {
 	return map[string]string{
 		"kty": "OKP",
 		"crv": "Ed25519",
-		"kid": idSuffix,
+		"kid": "KEY" + idSuffix,
 		"x":   base64.RawURLEncoding.EncodeToString(pub),
 	}
 }

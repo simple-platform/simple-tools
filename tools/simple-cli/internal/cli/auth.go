@@ -65,6 +65,7 @@ func init() {
 }
 
 type keyInfo struct {
+	Tenant   string `json:"tenant"`
 	IDSuffix string `json:"id_suffix"`
 	Enrolled bool   `json:"enrolled"`
 	Dir      string `json:"dir"`
@@ -78,15 +79,23 @@ type tokenInfo struct {
 
 func runAuthStatus(_ *cobra.Command, _ []string) error {
 	keys := []keyInfo{}
-	if entries, err := os.ReadDir(keystore.Dir()); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				id := e.Name()
-				keys = append(keys, keyInfo{
-					IDSuffix: id,
-					Enrolled: keystore.IsEnrolled(id),
-					Dir:      filepath.Join(keystore.Dir(), id),
-				})
+	if tenants, err := os.ReadDir(keystore.Dir()); err == nil {
+		for _, te := range tenants {
+			if te.IsDir() {
+				tenant := te.Name()
+				if keysEntries, err := os.ReadDir(filepath.Join(keystore.Dir(), tenant)); err == nil {
+					for _, ke := range keysEntries {
+						if ke.IsDir() {
+							id := ke.Name()
+							keys = append(keys, keyInfo{
+								Tenant:   tenant,
+								IDSuffix: id,
+								Enrolled: keystore.IsEnrolled(tenant, id),
+								Dir:      filepath.Join(keystore.Dir(), tenant, id),
+							})
+						}
+					}
+				}
 			}
 		}
 	}
@@ -129,7 +138,7 @@ func runAuthStatus(_ *cobra.Command, _ []string) error {
 		if !k.Enrolled {
 			status = "⚠️  keypair exists, not enrolled"
 		}
-		fmt.Printf("  %-24s  %s\n", k.IDSuffix, status)
+		fmt.Printf("  %-12s / %-24s  %s\n", k.Tenant, k.IDSuffix, status)
 	}
 
 	fmt.Printf("\nCached Session Tokens (%d):\n", len(tokens))
@@ -191,8 +200,8 @@ func runAuthEnroll(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Wipe keypair — next GetJWT call will re-generate and re-enroll.
-	if err := keystore.DeleteKey(idSuffix); err != nil {
-		return fmt.Errorf("failed to delete keypair for %s: %w", idSuffix, err)
+	if err := keystore.DeleteKey(cfg.Tenant, idSuffix); err != nil {
+		return fmt.Errorf("failed to delete keypair for %s/%s: %w", cfg.Tenant, idSuffix, err)
 	}
 
 	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, authEnv)

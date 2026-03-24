@@ -27,7 +27,7 @@ func TestSignPopJWT(t *testing.T) {
 	headerBytes, _ := base64.RawURLEncoding.DecodeString(parts[0])
 	var header map[string]string
 	_ = json.Unmarshal(headerBytes, &header)
-	if header["alg"] != "EdDSA" || header["typ"] != "JWT" {
+	if header["alg"] != "EdDSA" || header["typ"] != "JWT" || header["kid"] != "KEY000001f097af4c" {
 		t.Errorf("unexpected header: %v", header)
 	}
 

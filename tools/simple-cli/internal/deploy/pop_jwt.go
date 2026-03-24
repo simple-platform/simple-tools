@@ -23,6 +23,7 @@ func SignPopJWT(privateKey ed25519.PrivateKey, idSuffix string) (string, error) 
 	headerJSON, _ := json.Marshal(map[string]string{
 		"alg": "EdDSA",
 		"typ": "JWT",
+		"kid": "KEY" + idSuffix,
 	})
 	headerB64 := base64.RawURLEncoding.EncodeToString(headerJSON)
 
