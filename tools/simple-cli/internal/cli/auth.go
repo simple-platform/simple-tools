@@ -66,6 +66,7 @@ func init() {
 
 type keyInfo struct {
 	Tenant   string `json:"tenant"`
+	Env      string `json:"env"`
 	IDSuffix string `json:"id_suffix"`
 	Enrolled bool   `json:"enrolled"`
 	Dir      string `json:"dir"`
@@ -83,16 +84,26 @@ func runAuthStatus(_ *cobra.Command, _ []string) error {
 		for _, te := range tenants {
 			if te.IsDir() {
 				tenant := te.Name()
-				if keysEntries, err := os.ReadDir(filepath.Join(keystore.Dir(), tenant)); err == nil {
-					for _, ke := range keysEntries {
-						if ke.IsDir() {
-							id := ke.Name()
-							keys = append(keys, keyInfo{
-								Tenant:   tenant,
-								IDSuffix: id,
-								Enrolled: keystore.IsEnrolled(tenant, id),
-								Dir:      filepath.Join(keystore.Dir(), tenant, id),
-							})
+				envDir := filepath.Join(keystore.Dir(), tenant)
+				if envEntries, err := os.ReadDir(envDir); err == nil {
+					for _, ee := range envEntries {
+						if ee.IsDir() {
+							env := ee.Name()
+							keyDir := filepath.Join(envDir, env)
+							if keysEntries, err := os.ReadDir(keyDir); err == nil {
+								for _, ke := range keysEntries {
+									if ke.IsDir() {
+										id := ke.Name()
+										keys = append(keys, keyInfo{
+											Tenant:   tenant,
+											Env:      env,
+											IDSuffix: id,
+											Enrolled: keystore.IsEnrolled(tenant, env, id),
+											Dir:      filepath.Join(keyDir, id),
+										})
+									}
+								}
+							}
 						}
 					}
 				}
@@ -138,7 +149,7 @@ func runAuthStatus(_ *cobra.Command, _ []string) error {
 		if !k.Enrolled {
 			status = "⚠️  keypair exists, not enrolled"
 		}
-		fmt.Printf("  %-12s / %-24s  %s\n", k.Tenant, k.IDSuffix, status)
+		fmt.Printf("  %-10s / %-8s / %-24s  %s\n", k.Tenant, k.Env, k.IDSuffix, status)
 	}
 
 	fmt.Printf("\nCached Session Tokens (%d):\n", len(tokens))
@@ -200,8 +211,8 @@ func runAuthEnroll(cmd *cobra.Command, _ []string) error {
 	}
 
 	// Wipe keypair — next GetJWT call will re-generate and re-enroll.
-	if err := keystore.DeleteKey(cfg.Tenant, idSuffix); err != nil {
-		return fmt.Errorf("failed to delete keypair for %s/%s: %w", cfg.Tenant, idSuffix, err)
+	if err := keystore.DeleteKey(cfg.Tenant, authEnv, idSuffix); err != nil {
+		return fmt.Errorf("failed to delete keypair for %s/%s/%s: %w", cfg.Tenant, authEnv, idSuffix, err)
 	}
 
 	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, authEnv)

@@ -7,10 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"errors"
 )
 
 // ErrKeyAlreadyExists is returned natively when a cryptographic keypair tries to securely re-initialize itself concurrently.
@@ -31,29 +31,29 @@ func Dir() string {
 	return filepath.Join(home, ".simple", "keys")
 }
 
-// keyDir returns the directory for a specific tenant and id_suffix.
-// e.g. ~/.simple/keys/acme/000001f097af4c/
-func keyDir(tenant, idSuffix string) string {
-	return filepath.Join(Dir(), tenant, idSuffix)
+// keyDir returns the directory for a specific tenant, env, and id_suffix.
+// e.g. ~/.simple/keys/acme/prod/000001f097af4c/
+func keyDir(tenant, env, idSuffix string) string {
+	return filepath.Join(Dir(), tenant, env, idSuffix)
 }
 
 // IsEnrolled returns true when both private.pem and the .enrolled sentinel
-// exist for the given tenant and id_suffix.
-func IsEnrolled(tenant, idSuffix string) bool {
-	dir := keyDir(tenant, idSuffix)
+// exist for the given tenant, env, and id_suffix.
+func IsEnrolled(tenant, env, idSuffix string) bool {
+	dir := keyDir(tenant, env, idSuffix)
 	_, e1 := os.Stat(filepath.Join(dir, "private.pem"))
 	_, e2 := os.Stat(filepath.Join(dir, ".enrolled"))
 	return e1 == nil && e2 == nil
 }
 
-// GenerateAndSave creates a new Ed25519 keypair and persists it to disk under the tenant-scoped directory.
-func GenerateAndSave(tenant, idSuffix string) (*Keypair, error) {
+// GenerateAndSave creates a new Ed25519 keypair and persists it to disk under the tenant+env-scoped directory.
+func GenerateAndSave(tenant, env, idSuffix string) (*Keypair, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("keygen failed: %w", err)
 	}
 
-	dir := keyDir(tenant, idSuffix)
+	dir := keyDir(tenant, env, idSuffix)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create key dir: %w", err)
 	}
@@ -88,9 +88,9 @@ func GenerateAndSave(tenant, idSuffix string) (*Keypair, error) {
 	return &Keypair{IDSuffix: idSuffix, PrivateKey: priv, PublicJWK: jwk}, nil
 }
 
-// Load reads an existing keypair from disk for the given tenant. Does not check enrollment status.
-func Load(tenant, idSuffix string) (*Keypair, error) {
-	dir := keyDir(tenant, idSuffix)
+// Load reads an existing keypair from disk for the given tenant and env. Does not check enrollment status.
+func Load(tenant, env, idSuffix string) (*Keypair, error) {
+	dir := keyDir(tenant, env, idSuffix)
 	privPath := filepath.Join(dir, "private.pem")
 	data, err := os.ReadFile(privPath)
 	if err != nil {
@@ -121,28 +121,30 @@ func Load(tenant, idSuffix string) (*Keypair, error) {
 	return &Keypair{IDSuffix: idSuffix, PrivateKey: priv, PublicJWK: jwk}, nil
 }
 
-func GenerateOrLoad(tenant, idSuffix string) (*Keypair, error) {
+// GenerateOrLoad returns the keypair for the given tenant, env, and id_suffix,
+// generating a new one if it doesn't exist yet.
+func GenerateOrLoad(tenant, env, idSuffix string) (*Keypair, error) {
 	// Optimistic load
-	if kp, err := Load(tenant, idSuffix); err == nil {
+	if kp, err := Load(tenant, env, idSuffix); err == nil {
 		return kp, nil
 	}
 	// Try generation (handles O_EXCL race natively returning an error if created underneath us)
-	kp, err := GenerateAndSave(tenant, idSuffix)
+	kp, err := GenerateAndSave(tenant, env, idSuffix)
 	if errors.Is(err, ErrKeyAlreadyExists) {
-		return Load(tenant, idSuffix)
+		return Load(tenant, env, idSuffix)
 	}
 	return kp, err
 }
 
 // MarkEnrolled writes the .enrolled sentinel file after a successful
-// POST /auth/api-key/enroll for the given tenant.
-func MarkEnrolled(tenant, idSuffix string) error {
-	return os.WriteFile(filepath.Join(keyDir(tenant, idSuffix), ".enrolled"), []byte{}, 0600)
+// POST /auth/api-key/enroll for the given tenant and env.
+func MarkEnrolled(tenant, env, idSuffix string) error {
+	return os.WriteFile(filepath.Join(keyDir(tenant, env, idSuffix), ".enrolled"), []byte{}, 0600)
 }
 
-// DeleteKey removes the entire tenant-scoped keypair directory.
-func DeleteKey(tenant, idSuffix string) error {
-	return os.RemoveAll(keyDir(tenant, idSuffix))
+// DeleteKey removes the entire env-scoped keypair directory.
+func DeleteKey(tenant, env, idSuffix string) error {
+	return os.RemoveAll(keyDir(tenant, env, idSuffix))
 }
 
 // buildPublicJWK constructs the minimal OKP JWK for an Ed25519 public key.

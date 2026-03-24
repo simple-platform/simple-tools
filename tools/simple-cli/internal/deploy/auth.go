@@ -98,8 +98,13 @@ func (a *Authenticator) GetJWT(ctx context.Context, endpoint, apiKey, tenantEnvK
 	}
 
 	// Exchange API key for JWT
-	tenant := strings.Split(tenantEnvKey, "::")[0]
-	token, err := a.enrollAndAuthenticate(ctx, endpoint, apiKey, tenant)
+	parts := strings.SplitN(tenantEnvKey, "::", 2)
+	tenant := parts[0]
+	env := ""
+	if len(parts) == 2 {
+		env = parts[1]
+	}
+	token, err := a.enrollAndAuthenticate(ctx, endpoint, apiKey, tenant, env)
 	if err != nil {
 		return "", err
 	}
@@ -133,19 +138,19 @@ func (a *Authenticator) GetJWT(ctx context.Context, endpoint, apiKey, tenantEnvK
 // enrollAndAuthenticate replaces exchangeAPIKeyForJWT.
 // It handles one-time machine enrollment and then signs a fresh PoP JWT
 // on every call to obtain a session JWT from the Identity Service.
-func (a *Authenticator) enrollAndAuthenticate(ctx context.Context, endpoint, rawAPIKey, tenant string) (string, error) {
+func (a *Authenticator) enrollAndAuthenticate(ctx context.Context, endpoint, rawAPIKey, tenant, env string) (string, error) {
 	idSuffix, err := ParseIDSuffix(rawAPIKey)
 	if err != nil {
 		return "", fmt.Errorf("invalid api key format: %w", err)
 	}
 
-	kp, err := keystore.GenerateOrLoad(tenant, idSuffix)
+	kp, err := keystore.GenerateOrLoad(tenant, env, idSuffix)
 	if err != nil {
 		return "", fmt.Errorf("keypair error for %s: %w", idSuffix, err)
 	}
 
-	// Enrollment is idempotent — skip if .enrolled sentinel exists.
-	if !keystore.IsEnrolled(tenant, idSuffix) {
+	// Enrollment is idempotent — skip if .enrolled sentinel exists for this env.
+	if !keystore.IsEnrolled(tenant, env, idSuffix) {
 		var enrollErr error
 		// 2-attempt retry for network resilience
 		for i := 0; i < 2; i++ {
@@ -162,7 +167,7 @@ func (a *Authenticator) enrollAndAuthenticate(ctx context.Context, endpoint, raw
 		if enrollErr != nil {
 			return "", fmt.Errorf("enrollment failed after retries: %w", enrollErr)
 		}
-		if err := keystore.MarkEnrolled(tenant, idSuffix); err != nil {
+		if err := keystore.MarkEnrolled(tenant, env, idSuffix); err != nil {
 			return "", fmt.Errorf("failed to mark enrollment: %w", err)
 		}
 	}
