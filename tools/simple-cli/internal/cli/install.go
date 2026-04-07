@@ -96,7 +96,7 @@ func runInstall(ctx context.Context, appID string) error {
 	client := deploy.NewClient(deploy.ClientConfig{
 		Endpoint: env.DevOpsEndpoint(),
 		JWT:      jwt,
-		Timeout:  30 * time.Second,
+		Timeout:  15 * time.Minute,
 	})
 
 	if err := client.Connect(); err != nil {
