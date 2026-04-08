@@ -294,52 +294,52 @@
         }
       }
     },
-    "nodejs@25.7.0": {
-      "last_modified": "2026-02-26T05:06:13Z",
+    "nodejs@25.9.0": {
+      "last_modified": "2026-04-01T17:36:14Z",
       "plugin_version": "0.0.2",
-      "resolved": "github:NixOS/nixpkgs/26eaeac4e409d7b5a6bf6f90a2a2dc223c78d915#nodejs_25",
+      "resolved": "github:NixOS/nixpkgs/6ebfbc38bdc6b22822a6f991f2d922306f33cfbc#nodejs_25",
       "source": "devbox-search",
-      "version": "25.7.0",
+      "version": "25.9.0",
       "systems": {
         "aarch64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/7jwpa43ghplnyay8xinpp7cpfz2mx4r5-nodejs-25.7.0",
+              "path": "/nix/store/3j4vz6gjyjwl6nb83bl96rqd05hvhlj0-nodejs-25.9.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/7jwpa43ghplnyay8xinpp7cpfz2mx4r5-nodejs-25.7.0"
+          "store_path": "/nix/store/3j4vz6gjyjwl6nb83bl96rqd05hvhlj0-nodejs-25.9.0"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/w1a1qfdf41h0cr92ir3nkg56wr7q7sqy-nodejs-25.7.0",
+              "path": "/nix/store/4cb8550300p6qvls0vglpscndhkacs0p-nodejs-25.9.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/w1a1qfdf41h0cr92ir3nkg56wr7q7sqy-nodejs-25.7.0"
+          "store_path": "/nix/store/4cb8550300p6qvls0vglpscndhkacs0p-nodejs-25.9.0"
         },
         "x86_64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/kyhpn0z68yf66znb5viy5a1hghaf0n2a-nodejs-25.7.0",
+              "path": "/nix/store/d50lan93rcqiyf64r7q8nqacisfwji4j-nodejs-25.9.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/kyhpn0z68yf66znb5viy5a1hghaf0n2a-nodejs-25.7.0"
+          "store_path": "/nix/store/d50lan93rcqiyf64r7q8nqacisfwji4j-nodejs-25.9.0"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/rmrlkn4hcsfllvki855yig5vpmlk4kw1-nodejs-25.7.0",
+              "path": "/nix/store/dqxjqyvh6w8kh3azd4zr7k4dfw8b7lxp-nodejs-25.9.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/rmrlkn4hcsfllvki855yig5vpmlk4kw1-nodejs-25.7.0"
+          "store_path": "/nix/store/dqxjqyvh6w8kh3azd4zr7k4dfw8b7lxp-nodejs-25.9.0"
         }
       }
     },
