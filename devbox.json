@@ -4,7 +4,7 @@
     "commit": "11cb3517b3af6af300dd6c055aeda73c9bf52c48"
   },
   "packages": {
-    "nodejs": "25.7.0",
+    "nodejs": "25.9.0",
     "go": "1.26.1",
     "erlang": "27.2",
     "elixir": "1.18.1",
