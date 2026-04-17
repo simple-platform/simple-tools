@@ -12,7 +12,8 @@
     "zig": "0.15.2",
     "p7zip": "17.05",
     "act": "0.2.84",
-    "golangci-lint": "2.11.3"
+    "golangci-lint": "2.11.3",
+    "gemini-cli": "0.37.0"
   },
   "env": {
     "COREPACK_INTEGRITY_KEYS": "0",
