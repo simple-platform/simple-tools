@@ -157,7 +157,7 @@ func TestMockFileSystem_MkdirAll(t *testing.T) {
 }
 
 func TestMockFileInfo(t *testing.T) {
-	m := &mockFileInfo{}
+	m := &mockFileInfo{name: "mock", isDir: true}
 	if m.Name() != "mock" {
 		t.Error("Name() incorrect")
 	}
