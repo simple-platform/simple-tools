@@ -11,7 +11,7 @@
     "beam27Packages.elixir-ls": "0.30.0",
     "zig": "0.15.2",
     "p7zip": "17.05",
-    "act": "0.2.86",
+    "act": "0.2.87",
     "golangci-lint": "2.11.4",
     "gemini-cli": "0.37.0"
   },
