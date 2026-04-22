@@ -500,7 +500,7 @@ func generatePropertyFromType(typeExpr ast.Expr, comment string, tagInfo StructT
 	switch t := typeExpr.(type) {
 	case *ast.Ident:
 		// Primitive type or named type
-		return generatePropertyFromIdent(t, prop, visited)
+		return generatePropertyFromIdent(t, prop)
 
 	case *ast.StarExpr:
 		// Pointer type (*T) - treat as nullable, recurse on the underlying type
@@ -530,7 +530,7 @@ func generatePropertyFromType(typeExpr ast.Expr, comment string, tagInfo StructT
 }
 
 // generatePropertyFromIdent handles identifier types (primitives and named types).
-func generatePropertyFromIdent(ident *ast.Ident, prop Property, visited map[string]bool) (Property, error) {
+func generatePropertyFromIdent(ident *ast.Ident, prop Property) (Property, error) {
 	typeName := ident.Name
 
 	// Map Go primitive types to JSON Schema types
