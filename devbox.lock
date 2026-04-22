@@ -194,51 +194,51 @@
         }
       }
     },
-    "gemini-cli@0.37.0": {
-      "last_modified": "2026-04-09T19:38:50Z",
-      "resolved": "github:NixOS/nixpkgs/b0188973b4b2a5b6bdba8b65381d6cd09a533da0#gemini-cli",
+    "gemini-cli@0.37.2": {
+      "last_modified": "2026-04-16T08:46:55Z",
+      "resolved": "github:NixOS/nixpkgs/b86751bc4085f48661017fa226dee99fab6c651b#gemini-cli",
       "source": "devbox-search",
-      "version": "0.37.0",
+      "version": "0.37.2",
       "systems": {
         "aarch64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/fpmkwqd63b84hzaj37wmvz53chfbfrwr-gemini-cli-0.37.0",
+              "path": "/nix/store/m18qm27wi6aw5x41lpchsgmyi488wa33-gemini-cli-0.37.2",
               "default": true
             }
           ],
-          "store_path": "/nix/store/fpmkwqd63b84hzaj37wmvz53chfbfrwr-gemini-cli-0.37.0"
+          "store_path": "/nix/store/m18qm27wi6aw5x41lpchsgmyi488wa33-gemini-cli-0.37.2"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/54vn5k7maargjcrai778rmfyk0s5gm9r-gemini-cli-0.37.0",
+              "path": "/nix/store/adi0hayxv3qcg7k7c6yc1146gvijb0r5-gemini-cli-0.37.2",
               "default": true
             }
           ],
-          "store_path": "/nix/store/54vn5k7maargjcrai778rmfyk0s5gm9r-gemini-cli-0.37.0"
+          "store_path": "/nix/store/adi0hayxv3qcg7k7c6yc1146gvijb0r5-gemini-cli-0.37.2"
         },
         "x86_64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/rpk0151p8cwplx4ji0knyq2m64i8k1fm-gemini-cli-0.37.0",
+              "path": "/nix/store/4pjjb9g9g4zc5g2j84jyj7wccjhmyvhf-gemini-cli-0.37.2",
               "default": true
             }
           ],
-          "store_path": "/nix/store/rpk0151p8cwplx4ji0knyq2m64i8k1fm-gemini-cli-0.37.0"
+          "store_path": "/nix/store/4pjjb9g9g4zc5g2j84jyj7wccjhmyvhf-gemini-cli-0.37.2"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/95daqfhwb0qb63h1609aclwf9fmmr7kg-gemini-cli-0.37.0",
+              "path": "/nix/store/9x980qvz9ranrywfpz3kxpwqhc6bzksi-gemini-cli-0.37.2",
               "default": true
             }
           ],
-          "store_path": "/nix/store/95daqfhwb0qb63h1609aclwf9fmmr7kg-gemini-cli-0.37.0"
+          "store_path": "/nix/store/9x980qvz9ranrywfpz3kxpwqhc6bzksi-gemini-cli-0.37.2"
         }
       }
     },
