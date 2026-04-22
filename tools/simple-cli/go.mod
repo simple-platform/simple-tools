@@ -10,6 +10,7 @@ require (
 	github.com/joho/godotenv v1.5.1
 	github.com/lithammer/shortuuid/v4 v4.2.0
 	github.com/spf13/cobra v1.10.2
+	github.com/tdewolff/parse/v2 v2.8.12
 )
 
 require (

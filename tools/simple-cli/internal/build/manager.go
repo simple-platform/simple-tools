@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"simple-cli/internal/fsx"
 	internalRuntime "simple-cli/internal/runtime"
 	"sync"
 )
@@ -16,6 +17,7 @@ var (
 	EnsureJavyFunc                = EnsureJavy
 	EnsureWasmOptFunc             = EnsureWasmOpt
 	EnsureDependenciesFunc        = EnsureDependencies
+	ExtractMetadataFunc           = ExtractMetadata
 	BundleJSFunc                  = BundleJS
 	BundleAsyncFunc               = BundleAsync
 	CompileToWasmFunc             = CompileToWasm
@@ -197,6 +199,13 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 	if err := EnsureDependenciesFunc(actionDir); err != nil {
 		report("Failed")
 		return ActionBuildResult{ActionName: actionName, Error: fmt.Errorf("npm install failed: %w", err)}
+	}
+
+	// Extract metadata (non-blocking - log warning on failure)
+	report("Extracting metadata...")
+	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
+		// Log warning but continue build (metadata extraction failure is non-fatal)
+		report(fmt.Sprintf("Metadata extraction warning: %v", err))
 	}
 
 	// Create build directory
