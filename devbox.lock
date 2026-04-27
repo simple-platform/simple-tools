@@ -50,8 +50,8 @@
       }
     },
     "beam27Packages.elixir-ls@0.30.0": {
-      "last_modified": "2026-03-29T14:22:01Z",
-      "resolved": "github:NixOS/nixpkgs/c397ef6af68c018462d786e1b65384abc472a907#beam27Packages.elixir-ls",
+      "last_modified": "2026-04-16T08:46:55Z",
+      "resolved": "github:NixOS/nixpkgs/b86751bc4085f48661017fa226dee99fab6c651b#beam27Packages.elixir-ls",
       "source": "devbox-search",
       "version": "0.30.0",
       "systems": {
@@ -59,41 +59,41 @@
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/jhqzp418yvd5nx8r3rlimrj1pcx5hkjn-elixir-ls-0.30.0",
+              "path": "/nix/store/c2amlma27fvvdnva90r7v1msjym6r3br-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/jhqzp418yvd5nx8r3rlimrj1pcx5hkjn-elixir-ls-0.30.0"
+          "store_path": "/nix/store/c2amlma27fvvdnva90r7v1msjym6r3br-elixir-ls-0.30.0"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/1hfini2kysfi43rfxnxna3lx89d96wvb-elixir-ls-0.30.0",
+              "path": "/nix/store/h42sccsy01qz5p1vkswsvjv7vyz95zfh-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/1hfini2kysfi43rfxnxna3lx89d96wvb-elixir-ls-0.30.0"
+          "store_path": "/nix/store/h42sccsy01qz5p1vkswsvjv7vyz95zfh-elixir-ls-0.30.0"
         },
         "x86_64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/sik0fp3afiji2f1zx13fppx4xnp23yf1-elixir-ls-0.30.0",
+              "path": "/nix/store/fivfsglh5by2igqzsh6q8g831jfgcz63-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/sik0fp3afiji2f1zx13fppx4xnp23yf1-elixir-ls-0.30.0"
+          "store_path": "/nix/store/fivfsglh5by2igqzsh6q8g831jfgcz63-elixir-ls-0.30.0"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/y4mlhk3zkbanqzp5fr34735vp9bwsjdr-elixir-ls-0.30.0",
+              "path": "/nix/store/fd6qbx1gdjl64ckbf9wvyia7vxcy1jzz-elixir-ls-0.30.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/y4mlhk3zkbanqzp5fr34735vp9bwsjdr-elixir-ls-0.30.0"
+          "store_path": "/nix/store/fd6qbx1gdjl64ckbf9wvyia7vxcy1jzz-elixir-ls-0.30.0"
         }
       }
     },
