@@ -8,7 +8,7 @@ import (
 
 const (
 	JavyName               = "javy"
-	JavyVersion            = "5.0.3"
+	JavyVersion            = "8.1.0"
 	JavyReleaseURLTemplate = "https://github.com/bytecodealliance/javy/releases/download/v%s/javy-%s-%s-v%s.gz"
 
 	WasmOptName               = "wasm-opt"

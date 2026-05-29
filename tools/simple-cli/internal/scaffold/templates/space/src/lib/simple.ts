@@ -21,6 +21,7 @@ query GetTheme {
 let rpcPort: MessagePort | null = null
 const pendingRequests = new Map<string, { resolve: (value: any) => void, reject: (reason?: any) => void, timer: number }>()
 const requestQueue: any[] = [] // Queue requests before port is ready
+type NavigationTarget = 'new-tab' | 'same-tab'
 
 // Security: Expected origin is the parent's origin.
 // In production, spaces are on assets.simple.dev and parent is on simple.dev.
@@ -159,6 +160,47 @@ export const query = executeRpcGraphQL
 
 /** Execute a GraphQL mutation. Returns the `data` object. */
 export const mutate = executeRpcGraphQL
+
+function getSafeNavigationUrl(rawUrl: string): string | null {
+  const expectedOrigin = getExpectedOrigin()
+  if (expectedOrigin === '*')
+    return null
+
+  try {
+    const parsed = new URL(rawUrl, expectedOrigin)
+    if (parsed.protocol !== 'https:')
+      return null
+
+    if (parsed.origin !== expectedOrigin)
+      return null
+
+    return parsed.toString()
+  }
+  catch {
+    return null
+  }
+}
+
+export function navigateInParent(rawUrl: string, target: NavigationTarget = 'same-tab'): boolean {
+  const safeUrl = getSafeNavigationUrl(rawUrl)
+  if (!safeUrl) {
+    console.warn('Blocked unsafe navigation request from space:', rawUrl)
+    return false
+  }
+
+  const payload = {
+    payload: { target, url: safeUrl },
+    type: 'NAVIGATE_REQUEST',
+  }
+
+  if (rpcPort) {
+    rpcPort.postMessage(payload)
+    return true
+  }
+
+  requestQueue.push(payload)
+  return true
+}
 
 /**
  * Decrypt a vault-encrypted field value for an existing record.
