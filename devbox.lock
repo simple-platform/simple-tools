@@ -194,51 +194,51 @@
         }
       }
     },
-    "gemini-cli@0.37.0": {
-      "last_modified": "2026-04-09T19:38:50Z",
-      "resolved": "github:NixOS/nixpkgs/b0188973b4b2a5b6bdba8b65381d6cd09a533da0#gemini-cli",
+    "gemini-cli@0.47.0": {
+      "last_modified": "2026-07-16T04:38:10Z",
+      "resolved": "github:NixOS/nixpkgs/6368bc923cec55a5f78960ade0cb4dd99580e087#gemini-cli",
       "source": "devbox-search",
-      "version": "0.37.0",
+      "version": "0.47.0",
       "systems": {
         "aarch64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/fpmkwqd63b84hzaj37wmvz53chfbfrwr-gemini-cli-0.37.0",
+              "path": "/nix/store/7ldx9dn9jqf2nz0zi8ldwhf7n414d7xj-gemini-cli-0.47.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/fpmkwqd63b84hzaj37wmvz53chfbfrwr-gemini-cli-0.37.0"
+          "store_path": "/nix/store/7ldx9dn9jqf2nz0zi8ldwhf7n414d7xj-gemini-cli-0.47.0"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/54vn5k7maargjcrai778rmfyk0s5gm9r-gemini-cli-0.37.0",
+              "path": "/nix/store/2cak9al9y83x36g6mi5qwn50r2yk05h0-gemini-cli-0.47.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/54vn5k7maargjcrai778rmfyk0s5gm9r-gemini-cli-0.37.0"
+          "store_path": "/nix/store/2cak9al9y83x36g6mi5qwn50r2yk05h0-gemini-cli-0.47.0"
         },
         "x86_64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/rpk0151p8cwplx4ji0knyq2m64i8k1fm-gemini-cli-0.37.0",
+              "path": "/nix/store/8cmqajaa9c6xxnvcynnq6ihii7wswcpg-gemini-cli-0.47.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/rpk0151p8cwplx4ji0knyq2m64i8k1fm-gemini-cli-0.37.0"
+          "store_path": "/nix/store/8cmqajaa9c6xxnvcynnq6ihii7wswcpg-gemini-cli-0.47.0"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/95daqfhwb0qb63h1609aclwf9fmmr7kg-gemini-cli-0.37.0",
+              "path": "/nix/store/3xjivzcqx94sn99z1yzczn9d1yf8q28g-gemini-cli-0.47.0",
               "default": true
             }
           ],
-          "store_path": "/nix/store/95daqfhwb0qb63h1609aclwf9fmmr7kg-gemini-cli-0.37.0"
+          "store_path": "/nix/store/3xjivzcqx94sn99z1yzczn9d1yf8q28g-gemini-cli-0.47.0"
         }
       }
     },
@@ -344,7 +344,7 @@
     },
     "nodejs@25.9.0": {
       "last_modified": "2026-04-01T17:36:14Z",
-      "plugin_version": "0.0.2",
+      "plugin_version": "0.0.4",
       "resolved": "github:NixOS/nixpkgs/6ebfbc38bdc6b22822a6f991f2d922306f33cfbc#nodejs_25",
       "source": "devbox-search",
       "version": "25.9.0",
