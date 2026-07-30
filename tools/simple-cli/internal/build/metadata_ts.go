@@ -113,16 +113,16 @@ func ensureNPMPackages() error {
 		}
 	}
 
-	// If packages are not installed, install them
+	// If packages are not installed, install them.
+	// Output is captured rather than inherited: builds run under a progress UI
+	// that repaints in place, and a concurrent write from a child process
+	// corrupts the frame. The output is surfaced only if the install fails.
 	if !allInstalled {
-		fmt.Println("Installing required npm packages (ts-json-schema-generator, ts-morph)...")
 		cmd := exec.Command("pnpm", "add", "-w", "-D", "ts-json-schema-generator", "ts-morph")
 		cmd.Dir = workspaceRoot
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("failed to install packages: %w", err)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to install packages: %w\nOutput: %s", err, out)
 		}
 	}
 
@@ -221,13 +221,13 @@ func executeScript(scriptPath, actionDir string) error {
 		_ = os.Remove(tempScriptPath) // Clean up after execution
 	}()
 
+	// Captured, not inherited: this runs once per action while the progress UI
+	// is repainting, and interleaved child output corrupts the frame.
 	cmd := exec.Command("node", tempScriptPath, actionDir)
 	cmd.Dir = workspaceRoot
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("script execution failed: %w", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("script execution failed: %w\nOutput: %s", err, out)
 	}
 
 	return nil
