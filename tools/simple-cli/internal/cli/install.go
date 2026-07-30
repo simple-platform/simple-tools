@@ -118,11 +118,14 @@ func runInstall(ctx context.Context, appID string) error {
 				return fmt.Errorf("re-authentication failed: %w", newJWTErr)
 			}
 
-			// 3. Re-create client with new JWT
+			// 3. Re-create client with new JWT.
+			// Installs are synchronous server-side and routinely exceed 30s on
+			// record-heavy apps, so the reconnect path must carry the same
+			// timeout as the initial client above.
 			client = deploy.NewClient(deploy.ClientConfig{
 				Endpoint: env.DevOpsEndpoint(),
 				JWT:      jwt,
-				Timeout:  30 * time.Second,
+				Timeout:  15 * time.Minute,
 			})
 
 			// 4. Retry connection once

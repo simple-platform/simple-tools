@@ -25,11 +25,18 @@ type ClientConfig struct {
 	Timeout  time.Duration
 }
 
+// DefaultTimeout is the fallback wait for a channel reply when a caller does
+// not set one. Installs run synchronously server-side and scale with app size
+// (record-heavy apps routinely exceed a minute), so this must stay generous:
+// a short default silently reports a false failure while the install is still
+// running to completion on the server.
+const DefaultTimeout = 15 * time.Minute
+
 // NewClient creates a deployment client.
 func NewClient(cfg ClientConfig) *Client {
 	timeout := cfg.Timeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = DefaultTimeout
 	}
 	return &Client{
 		endpoint: cfg.Endpoint,

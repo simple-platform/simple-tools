@@ -44,8 +44,15 @@ func TestNewClient_DefaultTimeout(t *testing.T) {
 
 	client := NewClient(cfg)
 
-	if client.timeout != 30*time.Second {
-		t.Errorf("NewClient() default timeout = %v, want %v", client.timeout, 30*time.Second)
+	// Installs are synchronous server-side and scale with app size, so the
+	// default must be generous enough that a slow-but-healthy install is never
+	// reported as a failure.
+	if client.timeout != DefaultTimeout {
+		t.Errorf("NewClient() default timeout = %v, want %v", client.timeout, DefaultTimeout)
+	}
+
+	if DefaultTimeout < 10*time.Minute {
+		t.Errorf("DefaultTimeout = %v, too short for record-heavy app installs", DefaultTimeout)
 	}
 }
 

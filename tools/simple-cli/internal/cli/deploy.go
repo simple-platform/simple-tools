@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 
@@ -226,7 +227,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		if !jsonOutput {
 			fmt.Printf("🚀 Installing %s@%s to %s...\n", result.AppID, result.Version, deployEnv)
 		}
-		installResult, err = client.Install()
+		installResult, err = installDeployedVersion(client, result.Version, jsonOutput)
 		if err != nil {
 			fmt.Printf("⚠️  Deploy successful but install failed: %v\n", err)
 			if jsonOutput {
@@ -294,3 +295,58 @@ func dryRunOutput(files map[string]deploy.FileInfo, version string) error {
 
 // findSCLParser is deprecated - kept for test compatibility
 // Use build.EnsureSCLParser() instead which handles automatic download
+
+// alreadyInstalledRe extracts the version named in the server's
+// "Version `X` of application `Y` is already installed" reply.
+var alreadyInstalledRe = regexp.MustCompile("Version `([^`]+)` of application `[^`]+` is already installed")
+
+// installDeployedVersion installs the version that was just deployed, absorbing
+// two server behaviours that are not real failures for a deploy:
+//
+//   - The server reports the version we just deployed as already installed.
+//     Installing is idempotent, so that outcome is a success, not an error.
+//
+//   - The server reports a DIFFERENT (older) version as already installed. The
+//     install request carries no version, so the server resolves one itself and
+//     can briefly resolve the previously installed version instead of the one
+//     just deployed. Retrying resolves it once the newly deployed manifest is
+//     visible, which is why a manual `simple install` immediately afterwards has
+//     always succeeded.
+//
+// Any other error is returned unchanged on the first attempt.
+func installDeployedVersion(client *deploy.Client, deployedVersion string, quiet bool) (*deploy.InstallResult, error) {
+	const attempts = 4
+
+	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
+
+	var lastErr error
+	for attempt := range attempts {
+		result, err := client.Install()
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+
+		match := alreadyInstalledRe.FindStringSubmatch(err.Error())
+		if match == nil {
+			return nil, err
+		}
+
+		// The version we deployed is installed — nothing left to do.
+		if match[1] == deployedVersion {
+			return &deploy.InstallResult{Version: deployedVersion, Success: true}, nil
+		}
+
+		// Stale resolution: the server answered about an older version. Wait for
+		// the new manifest to become visible and ask again.
+		if attempt == attempts-1 {
+			break
+		}
+		if !quiet {
+			fmt.Printf("   ↻ server resolved %s; retrying install of %s…\n", match[1], deployedVersion)
+		}
+		time.Sleep(backoff[attempt])
+	}
+
+	return nil, lastErr
+}
