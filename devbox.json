@@ -26,8 +26,8 @@
       "export MIX_HOME=$PWD/.nix-mix",
       "export HEX_HOME=$PWD/.nix-hex",
       "export ERL_AFLAGS='-kernel shell_history enabled'",
-      "mix local.hex --force > /dev/null",
-      "mix local.rebar --force > /dev/null"
+      "hex_bootstrap_log=$(mktemp) && if ! mix local.hex --if-missing --force > \"$hex_bootstrap_log\" 2>&1; then if grep -Eq \"unsupported_certificate|key_usage_mismatch\" \"$hex_bootstrap_log\"; then mix archive.install github hexpm/hex tag v2.4.2 --force > /dev/null; else cat \"$hex_bootstrap_log\" >&2; rm -f \"$hex_bootstrap_log\"; exit 1; fi; fi; rm -f \"$hex_bootstrap_log\"",
+      "rebar_bootstrap_log=$(mktemp) && if ! mix local.rebar --if-missing --force > \"$rebar_bootstrap_log\" 2>&1; then if grep -Eq \"unsupported_certificate|key_usage_mismatch\" \"$rebar_bootstrap_log\"; then echo \"[devbox] rebar bootstrap skipped: hex.pm unreachable through TLS interception\" >&2; else cat \"$rebar_bootstrap_log\" >&2; rm -f \"$rebar_bootstrap_log\"; exit 1; fi; fi; rm -f \"$rebar_bootstrap_log\""
     ]
   }
 }
