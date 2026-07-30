@@ -1,8 +1,10 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -86,4 +88,62 @@ func TestModel_View(t *testing.T) {
 	// Check if "Done" is present (CheckMark or text)
 	// Our restored progress.go likely uses a checkmark for Done.
 	// We'll verify content via simple checks.
+}
+
+func TestModel_ViewNeverExceedsViewport(t *testing.T) {
+	names := make([]string, 17) // employee_hub: 15 actions + 2 spaces
+	for i := range names {
+		names[i] = "[Action] some-fairly-long-action-name-" + string(rune('a'+i))
+	}
+	m := NewModel(names)
+
+	// A terminal shorter and narrower than the untruncated view would need.
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 60, Height: 12})
+	m = updated.(Model)
+
+	view := m.View()
+	lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+	if len(lines) > 12 {
+		t.Errorf("view rendered %d rows, exceeds terminal height 12", len(lines))
+	}
+	for i, line := range lines {
+		if utf8.RuneCountInString(line) > 60 {
+			t.Errorf("line %d is %d cells wide, exceeds terminal width 60: %q",
+				i, utf8.RuneCountInString(line), line)
+		}
+	}
+	if !strings.Contains(view, "more") {
+		t.Error("expected an overflow summary line when rows are hidden")
+	}
+}
+
+func TestModel_ViewPrioritisesUnfinishedWork(t *testing.T) {
+	m := NewModel([]string{"a", "b", "c", "d"})
+	for _, done := range []string{"a", "b", "c"} {
+		updated, _ := m.Update(ProgressMsg{ID: done, Message: "Done", Done: true})
+		m = updated.(Model)
+	}
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 6}) // room for ~2 rows
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, " d: ") {
+		t.Errorf("unfinished tool 'd' must stay visible, got:\n%s", view)
+	}
+}
+
+func TestModel_ViewFitsEntirelyWhenTerminalIsTall(t *testing.T) {
+	m := NewModel([]string{"a", "b", "c"})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	m = updated.(Model)
+
+	view := m.View()
+	for _, name := range []string{"a", "b", "c"} {
+		if !strings.Contains(view, " "+name+": ") {
+			t.Errorf("expected %q to be rendered when everything fits", name)
+		}
+	}
+	if strings.Contains(view, "more") {
+		t.Error("no overflow summary expected when everything fits")
+	}
 }
