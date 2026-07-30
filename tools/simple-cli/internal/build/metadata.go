@@ -16,11 +16,93 @@ type ActionMetadata struct {
 
 // JSONSchema represents JSON Schema structure
 type JSONSchema struct {
-	Ref         string                     `json:"$ref,omitempty"`       // For $ref format
-	Type        string                     `json:"type,omitempty"`       // For inline format
-	Properties  map[string]Property        `json:"properties,omitempty"` // For inline format
-	Required    []string                   `json:"required,omitempty"`
-	Definitions map[string]PropertyWithDef `json:"definitions,omitempty"` // For $ref format
+	Ref                  string                     `json:"$ref,omitempty"` // For $ref format
+	Type                 string                     `json:"type,omitempty"` // For inline format
+	Description          string                     `json:"description,omitempty"`
+	Properties           map[string]Property        `json:"properties,omitempty"` // For inline format
+	Required             []string                   `json:"required,omitempty"`
+	Definitions          map[string]PropertyWithDef `json:"definitions,omitempty"` // For $ref format
+	Items                *Property                  `json:"items,omitempty"`
+	AdditionalProperties any                        `json:"additionalProperties,omitempty"` // Can be bool, Property, or raw schema map
+	Enum                 []any                      `json:"enum,omitempty"`
+	AnyOf                []Property                 `json:"anyOf,omitempty"`
+	Format               string                     `json:"format,omitempty"`
+	Pattern              string                     `json:"pattern,omitempty"`
+	MinItems             *int                       `json:"minItems,omitempty"`
+	MaxItems             *int                       `json:"maxItems,omitempty"`
+	MinLength            *int                       `json:"minLength,omitempty"`
+	MaxLength            *int                       `json:"maxLength,omitempty"`
+	Minimum              *float64                   `json:"minimum,omitempty"`
+	Maximum              *float64                   `json:"maximum,omitempty"`
+	MultipleOf           *float64                   `json:"multipleOf,omitempty"`
+	Default              any                        `json:"default,omitempty"`
+}
+
+func (s JSONSchema) MarshalJSON() ([]byte, error) {
+	out := map[string]any{}
+
+	if s.Ref != "" {
+		out["$ref"] = s.Ref
+	}
+	if s.Type != "" {
+		out["type"] = s.Type
+	}
+	if s.Description != "" {
+		out["description"] = s.Description
+	}
+	if s.Properties != nil {
+		out["properties"] = s.Properties
+	}
+	if len(s.Required) > 0 {
+		out["required"] = s.Required
+	}
+	if len(s.Definitions) > 0 {
+		out["definitions"] = s.Definitions
+	}
+	if s.Items != nil {
+		out["items"] = s.Items
+	}
+	if s.AdditionalProperties != nil {
+		out["additionalProperties"] = s.AdditionalProperties
+	}
+	if len(s.Enum) > 0 {
+		out["enum"] = s.Enum
+	}
+	if len(s.AnyOf) > 0 {
+		out["anyOf"] = s.AnyOf
+	}
+	if s.Format != "" {
+		out["format"] = s.Format
+	}
+	if s.Pattern != "" {
+		out["pattern"] = s.Pattern
+	}
+	if s.MinItems != nil {
+		out["minItems"] = *s.MinItems
+	}
+	if s.MaxItems != nil {
+		out["maxItems"] = *s.MaxItems
+	}
+	if s.MinLength != nil {
+		out["minLength"] = *s.MinLength
+	}
+	if s.MaxLength != nil {
+		out["maxLength"] = *s.MaxLength
+	}
+	if s.Minimum != nil {
+		out["minimum"] = *s.Minimum
+	}
+	if s.Maximum != nil {
+		out["maximum"] = *s.Maximum
+	}
+	if s.MultipleOf != nil {
+		out["multipleOf"] = *s.MultipleOf
+	}
+	if s.Default != nil {
+		out["default"] = s.Default
+	}
+
+	return json.Marshal(out)
 }
 
 // PropertyWithDef is like Property but can have its own definitions
@@ -35,6 +117,14 @@ type PropertyWithDef struct {
 	Minimum              *float64            `json:"minimum,omitempty"`
 	Maximum              *float64            `json:"maximum,omitempty"`
 	Pattern              string              `json:"pattern,omitempty"`
+	Enum                 []any               `json:"enum,omitempty"`
+	AnyOf                []Property          `json:"anyOf,omitempty"`
+	Format               string              `json:"format,omitempty"`
+	MinItems             *int                `json:"minItems,omitempty"`
+	MaxItems             *int                `json:"maxItems,omitempty"`
+	MinLength            *int                `json:"minLength,omitempty"`
+	MaxLength            *int                `json:"maxLength,omitempty"`
+	MultipleOf           *float64            `json:"multipleOf,omitempty"`
 }
 
 // Property represents a JSON Schema property with support for nested objects and arrays
@@ -49,6 +139,14 @@ type Property struct {
 	Minimum              *float64            `json:"minimum,omitempty"`              // Minimum constraint
 	Maximum              *float64            `json:"maximum,omitempty"`              // Maximum constraint
 	Pattern              string              `json:"pattern,omitempty"`              // Regex pattern
+	Enum                 []any               `json:"enum,omitempty"`                 // Enumerated values
+	AnyOf                []Property          `json:"anyOf,omitempty"`                // Union schemas
+	Format               string              `json:"format,omitempty"`               // Semantic format
+	MinItems             *int                `json:"minItems,omitempty"`             // Array length minimum
+	MaxItems             *int                `json:"maxItems,omitempty"`             // Array length maximum
+	MinLength            *int                `json:"minLength,omitempty"`            // String length minimum
+	MaxLength            *int                `json:"maxLength,omitempty"`            // String length maximum
+	MultipleOf           *float64            `json:"multipleOf,omitempty"`           // Numeric multiple constraint
 }
 
 // ExtractMetadata generates action.json from source code comments.
@@ -89,15 +187,21 @@ func ExtractMetadata(fs fsx.FileSystem, actionDir string) error {
 // extractTypeScriptMetadata is implemented in metadata_ts.go
 
 // detectLanguage determines if action is TypeScript or Go based on source file presence.
-// Returns "typescript" if src/index.ts exists, "go" if main.go exists.
+// Returns "typescript" if index.ts or src/index.ts exists, "go" if main.go exists.
 // Returns error if both files exist (ambiguous) or neither exists (missing source).
 func detectLanguage(fs fsx.FileSystem, actionDir string) (string, error) {
-	tsPath := filepath.Join(actionDir, "src", "index.ts")
+	rootTSPath := filepath.Join(actionDir, "index.ts")
+	srcTSPath := filepath.Join(actionDir, "src", "index.ts")
 	goPath := filepath.Join(actionDir, "main.go")
 
 	// Check for TypeScript source
-	_, tsErr := fs.Stat(tsPath)
-	tsExists := tsErr == nil
+	_, rootTSErr := fs.Stat(rootTSPath)
+	rootTSExists := rootTSErr == nil
+
+	_, srcTSErr := fs.Stat(srcTSPath)
+	srcTSExists := srcTSErr == nil
+
+	tsExists := rootTSExists || srcTSExists
 
 	// Check for Go source
 	_, goErr := fs.Stat(goPath)
@@ -105,12 +209,12 @@ func detectLanguage(fs fsx.FileSystem, actionDir string) (string, error) {
 
 	// Handle ambiguous case (both files present)
 	if tsExists && goExists {
-		return "", fmt.Errorf("ambiguous action language: both src/index.ts and main.go found")
+		return "", fmt.Errorf("ambiguous action language: TypeScript source (index.ts or src/index.ts) and main.go found")
 	}
 
 	// Handle missing source case (neither file present)
 	if !tsExists && !goExists {
-		return "", fmt.Errorf("no action source file found (expected src/index.ts or main.go)")
+		return "", fmt.Errorf("no action source file found (expected index.ts, src/index.ts, or main.go)")
 	}
 
 	// Return detected language

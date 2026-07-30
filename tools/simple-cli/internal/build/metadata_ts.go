@@ -15,6 +15,9 @@ import (
 //go:embed scripts/extract-ts-metadata.js
 var extractScriptContent string
 
+//go:embed scripts/extract_godoc.go
+var extractGoDocContent string
+
 // extractTypeScriptMetadata extracts metadata from a TypeScript action using Node.js.
 // It uses ts-morph and ts-json-schema-generator to parse TypeScript and generate JSON Schema.
 //
@@ -169,23 +172,30 @@ func getScriptPath() (string, error) {
 	scriptsDir := filepath.Join(homeDir, ".simple", "scripts")
 	scriptPath := filepath.Join(scriptsDir, "extract-ts-metadata.js")
 
-	// Check if script already exists
-	if _, err := os.Stat(scriptPath); err == nil {
-		return scriptPath, nil
-	}
-
-	// Script doesn't exist, extract it from embedded content
 	// Create ~/.simple/scripts directory if it doesn't exist
 	if err := os.MkdirAll(scriptsDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create scripts directory: %w", err)
 	}
 
-	// Write the embedded script content
-	if err := os.WriteFile(scriptPath, []byte(extractScriptContent), 0644); err != nil {
+	if err := writeIfChanged(scriptPath, []byte(extractScriptContent)); err != nil {
 		return "", fmt.Errorf("failed to write extraction script: %w", err)
 	}
 
+	goDocPath := filepath.Join(scriptsDir, "extract_godoc.go")
+	if err := writeIfChanged(goDocPath, []byte(extractGoDocContent)); err != nil {
+		return "", fmt.Errorf("failed to write Go metadata helper: %w", err)
+	}
+
 	return scriptPath, nil
+}
+
+func writeIfChanged(path string, content []byte) error {
+	existing, err := os.ReadFile(path)
+	if err == nil && string(existing) == string(content) {
+		return nil
+	}
+
+	return os.WriteFile(path, content, 0644)
 }
 
 // executeScript runs the Node.js extraction script

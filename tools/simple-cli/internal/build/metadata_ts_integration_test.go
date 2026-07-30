@@ -19,9 +19,8 @@ func TestExtractTypeScriptMetadata_Integration(t *testing.T) {
 	// Create a temporary action directory
 	tmpDir := t.TempDir()
 	actionDir := filepath.Join(tmpDir, "test-action")
-	srcDir := filepath.Join(actionDir, "src")
 
-	if err := os.MkdirAll(srcDir, 0755); err != nil {
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
 		t.Fatalf("Failed to create test action directory: %v", err)
 	}
 
@@ -37,8 +36,14 @@ export interface Payload {
   /** User's display name */
   name: string;
   
-  /** Optional custom message */
+  /**
+   * Optional custom message
+   * @maxLength 280
+   */
   message?: string;
+
+  /** Open metadata dictionary */
+  metadata?: Record<string, unknown>;
   
   /** User's age (18-120) */
   age?: number;
@@ -59,7 +64,7 @@ export async function handler(req: any): Promise<{ success: boolean }> {
 }
 `
 
-	tsPath := filepath.Join(srcDir, "index.ts")
+	tsPath := filepath.Join(actionDir, "index.ts")
 	if err := os.WriteFile(tsPath, []byte(tsContent), 0644); err != nil {
 		t.Fatalf("Failed to write test TypeScript file: %v", err)
 	}
@@ -104,57 +109,89 @@ export async function handler(req: any): Promise<{ success: boolean }> {
 		t.Error("Description should not be empty")
 	}
 
-	// The schema uses $ref format, so we need to check the definitions
-	if metadata.Schema.Type == "" && len(metadata.Schema.Definitions) > 0 {
-		// Schema uses $ref format - check the Payload definition
-		payloadDef, ok := metadata.Schema.Definitions["Payload"]
-		if !ok {
-			t.Fatal("Payload definition not found in schema")
-		}
+	if metadata.Schema.Ref != "" || len(metadata.Schema.Definitions) > 0 {
+		t.Fatalf("schema should be root-inlined, got ref=%q definitions=%d", metadata.Schema.Ref, len(metadata.Schema.Definitions))
+	}
 
-		if payloadDef.Type != "object" {
-			t.Errorf("Payload type = %s, want object", payloadDef.Type)
-		}
+	if metadata.Schema.Type != "object" {
+		t.Fatalf("schema type = %s, want object", metadata.Schema.Type)
+	}
 
-		// Check that preferences is properly nested
-		preferences, ok := payloadDef.Properties["preferences"]
-		if !ok {
-			t.Fatal("preferences property not found")
-		}
+	// Check that preferences is properly nested
+	preferences, ok := metadata.Schema.Properties["preferences"]
+	if !ok {
+		t.Fatal("preferences property not found")
+	}
 
-		if preferences.Type != "object" {
-			t.Errorf("preferences type = %s, want object", preferences.Type)
-		}
+	if preferences.Type != "object" {
+		t.Errorf("preferences type = %s, want object", preferences.Type)
+	}
 
-		// Check nested properties
-		if len(preferences.Properties) == 0 {
-			t.Error("preferences should have nested properties")
-		}
+	// Check nested properties
+	if len(preferences.Properties) == 0 {
+		t.Error("preferences should have nested properties")
+	}
 
-		// Verify newsletter and frequency are nested
-		if _, ok := preferences.Properties["newsletter"]; !ok {
-			t.Error("newsletter should be nested under preferences")
-		}
-		if _, ok := preferences.Properties["frequency"]; !ok {
-			t.Error("frequency should be nested under preferences")
-		}
-	} else if metadata.Schema.Type == "object" {
-		// Inline schema format
-		// Check that preferences is properly nested
-		preferences, ok := metadata.Schema.Properties["preferences"]
-		if !ok {
-			t.Fatal("preferences property not found")
-		}
+	message, ok := metadata.Schema.Properties["message"]
+	if !ok {
+		t.Fatal("message property not found")
+	}
 
-		if preferences.Type != "object" {
-			t.Errorf("preferences type = %s, want object", preferences.Type)
-		}
+	if message.MaxLength == nil || *message.MaxLength != 280 {
+		t.Fatalf("message maxLength = %v, want 280", message.MaxLength)
+	}
 
-		// Check nested properties
-		if len(preferences.Properties) == 0 {
-			t.Error("preferences should have nested properties")
-		}
-	} else {
-		t.Error("Schema should be either inline object or use $ref format")
+	openMetadata, ok := metadata.Schema.Properties["metadata"]
+	if !ok {
+		t.Fatal("metadata property not found")
+	}
+
+	if openMetadata.AdditionalProperties != true {
+		t.Fatalf("metadata additionalProperties = %#v, want true", openMetadata.AdditionalProperties)
+	}
+}
+
+func TestExtractTypeScriptMetadata_NoPayloadUsesNoInputSchema(t *testing.T) {
+	// Skip if Node.js is not available
+	if err := checkNodeJS(); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	tmpDir := t.TempDir()
+	actionDir := filepath.Join(tmpDir, "test-action")
+
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("Failed to create test action directory: %v", err)
+	}
+
+	tsPath := filepath.Join(actionDir, "index.ts")
+	tsContent := `/**
+ * Runs without input
+ */
+export async function handler(): Promise<{ success: boolean }> {
+  return { success: true };
+}
+`
+
+	if err := os.WriteFile(tsPath, []byte(tsContent), 0644); err != nil {
+		t.Fatalf("Failed to write test TypeScript file: %v", err)
+	}
+
+	fs := fsx.OSFileSystem{}
+	metadata, err := extractTypeScriptMetadata(fs, actionDir)
+	if err != nil {
+		t.Fatalf("extractTypeScriptMetadata failed: %v", err)
+	}
+
+	if metadata.Schema.Type != "object" {
+		t.Fatalf("schema type = %s, want object", metadata.Schema.Type)
+	}
+
+	if metadata.Schema.Properties == nil || len(metadata.Schema.Properties) != 0 {
+		t.Fatalf("schema properties = %#v, want empty object", metadata.Schema.Properties)
+	}
+
+	if metadata.Schema.AdditionalProperties != false {
+		t.Fatalf("schema additionalProperties = %#v, want false", metadata.Schema.AdditionalProperties)
 	}
 }

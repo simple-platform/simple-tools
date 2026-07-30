@@ -24,6 +24,15 @@ func TestDetectLanguage(t *testing.T) {
 			wantErr:   false,
 		},
 		{
+			name: "root TypeScript action detected",
+			files: map[string]string{
+				"/action/index.ts": "export function handler() {}",
+			},
+			actionDir: "/action",
+			want:      "typescript",
+			wantErr:   false,
+		},
+		{
 			name: "Go action detected",
 			files: map[string]string{
 				"/action/main.go": "package main\n\nfunc main() {}",
@@ -40,14 +49,14 @@ func TestDetectLanguage(t *testing.T) {
 			},
 			actionDir:   "/action",
 			wantErr:     true,
-			errContains: "ambiguous action language: both src/index.ts and main.go found",
+			errContains: "ambiguous action language: TypeScript source (index.ts or src/index.ts) and main.go found",
 		},
 		{
 			name:        "missing source file - neither file present",
 			files:       map[string]string{},
 			actionDir:   "/action",
 			wantErr:     true,
-			errContains: "no action source file found (expected src/index.ts or main.go)",
+			errContains: "no action source file found (expected index.ts, src/index.ts, or main.go)",
 		},
 		{
 			name: "missing source file - other files present",
@@ -57,7 +66,7 @@ func TestDetectLanguage(t *testing.T) {
 			},
 			actionDir:   "/action",
 			wantErr:     true,
-			errContains: "no action source file found (expected src/index.ts or main.go)",
+			errContains: "no action source file found (expected index.ts, src/index.ts, or main.go)",
 		},
 		{
 			name: "TypeScript action with nested directory structure",
@@ -175,7 +184,8 @@ func TestWriteActionJSON(t *testing.T) {
 			wantContent: `{
   "description": "",
   "schema": {
-    "type": "object"
+    "type": "object",
+    "properties": {}
   }
 }
 `,
