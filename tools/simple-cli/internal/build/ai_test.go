@@ -1,0 +1,244 @@
+package build
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// Whether an agent may call an action is stated in the action's own doc comment
+// and carried into action.json by the build.
+//
+// The alternative was a hand-added key in a generated file: the build rewrites
+// that file wholesale, so the statement survived only until the next author
+// touched the action, and the only thing keeping an action from becoming a tool
+// was its absence from a list kept somewhere else.
+func TestExtractGoMetadataCarriesTheExposureStatement(t *testing.T) {
+	fs := &MockFileSystem{files: map[string]string{
+		"/actions/mutate-things/main.go": `package main
+
+// Writes things.
+//
+// @ai_tool true
+// @ai_effects write, destructive
+// @ai_retry_safety never_automatic
+//
+// @Payload Input
+func handler() {}
+
+type Input struct {
+	Name string ` + "`json:\"name\" jsonschema:\"required\"`" + `
+}
+`,
+	}}
+
+	metadata, err := extractGoMetadata(fs, "/actions/mutate-things")
+	if err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	if metadata.AI == nil {
+		t.Fatal("expected an exposure statement")
+	}
+
+	if !metadata.AI.Tool {
+		t.Fatalf("expected a tool, got %#v", metadata.AI)
+	}
+
+	if strings.Join(metadata.AI.Effects, ",") != "write,destructive" {
+		t.Fatalf("expected the declared effects in order, got %#v", metadata.AI.Effects)
+	}
+
+	if metadata.AI.RetrySafety != "never_automatic" {
+		t.Fatalf("expected the declared retry safety, got %q", metadata.AI.RetrySafety)
+	}
+
+	if metadata.AI.DisclosureOrigin != aiDefaultDisclosureOrigin {
+		t.Fatalf("expected the default disclosure origin, got %q", metadata.AI.DisclosureOrigin)
+	}
+
+	// The description is what the model reads as the tool's own statement about
+	// itself. An annotation left in it ships as part of that statement.
+	if strings.Contains(metadata.Description, "@") {
+		t.Fatalf("expected every annotation to be lifted out of the description, got %q", metadata.Description)
+	}
+
+	if metadata.Description != "Writes things." {
+		t.Fatalf("expected the description to survive intact, got %q", metadata.Description)
+	}
+}
+
+func TestExtractGoMetadataOmitsTheStatementForAnUnannotatedAction(t *testing.T) {
+	fs := &MockFileSystem{files: map[string]string{
+		"/actions/send-things/main.go": `package main
+
+// Sends things.
+//
+// @Payload Input
+func handler() {}
+
+type Input struct {
+	Name string ` + "`json:\"name\"`" + `
+}
+`,
+	}}
+
+	metadata, err := extractGoMetadata(fs, "/actions/send-things")
+	if err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	if metadata.AI != nil {
+		t.Fatalf("expected no exposure statement, got %#v", metadata.AI)
+	}
+
+	encoded, err := json.Marshal(metadata)
+	if err != nil {
+		t.Fatalf("failed to marshal metadata: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("failed to decode metadata: %v", err)
+	}
+
+	if _, exposed := decoded["ai"]; exposed {
+		t.Fatalf("expected an action that declares nothing to carry no ai key, got %#v", decoded["ai"])
+	}
+}
+
+func TestExtractGoMetadataRefusesAMalformedExposureStatement(t *testing.T) {
+	fs := &MockFileSystem{files: map[string]string{
+		"/actions/mutate-things/main.go": `package main
+
+// Writes things.
+//
+// @ai_tool true
+//
+// @Payload Input
+func handler() {}
+
+type Input struct {
+	Name string ` + "`json:\"name\"`" + `
+}
+`,
+	}}
+
+	metadata, err := extractGoMetadata(fs, "/actions/mutate-things")
+	if err == nil {
+		t.Fatalf("expected a refusal, got %#v", metadata)
+	}
+
+	for _, want := range []string{"mutate-things", "@ai_effects", "read, orchestration, write, destructive, external, credential"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected the refusal to mention %q, got %q", want, err.Error())
+		}
+	}
+}
+
+func TestBuildAIMetadataRefusesMalformedAnnotations(t *testing.T) {
+	cases := []struct {
+		name string
+		tags []aiTag
+		want string
+	}{
+		{
+			name: "an effect outside the vocabulary",
+			tags: []aiTag{
+				{name: "ai_tool", value: "true"},
+				{name: "ai_effects", value: "read, sideways"},
+				{name: "ai_retry_safety", value: "safe"},
+			},
+			want: `unknown effect "sideways"`,
+		},
+		{
+			name: "the same effect twice",
+			tags: []aiTag{
+				{name: "ai_tool", value: "true"},
+				{name: "ai_effects", value: "read, read"},
+				{name: "ai_retry_safety", value: "safe"},
+			},
+			want: `names "read" twice`,
+		},
+		{
+			name: "two retry safeties",
+			tags: []aiTag{
+				{name: "ai_tool", value: "true"},
+				{name: "ai_effects", value: "read"},
+				{name: "ai_retry_safety", value: "safe"},
+				{name: "ai_retry_safety", value: "never_automatic"},
+			},
+			want: "declared more than once",
+		},
+		{
+			name: "a tool that states no retry safety",
+			tags: []aiTag{
+				{name: "ai_tool", value: "true"},
+				{name: "ai_effects", value: "read"},
+			},
+			want: "@ai_retry_safety",
+		},
+		{
+			name: "a disclosure origin outside the vocabulary",
+			tags: []aiTag{
+				{name: "ai_tool", value: "true"},
+				{name: "ai_effects", value: "read"},
+				{name: "ai_retry_safety", value: "safe"},
+				{name: "ai_disclosure_origin", value: "audit_log"},
+			},
+			want: `@ai_disclosure_origin takes "audit_log"`,
+		},
+		{
+			name: "a misspelled annotation",
+			tags: []aiTag{
+				{name: "ai_tool", value: "true"},
+				{name: "ai_effect", value: "read"},
+				{name: "ai_retry_safety", value: "safe"},
+			},
+			want: "not an exposure annotation",
+		},
+		{
+			name: "qualifications without the exposure marker",
+			tags: []aiTag{
+				{name: "ai_effects", value: "read"},
+				{name: "ai_retry_safety", value: "safe"},
+			},
+			want: "without @ai_tool",
+		},
+		{
+			name: "an exposure marker that is not a boolean",
+			tags: []aiTag{
+				{name: "ai_tool", value: "yes"},
+				{name: "ai_effects", value: "read"},
+				{name: "ai_retry_safety", value: "safe"},
+			},
+			want: `@ai_tool takes "yes"`,
+		},
+		{
+			name: "qualifications on an action that is not a tool",
+			tags: []aiTag{
+				{name: "ai_tool", value: "false"},
+				{name: "ai_effects", value: "read"},
+			},
+			want: "@ai_tool is false",
+		},
+	}
+
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			ai, err := buildAIMetadata("some-action", testCase.tags)
+
+			if err == nil {
+				t.Fatalf("expected a refusal, got %#v", ai)
+			}
+
+			if !strings.Contains(err.Error(), testCase.want) {
+				t.Fatalf("expected the refusal to mention %q, got %q", testCase.want, err.Error())
+			}
+
+			if !strings.Contains(err.Error(), "some-action") {
+				t.Fatalf("expected the refusal to name the action, got %q", err.Error())
+			}
+		})
+	}
+}

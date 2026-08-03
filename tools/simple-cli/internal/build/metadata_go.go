@@ -14,7 +14,7 @@ import (
 // PayloadInfo contains information about a function's @Payload annotation
 type PayloadInfo struct {
 	StructName  string        // Name of the struct referenced in @Payload annotation
-	Description string        // Function's GoDoc comment (excluding @Payload line)
+	Description string        // Function's GoDoc comment (excluding annotation lines)
 	FuncNode    *ast.FuncDecl // AST node of the function
 }
 
@@ -54,10 +54,24 @@ func extractGoMetadata(fs fsx.FileSystem, actionDir string) (*ActionMetadata, er
 		return nil, fmt.Errorf("failed to generate schema: %w", err)
 	}
 
+	// Whether an agent may call this action, stated by the action itself. A
+	// malformed statement refuses the build here rather than writing a degraded
+	// file that every later reader trusts.
+	//
+	// The statement is read from every documented declaration in the file rather
+	// than only from the one the description came from: where an author writes it
+	// must not decide whether it is heard, and a dropped `@ai_tool` is an action
+	// that quietly stops being callable.
+	ai, err := buildAIMetadata(filepath.Base(actionDir), collectAITags(file))
+	if err != nil {
+		return nil, err
+	}
+
 	// Build ActionMetadata
 	metadata := &ActionMetadata{
 		Description: payloadInfo.Description,
 		Schema:      schema,
+		AI:          ai,
 	}
 
 	return metadata, nil
@@ -91,7 +105,7 @@ func findPayloadAnnotation(_ *token.FileSet, file *ast.File) (*PayloadInfo, erro
 			text := strings.TrimSpace(strings.TrimPrefix(comment.Text, "//"))
 
 			// Check if this line contains @Payload annotation
-			if strings.HasPrefix(text, "@Payload ") || text == "@Payload" {
+			if strings.HasPrefix(text, payloadAnnotation+" ") || text == payloadAnnotation {
 				foundPayloadAnnotation = true
 				// Extract struct name after @Payload
 				parts := strings.Fields(text)
@@ -103,7 +117,14 @@ func findPayloadAnnotation(_ *token.FileSet, file *ast.File) (*PayloadInfo, erro
 				continue
 			}
 
-			// Add non-@Payload lines to description
+			// An exposure annotation is lifted out of the description rather than
+			// left in it: the description is what the model reads as the tool's
+			// own statement, and a tag left behind ships as part of it.
+			if _, annotated := aiTagFromDocLine(text); annotated {
+				continue
+			}
+
+			// Add remaining lines to description
 			descriptionLines = append(descriptionLines, text)
 		}
 

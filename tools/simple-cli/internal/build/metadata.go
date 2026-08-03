@@ -8,10 +8,17 @@ import (
 	"simple-cli/internal/fsx"
 )
 
-// ActionMetadata represents the output structure for action.json
+// ActionMetadata represents the output structure for action.json.
+//
+// The TypeScript path writes this file through a Node script and then reads it
+// back through this struct before writing it again, so anything this struct
+// does not model is dropped on the way through. The exposure statement is
+// modelled here for that reason: a field missing from it is a key the build
+// silently deletes from its own output.
 type ActionMetadata struct {
-	Description string     `json:"description"`
-	Schema      JSONSchema `json:"schema"`
+	Description string      `json:"description"`
+	Schema      JSONSchema  `json:"schema"`
+	AI          *AIMetadata `json:"ai,omitempty"`
 }
 
 // JSONSchema represents JSON Schema structure

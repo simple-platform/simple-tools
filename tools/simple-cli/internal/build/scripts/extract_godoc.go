@@ -7,10 +7,62 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 )
+
+// THE AUTHOR-FACING EXPOSURE VOCABULARY.
+//
+// An action becomes callable by an agent because its own doc comment says so,
+// one tag per line, in the same block the description is read from. Carrying it
+// in the source is what lets regeneration keep it: this generator rewrites
+// action.json wholesale, so anything added to that file by hand is deleted the
+// next time an author touches the action.
+//
+// Exposure is opt-in and there is no blocklist. An action that declares nothing
+// is not a tool, so a new action is unreachable by an agent until its author
+// writes the sentence that reaches it — rather than reachable until someone
+// remembers to exclude it.
+//
+// The host, not the author, pins a tool's revision: it is not in this
+// vocabulary and there is nothing here for an author to get wrong about it.
+const (
+	payloadAnnotation = "@Payload"
+
+	aiTagPrefix = "@ai_"
+
+	aiToolTag             = "ai_tool"
+	aiEffectsTag          = "ai_effects"
+	aiRetrySafetyTag      = "ai_retry_safety"
+	aiDisclosureOriginTag = "ai_disclosure_origin"
+
+	aiDefaultDisclosureOrigin = "tenant_record"
+)
+
+var (
+	aiTags       = []string{aiToolTag, aiEffectsTag, aiRetrySafetyTag, aiDisclosureOriginTag}
+	aiToolValues = []string{"true", "false"}
+
+	aiEffects = []string{"read", "orchestration", "write", "destructive", "external", "credential"}
+
+	aiRetrySafeties = []string{"safe", "idempotent_with_key", "verify_before_retry", "never_automatic"}
+
+	aiDisclosureOrigins = []string{"tenant_record", "settings_field", "credential_field", "secret_field"}
+)
+
+type aiTag struct {
+	name  string
+	value string
+}
+
+type aiMetadata struct {
+	Tool             bool     `json:"tool"`
+	Effects          []string `json:"effects,omitempty"`
+	RetrySafety      string   `json:"retry_safety,omitempty"`
+	DisclosureOrigin string   `json:"disclosure_origin,omitempty"`
+}
 
 type Schema struct {
 	Type                 string            `json:"type,omitempty"`
@@ -35,8 +87,9 @@ type Schema struct {
 }
 
 type Output struct {
-	Description string `json:"description"`
-	Schema      Schema `json:"schema"`
+	Description string      `json:"description"`
+	Schema      Schema      `json:"schema"`
+	AI          *aiMetadata `json:"ai,omitempty"`
 }
 
 type schemaParser struct {
@@ -147,26 +200,25 @@ func main() {
 	var targetStruct string
 	var overallDoc string
 
+	// Every exposure annotation in the file, collected once, wherever its author
+	// wrote it.
+	//
+	// Which doc block supplies the DESCRIPTION depends on how the payload is
+	// declared, and that choice is made below. Reading annotations only from the
+	// block that happened to win would drop a tag written in any of the others
+	// in silence — and a dropped `@ai_tool` is an action that quietly stops being
+	// callable, which is the failure this annotation exists to make impossible.
+	// The same tag written twice is refused rather than resolved.
+	tags := collectAITags(node)
+
 	// Pass 1: Find a function with @Payload annotation
 	for _, decl := range node.Decls {
 		if fnDecl, ok := decl.(*ast.FuncDecl); ok {
 			if fnDecl.Doc != nil {
-				docText := fnDecl.Doc.Text()
-				lines := strings.Split(docText, "\n")
-				var descLines []string
-				for _, line := range lines {
-					trimmed := strings.TrimSpace(line)
-					if strings.HasPrefix(trimmed, "@Payload") {
-						parts := strings.Fields(trimmed)
-						if len(parts) >= 2 {
-							targetStruct = parts[1]
-						}
-					} else {
-						descLines = append(descLines, line)
-					}
-				}
-				if targetStruct != "" {
-					overallDoc = strings.TrimSpace(strings.Join(descLines, "\n"))
+				description, _, declaredStruct := splitDoc(fnDecl.Doc.Text())
+				if declaredStruct != "" {
+					targetStruct = declaredStruct
+					overallDoc = description
 					break
 				}
 			}
@@ -210,15 +262,25 @@ func main() {
 			if st, ok := typeSpec.Type.(*ast.StructType); ok {
 				payloadStruct = st
 				if targetStruct == "" && genDecl.Doc != nil {
-					overallDoc = genDecl.Doc.Text()
+					overallDoc, _, _ = splitDoc(genDecl.Doc.Text())
 				}
 			}
 		}
 	}
 
+	// The exposure statement is settled before the schema is, and a malformed
+	// one refuses here rather than downstream. An action whose payload could not
+	// be resolved still gets its annotation read, so a typo is never masked by a
+	// second, unrelated problem in the same file.
+	ai, err := buildAIMetadata(actionName(filePath), tags)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
 	if payloadStruct == nil {
 		// No target struct: emit the canonical no-input schema.
-		if err := json.NewEncoder(os.Stdout).Encode(Output{Schema: noInputSchema()}); err != nil {
+		if err := json.NewEncoder(os.Stdout).Encode(Output{Schema: noInputSchema(), AI: ai}); err != nil {
 			fmt.Fprintf(os.Stderr, "failed to write action metadata: %v\n", err)
 			os.Exit(1)
 		}
@@ -231,12 +293,235 @@ func main() {
 	out := Output{
 		Description: strings.TrimSpace(overallDoc),
 		Schema:      schema,
+		AI:          ai,
 	}
 
 	if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
 		fmt.Fprintf(os.Stderr, "failed to write action metadata: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// Every exposure annotation written in a file, in source order.
+//
+// Read from every documented declaration rather than only from the one the
+// description came from, so where an author writes the statement does not
+// decide whether it is heard.
+func collectAITags(file *ast.File) []aiTag {
+	var tags []aiTag
+
+	for _, decl := range file.Decls {
+		var doc *ast.CommentGroup
+
+		switch typed := decl.(type) {
+		case *ast.FuncDecl:
+			doc = typed.Doc
+		case *ast.GenDecl:
+			doc = typed.Doc
+		}
+
+		if doc == nil {
+			continue
+		}
+
+		_, docTags, _ := splitDoc(doc.Text())
+		tags = append(tags, docTags...)
+	}
+
+	return tags
+}
+
+// The action a source file belongs to, so a refusal names the action its author
+// is looking at rather than a path into its build layout.
+func actionName(filePath string) string {
+	name := filepath.Base(filepath.Dir(filePath))
+	if name == "." || name == string(filepath.Separator) {
+		return filePath
+	}
+
+	return name
+}
+
+// The description an action states about itself, the exposure annotations
+// written beside it, and the payload struct its doc comment points at.
+//
+// The annotations are LIFTED OUT of the description rather than left in it. A
+// tag left behind travels to the model as part of what the tool says it does —
+// so every line the grammar claims is removed here, in the one place that knows
+// the grammar, and the description is what remains.
+func splitDoc(doc string) (string, []aiTag, string) {
+	var descLines []string
+	var tags []aiTag
+
+	payloadStruct := ""
+
+	for _, line := range strings.Split(doc, "\n") {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case strings.HasPrefix(trimmed, payloadAnnotation):
+			if parts := strings.Fields(trimmed); len(parts) >= 2 {
+				payloadStruct = parts[1]
+			}
+
+		case strings.HasPrefix(trimmed, aiTagPrefix):
+			name := strings.TrimPrefix(strings.Fields(trimmed)[0], "@")
+			tags = append(tags, aiTag{
+				name:  name,
+				value: strings.TrimSpace(strings.TrimPrefix(trimmed, "@"+name)),
+			})
+
+		default:
+			descLines = append(descLines, line)
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(descLines, "\n")), tags, payloadStruct
+}
+
+// The exposure statement an action makes about itself, or nothing at all.
+//
+// Absent means false: an action that writes no `@ai_` tag gets no `ai` object,
+// which is how every action that is not a tool regenerates unchanged. Anything
+// short of a complete, well-formed statement refuses instead of degrading,
+// because a half-read annotation is how an action ends up advertised as
+// something it is not.
+func buildAIMetadata(action string, tags []aiTag) (*aiMetadata, error) {
+	if len(tags) == 0 {
+		return nil, nil
+	}
+
+	declared := map[string]string{}
+
+	for _, tag := range tags {
+		if !contains(aiTags, tag.name) {
+			return nil, annotationError(action,
+				fmt.Sprintf("@%s is not an exposure annotation", tag.name), prefixed(aiTags))
+		}
+
+		if _, seen := declared[tag.name]; seen {
+			return nil, annotationError(action,
+				fmt.Sprintf("@%s is declared more than once", tag.name), nil)
+		}
+
+		declared[tag.name] = tag.value
+	}
+
+	tool, stated := declared[aiToolTag]
+	if !stated {
+		return nil, annotationError(action,
+			fmt.Sprintf("declares an exposure annotation without @%s, so it is not a tool and the rest says nothing", aiToolTag),
+			aiToolValues)
+	}
+
+	if !contains(aiToolValues, tool) {
+		return nil, annotationError(action, fmt.Sprintf("@%s takes %q", aiToolTag, tool), aiToolValues)
+	}
+
+	if tool == "false" {
+		for _, tag := range []string{aiEffectsTag, aiRetrySafetyTag, aiDisclosureOriginTag} {
+			if _, qualified := declared[tag]; qualified {
+				return nil, annotationError(action,
+					fmt.Sprintf("@%s qualifies a tool, and @%s is false", tag, aiToolTag), nil)
+			}
+		}
+
+		return &aiMetadata{Tool: false}, nil
+	}
+
+	rawEffects, stated := declared[aiEffectsTag]
+	if !stated {
+		return nil, annotationError(action,
+			fmt.Sprintf("is a tool and must declare @%s", aiEffectsTag), aiEffects)
+	}
+
+	effects, err := parseEffects(action, rawEffects)
+	if err != nil {
+		return nil, err
+	}
+
+	retrySafety, stated := declared[aiRetrySafetyTag]
+	if !stated {
+		return nil, annotationError(action,
+			fmt.Sprintf("is a tool and must declare @%s", aiRetrySafetyTag), aiRetrySafeties)
+	}
+
+	if !contains(aiRetrySafeties, retrySafety) {
+		return nil, annotationError(action,
+			fmt.Sprintf("@%s takes %q", aiRetrySafetyTag, retrySafety), aiRetrySafeties)
+	}
+
+	disclosureOrigin, stated := declared[aiDisclosureOriginTag]
+	if !stated {
+		disclosureOrigin = aiDefaultDisclosureOrigin
+	}
+
+	if !contains(aiDisclosureOrigins, disclosureOrigin) {
+		return nil, annotationError(action,
+			fmt.Sprintf("@%s takes %q", aiDisclosureOriginTag, disclosureOrigin), aiDisclosureOrigins)
+	}
+
+	return &aiMetadata{
+		Tool:             true,
+		Effects:          effects,
+		RetrySafety:      retrySafety,
+		DisclosureOrigin: disclosureOrigin,
+	}, nil
+}
+
+func parseEffects(action, raw string) ([]string, error) {
+	effects := strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ' ' || r == '\t'
+	})
+
+	if len(effects) == 0 {
+		return nil, annotationError(action, fmt.Sprintf("@%s names no effect", aiEffectsTag), aiEffects)
+	}
+
+	seen := map[string]bool{}
+
+	for _, effect := range effects {
+		if !contains(aiEffects, effect) {
+			return nil, annotationError(action,
+				fmt.Sprintf("@%s names an unknown effect %q", aiEffectsTag, effect), aiEffects)
+		}
+
+		if seen[effect] {
+			return nil, annotationError(action,
+				fmt.Sprintf("@%s names %q twice", aiEffectsTag, effect), aiEffects)
+		}
+
+		seen[effect] = true
+	}
+
+	return effects, nil
+}
+
+func annotationError(action, message string, accepted []string) error {
+	if len(accepted) == 0 {
+		return fmt.Errorf("%s: %s", action, message)
+	}
+
+	return fmt.Errorf("%s: %s. Accepted: %s", action, message, strings.Join(accepted, ", "))
+}
+
+func prefixed(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, "@"+name)
+	}
+
+	return out
+}
+
+func contains(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+
+	return false
 }
 
 func noInputSchema() Schema {
@@ -322,7 +607,7 @@ func inferPayloadStruct(file *ast.File) (string, string) {
 
 				resolvedStruct = structName
 				if fnDecl.Doc != nil {
-					resolvedDoc = strings.TrimSpace(removeMetadataAnnotationLines(fnDecl.Doc.Text()))
+					resolvedDoc, _, _ = splitDoc(fnDecl.Doc.Text())
 				}
 				return false
 			}
@@ -371,24 +656,6 @@ func identNameFromParseArg(expr ast.Expr) string {
 	}
 
 	return ""
-}
-
-func removeMetadataAnnotationLines(doc string) string {
-	if doc == "" {
-		return ""
-	}
-
-	lines := strings.Split(doc, "\n")
-	filtered := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "@Payload") {
-			continue
-		}
-		filtered = append(filtered, line)
-	}
-
-	return strings.Join(filtered, "\n")
 }
 
 func newSchemaParser(file *ast.File) *schemaParser {
