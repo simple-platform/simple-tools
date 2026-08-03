@@ -232,15 +232,45 @@ func parseAIEffects(action, raw string) ([]string, error) {
 	return effects, nil
 }
 
+// AnnotationRefusal is an exposure statement the vocabulary does not admit.
+//
+// It is a DISTINCT KIND OF FAILURE from a generator that could not run, and the
+// distinction decides what happens to the action.json already on disk. A
+// toolchain that is absent says nothing about the file: it may still describe
+// the source faithfully, and it will as soon as the toolchain is back. A source
+// the generator refuses says the file describes an action that no longer
+// exists — so it is discarded rather than left to be read as current by
+// everything downstream that cannot tell.
+//
+// Both fail the build. Only this one takes the stale file with it.
+//
+// It carries the whole author-facing sentence rather than parts to be
+// reassembled, because the same refusal is raised by the Go extractor in this
+// package and by the Node one in a child process, and a sentence that survives
+// a process boundary intact is one both can be held to word for word.
+type AnnotationRefusal struct {
+	Refusal string
+}
+
+func (r *AnnotationRefusal) Error() string {
+	return r.Refusal
+}
+
+// AnnotationRefusalExitCode is what the Node generator exits with when it
+// refuses an exposure statement, as opposed to failing to run at all. It is the
+// only way the difference survives a child process, and the difference decides
+// whether the stale action.json is discarded with the refusal.
+const AnnotationRefusalExitCode = 2
+
 // annotationError names the action, the tag, and what would have been accepted.
 // An author reading it should not have to open the generator to learn what to
 // write instead.
 func annotationError(action, message string, accepted []string) error {
-	if len(accepted) == 0 {
-		return fmt.Errorf("%s: %s", action, message)
+	if len(accepted) > 0 {
+		message = fmt.Sprintf("%s. Accepted: %s", message, strings.Join(accepted, ", "))
 	}
 
-	return fmt.Errorf("%s: %s. Accepted: %s", action, message, strings.Join(accepted, ", "))
+	return &AnnotationRefusal{Refusal: fmt.Sprintf("%s: %s", action, message)}
 }
 
 func prefixedTags(names []string) []string {

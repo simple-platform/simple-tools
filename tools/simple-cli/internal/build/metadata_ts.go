@@ -3,6 +3,7 @@ package build
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -18,58 +19,70 @@ var extractScriptContent string
 //go:embed scripts/extract_godoc.go
 var extractGoDocContent string
 
-// extractTypeScriptMetadata extracts metadata from a TypeScript action using Node.js.
-// It uses ts-morph and ts-json-schema-generator to parse TypeScript and generate JSON Schema.
-//
-// This approach delegates TypeScript parsing to battle-tested Node.js libraries rather than
-// attempting to parse TypeScript in Go, which is complex and error-prone.
+// extractTypeScriptMetadata describes a TypeScript action from its own source
+// by running the Node generator, which parses TypeScript with ts-morph and
+// ts-json-schema-generator rather than having this package reimplement either.
 //
 // The extraction script is located at ~/.simple/scripts/extract-ts-metadata.js
+//
+// THE GENERATOR'S OUTPUT IS THE FILE. It writes action.json itself and what it
+// wrote is left exactly as it wrote it — read back only far enough to prove it
+// is there and parses.
+//
+// It used to be re-rendered through this package's own structs on the way past.
+// Those structs model a SUBSET of JSON Schema, so a shape they cannot hold was
+// silently flattened, dropped, or refused: a member typed as a union stopped
+// the CLI dead on a source the platform's own build accepts, and everything
+// that survived came back out with its keys reordered. Either way the file this
+// tool left behind was not the file the other tool writes from the same source,
+// which is the one thing a generated contract may not do.
 //
 // Returns error if:
 //   - Node.js is not available
 //   - Required npm packages are not installed
 //   - Extraction script is not found
-//   - Script execution fails
-//   - Generated action.json cannot be read
-func extractTypeScriptMetadata(fs fsx.FileSystem, actionDir string) (*ActionMetadata, error) {
+//   - Script execution fails, including refusing a malformed exposure statement
+//   - No readable action.json was produced
+func extractTypeScriptMetadata(fs fsx.FileSystem, actionDir string) error {
 	// Check if Node.js is available
 	if err := checkNodeJS(); err != nil {
-		return nil, fmt.Errorf("node.js is required for TypeScript metadata extraction: %w", err)
+		return fmt.Errorf("node.js is required for TypeScript metadata extraction: %w", err)
 	}
 
 	// Ensure required npm packages are installed
 	if err := ensureNPMPackages(); err != nil {
-		return nil, fmt.Errorf("failed to install required npm packages: %w", err)
+		return fmt.Errorf("failed to install required npm packages: %w", err)
 	}
 
 	// Get the script path from ~/.simple/scripts
 	scriptPath, err := getScriptPath()
 	if err != nil {
-		return nil, fmt.Errorf("failed to locate extraction script: %w", err)
+		return fmt.Errorf("failed to locate extraction script: %w", err)
 	}
 
 	// Execute the Node.js script
 	if err := executeScript(scriptPath, actionDir); err != nil {
-		return nil, fmt.Errorf("failed to execute extraction script: %w", err)
+		// A refusal is handed back as the generator wrote it. Wrapping it would
+		// put this layer's account of how a child process ended in front of the
+		// one sentence the author has to read to fix their source.
+		var refusal *AnnotationRefusal
+		if errors.As(err, &refusal) {
+			return err
+		}
+
+		return fmt.Errorf("failed to execute extraction script: %w", err)
 	}
 
-	// The script writes action.json directly, so we just need to read it back
-	// to return the metadata (even though we don't use it in the current flow)
-	actionJSONPath := filepath.Join(actionDir, "action.json")
-	data, err := fs.ReadFile(actionJSONPath)
+	data, err := fs.ReadFile(filepath.Join(actionDir, "action.json"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read generated action.json: %w", err)
+		return fmt.Errorf("failed to read generated action.json: %w", err)
 	}
 
-	// Parse the JSON to return ActionMetadata
-	// (This is mainly for consistency with the function signature)
-	var metadata ActionMetadata
-	if err := json.Unmarshal(data, &metadata); err != nil {
-		return nil, fmt.Errorf("failed to parse generated action.json: %w", err)
+	if !json.Valid(data) {
+		return fmt.Errorf("the generator produced an action.json that is not valid JSON")
 	}
 
-	return &metadata, nil
+	return nil
 }
 
 // checkNodeJS verifies that Node.js is available on the system
@@ -227,6 +240,15 @@ func executeScript(scriptPath, actionDir string) error {
 	cmd.Dir = workspaceRoot
 
 	if out, err := cmd.CombinedOutput(); err != nil {
+		// A refusal is the generator working, and it is the one failure whose
+		// text an author is meant to act on — so it is handed back as the
+		// sentence the generator wrote rather than buried under this layer's
+		// account of how the process ended.
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == AnnotationRefusalExitCode {
+			return &AnnotationRefusal{Refusal: strings.TrimSpace(string(out))}
+		}
+
 		return fmt.Errorf("script execution failed: %w\nOutput: %s", err, out)
 	}
 

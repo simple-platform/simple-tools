@@ -1,12 +1,41 @@
 package build
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"simple-cli/internal/fsx"
 )
+
+// generatedActionMetadata is what the generator left on disk, read back by the
+// test rather than by the extractor.
+//
+// The extractor no longer re-renders the file through these structs — they
+// model a subset of JSON Schema, and the CLI's copy of an action's contract has
+// to be the generator's bytes rather than what survives a round trip through a
+// narrower model. A test may still decode it, because the fixtures here are
+// within that subset and a test that decodes is not a build that rewrites.
+func generatedActionMetadata(t *testing.T, actionDir string) ActionMetadata {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("Failed to read action.json: %v", err)
+	}
+
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Error("action.json should end with a newline")
+	}
+
+	var metadata ActionMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		t.Fatalf("Failed to decode action.json: %v", err)
+	}
+
+	return metadata
+}
 
 // TestExtractTypeScriptMetadata_Integration tests the Node.js-based extraction
 // This test requires Node.js to be installed and will install npm packages if needed
@@ -86,23 +115,11 @@ export async function handler(req: any): Promise<{ success: boolean }> {
 
 	// Extract metadata
 	fs := fsx.OSFileSystem{}
-	metadata, err := extractTypeScriptMetadata(fs, actionDir)
-	if err != nil {
+	if err := extractTypeScriptMetadata(fs, actionDir); err != nil {
 		t.Fatalf("extractTypeScriptMetadata failed: %v", err)
 	}
 
-	// Verify action.json was created with trailing newline
-	actionJSONPath := filepath.Join(actionDir, "action.json")
-	data, err := os.ReadFile(actionJSONPath)
-	if err != nil {
-		t.Fatalf("Failed to read action.json: %v", err)
-	}
-
-	if len(data) == 0 || data[len(data)-1] != '\n' {
-		t.Error("action.json should end with a newline")
-	}
-
-	t.Logf("Generated action.json:\n%s", string(data))
+	metadata := generatedActionMetadata(t, actionDir)
 
 	// Verify the metadata
 	if metadata.Description == "" {
@@ -178,10 +195,11 @@ export async function handler(): Promise<{ success: boolean }> {
 	}
 
 	fs := fsx.OSFileSystem{}
-	metadata, err := extractTypeScriptMetadata(fs, actionDir)
-	if err != nil {
+	if err := extractTypeScriptMetadata(fs, actionDir); err != nil {
 		t.Fatalf("extractTypeScriptMetadata failed: %v", err)
 	}
+
+	metadata := generatedActionMetadata(t, actionDir)
 
 	if metadata.Schema.Type != "object" {
 		t.Fatalf("schema type = %s, want object", metadata.Schema.Type)
@@ -193,5 +211,78 @@ export async function handler(): Promise<{ success: boolean }> {
 
 	if metadata.Schema.AdditionalProperties != false {
 		t.Fatalf("schema additionalProperties = %#v, want false", metadata.Schema.AdditionalProperties)
+	}
+}
+
+// A SHAPE THIS PACKAGE CANNOT MODEL IS STILL THE ACTION'S CONTRACT.
+//
+// A member typed as a union renders `"type": ["string", "null"]`. The structs
+// in this package hold a type as one string, so re-rendering the generator's
+// output through them stopped the build dead on a source the platform's own
+// generator describes without complaint — two tools disagreeing about whether
+// the same action builds at all.
+//
+// So the generator's bytes are left alone, and this holds them to it: what the
+// CLI leaves on disk is what the generator wrote, byte for byte.
+func TestExtractTypeScriptMetadataLeavesTheGeneratorsBytesAlone(t *testing.T) {
+	if err := checkNodeJS(); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	actionDir := filepath.Join(t.TempDir(), "test-action")
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("Failed to create test action directory: %v", err)
+	}
+
+	tsContent := `/**
+ * Reads a register.
+ */
+export interface Payload {
+  /** One site, or null when scoping by company. */
+  site_id: string | null;
+}
+
+export async function handler(): Promise<{ ok: boolean }> {
+  return { ok: true };
+}
+`
+
+	if err := os.WriteFile(filepath.Join(actionDir, "index.ts"), []byte(tsContent), 0644); err != nil {
+		t.Fatalf("Failed to write test TypeScript file: %v", err)
+	}
+
+	fs := fsx.OSFileSystem{}
+	if err := extractTypeScriptMetadata(fs, actionDir); err != nil {
+		t.Fatalf("a member typed as a union stopped the extraction: %v", err)
+	}
+
+	written, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("Failed to read action.json: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(written, &decoded); err != nil {
+		t.Fatalf("Failed to decode action.json: %v", err)
+	}
+
+	siteID := decoded["schema"].(map[string]any)["properties"].(map[string]any)["site_id"].(map[string]any)
+	if _, union := siteID["type"].([]any); !union {
+		t.Fatalf("the union type did not survive: %#v", siteID["type"])
+	}
+
+	// Running the extractor again over the same source must not change a byte.
+	// A rewrite that reorders keys or drops what it cannot hold shows up here.
+	if err := extractTypeScriptMetadata(fs, actionDir); err != nil {
+		t.Fatalf("second extraction failed: %v", err)
+	}
+
+	again, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("Failed to read action.json: %v", err)
+	}
+
+	if string(again) != string(written) {
+		t.Fatalf("the generated contract is not stable across runs:\n%s\n---\n%s", written, again)
 	}
 }

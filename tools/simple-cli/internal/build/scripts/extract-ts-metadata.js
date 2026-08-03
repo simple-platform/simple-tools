@@ -36,6 +36,13 @@ const AI_RETRY_SAFETIES = ['safe', 'idempotent_with_key', 'verify_before_retry',
 const AI_DISCLOSURE_ORIGINS = ['tenant_record', 'settings_field', 'credential_field', 'secret_field']
 const AI_DEFAULT_DISCLOSURE_ORIGIN = 'tenant_record'
 
+// The status a refused exposure statement exits with, told apart from every
+// other way this generator can fail. A caller reading only "non-zero" cannot
+// distinguish a source the vocabulary refuses from a toolchain that is not
+// installed, and the two call for opposite things to happen to the action.json
+// already on disk.
+const ANNOTATION_REFUSAL_EXIT_CODE = 2
+
 function annotationError(action, message, accepted) {
   const suffix = accepted ? ` Accepted: ${accepted.join(', ')}.` : ''
   return new Error(`${action}: ${message}.${suffix}`)
@@ -278,6 +285,24 @@ function parseEffects(action, raw) {
   return effects
 }
 
+// A REFUSED SOURCE TAKES ITS STALE OUTPUT WITH IT.
+//
+// action.json is generated wholesale from the source beside it. When the source
+// is refused, the file still sitting there was generated from an EARLIER
+// source: it describes an action that no longer exists, and it carries an
+// exposure statement its author has since tried to change. Nothing downstream
+// can tell — a well-formed file reads as current — so the refused edit ships as
+// though it had been accepted while the author is told the build failed.
+//
+// Removed only for a refusal. A generator that could not run says nothing about
+// whether the file is true, and deleting every action's metadata because a
+// toolchain is absent turns one environment problem into a tree nobody can
+// build from.
+function refuse(actionDir) {
+  fs.rmSync(path.join(actionDir, 'action.json'), { force: true })
+  process.exit(ANNOTATION_REFUSAL_EXIT_CODE)
+}
+
 let actionDir = process.argv[2]
 if (!actionDir) {
   console.error('Usage: node extract-action-metadata.js <action_dir>')
@@ -331,7 +356,7 @@ if (tsPath) {
   }
   catch (err) {
     console.error(err.message)
-    process.exit(1)
+    refuse(actionDir)
   }
 
   // Generate schema
@@ -356,8 +381,13 @@ if (tsPath) {
       applyJsDocConstraints(schema, payloadInterface)
     }
     catch (err) {
+      // A missing root type means the action declares no Payload, which is a
+      // valid no-input action; anything else is a real failure to describe an
+      // action, and the process must exit non-zero rather than write a
+      // degraded schema that a caller would trust.
       if (err.message && !err.message.includes('No root type')) {
         console.error(`Failed to generate schema for ${actionDir}:`, err)
+        process.exit(1)
       }
     }
   }
@@ -385,11 +415,27 @@ else if (fs.existsSync(goPath)) {
     console.log(`Generated action.json for ${actionDir} (Go)`)
   }
   catch (err) {
+    // A Go action that cannot be described — including because the Go
+    // toolchain is absent — must fail the run, not leave the stale action.json
+    // in place while the process exits cleanly. A silent success here lets a
+    // metadata gate pass having verified nothing.
+    //
+    // The Go half refuses a malformed exposure statement with its own status,
+    // and that status is carried out of here unchanged: a refusal reads the
+    // same to this generator's caller whichever language the action is written
+    // in, and only a refusal discards the stale file. Its own refusal has
+    // already reached this process's stderr, so it is not restated under a
+    // heading that would make an author's mistake read as a broken toolchain.
+    if (err.status === ANNOTATION_REFUSAL_EXIT_CODE) {
+      refuse(actionDir)
+    }
+
     console.error(`Failed to extract GoDoc for ${actionDir}:`, err.message)
     if (err.stdout)
       console.error(err.stdout.toString())
     if (err.stderr)
       console.error(err.stderr.toString())
+    process.exit(1)
   }
 }
 else {

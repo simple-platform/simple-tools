@@ -2,6 +2,7 @@ package build
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 
@@ -156,9 +157,20 @@ type Property struct {
 	MultipleOf           *float64            `json:"multipleOf,omitempty"`           // Numeric multiple constraint
 }
 
-// ExtractMetadata generates action.json from source code comments.
-// It detects the action language (TypeScript or Go) and routes to the appropriate extractor.
-// Returns error if extraction fails (non-fatal to build).
+// ExtractMetadata generates action.json from an action's own source.
+//
+// It detects the action language (TypeScript or Go) and routes to the matching
+// extractor. FAILING IS FATAL TO THE BUILD: what comes out of here is the
+// action's description, its input schema, and its statement about whether an
+// agent may call it, so a build that could not produce them has verified
+// nothing about any of the three — and the build carries on to package
+// artifacts that the file beside them no longer describes.
+//
+// When the failure is a refusal — the source says something the exposure
+// vocabulary does not admit — the action.json already on disk is discarded
+// with it. That file was generated from an earlier source; leaving it is how a
+// rejected edit still ships, because every later reader sees a well-formed file
+// and nothing that says which source it came from.
 func ExtractMetadata(fs fsx.FileSystem, actionDir string) error {
 	// Detect action language
 	lang, err := detectLanguage(fs, actionDir)
@@ -166,29 +178,59 @@ func ExtractMetadata(fs fsx.FileSystem, actionDir string) error {
 		return fmt.Errorf("failed to detect action language: %w", err)
 	}
 
-	// Route to appropriate extractor based on language
-	var metadata *ActionMetadata
+	// Each extractor leaves action.json on disk itself. What is shared is the
+	// policy over the outcome, not the writing.
 	switch lang {
 	case "typescript":
-		// TypeScript extraction will be implemented in Phase 3
-		metadata, err = extractTypeScriptMetadata(fs, actionDir)
+		err = extractTypeScriptMetadata(fs, actionDir)
 	case "go":
-		// Go extraction will be implemented in Phase 2
-		metadata, err = extractGoMetadata(fs, actionDir)
+		err = writeGoActionJSON(fs, actionDir)
 	default:
 		return fmt.Errorf("unsupported action language: %s", lang)
 	}
 
 	if err != nil {
+		return discardStaleActionJSON(fs, actionDir, err)
+	}
+
+	return nil
+}
+
+// writeGoActionJSON describes a Go action from its own source and writes the
+// result. The Go extractor runs in this process, so this is where its output
+// becomes the file.
+func writeGoActionJSON(fs fsx.FileSystem, actionDir string) error {
+	metadata, err := extractGoMetadata(fs, actionDir)
+	if err != nil {
 		return err
 	}
 
-	// Write action.json atomically
-	if err = writeActionJSON(fs, actionDir, metadata); err != nil {
+	if err := writeActionJSON(fs, actionDir, metadata); err != nil {
 		return fmt.Errorf("failed to write action.json: %w", err)
 	}
 
 	return nil
+}
+
+// discardStaleActionJSON removes a generated action.json that the source it was
+// generated from has since made untrue, and hands back the refusal that made it
+// so.
+//
+// Only a refusal discards. A generator that could not run leaves the file
+// alone: it may still be a faithful description, and deleting every action's
+// metadata because `node` is missing would turn one environment problem into a
+// working tree nobody can build from.
+func discardStaleActionJSON(fs fsx.FileSystem, actionDir string, cause error) error {
+	var refusal *AnnotationRefusal
+	if !errors.As(cause, &refusal) {
+		return cause
+	}
+
+	if err := fs.Remove(filepath.Join(actionDir, "action.json")); err != nil {
+		return fmt.Errorf("%w (and its stale action.json could not be removed: %v)", cause, err)
+	}
+
+	return cause
 }
 
 // extractTypeScriptMetadata is implemented in metadata_ts.go

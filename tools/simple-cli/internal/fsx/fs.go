@@ -18,6 +18,7 @@ type FileSystem interface {
 	WriteFile(name string, data []byte, perm os.FileMode) error
 	ReadFile(name string) ([]byte, error)
 	ReadDir(name string) ([]os.DirEntry, error)
+	Remove(name string) error
 }
 
 // TemplateFS abstraction for mocking embedded files
@@ -47,4 +48,15 @@ func (OSFileSystem) ReadFile(name string) ([]byte, error) {
 
 func (OSFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
 	return os.ReadDir(name)
+}
+
+// Remove deletes a file, treating an already-absent one as success. Callers
+// discard generated output that a failed regeneration has made untrue, and
+// whether it was there to begin with is not something they need to know.
+func (OSFileSystem) Remove(name string) error {
+	if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	return nil
 }

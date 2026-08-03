@@ -136,6 +136,63 @@ type Input struct {
 	}
 }
 
+// A REFUSED SOURCE TAKES ITS STALE OUTPUT WITH IT.
+//
+// action.json is generated wholesale from the source beside it, so the copy
+// left behind by a refusal was generated from an EARLIER source: it describes an
+// action that no longer exists and carries the exposure statement its author has
+// since tried to change. Nothing downstream can tell — a well-formed file reads
+// as current — so a rejected edit ships as though it had been accepted.
+func TestExtractMetadataDiscardsTheActionJSONARefusedSourceHasMadeUntrue(t *testing.T) {
+	fs := &MockFileSystem{files: map[string]string{
+		"/actions/mutate-things/main.go": `package main
+
+// Writes things.
+//
+// @ai_tool true
+// @ai_effects write, sideways
+// @ai_retry_safety never_automatic
+//
+// @Payload Input
+func handler() {}
+
+type Input struct {
+	Name string ` + "`json:\"name\"`" + `
+}
+`,
+		"/actions/mutate-things/action.json": `{"description":"Writes things.","ai":{"tool":true,"effects":["write"]}}`,
+	}}
+
+	if err := ExtractMetadata(fs, "/actions/mutate-things"); err == nil {
+		t.Fatal("expected a refusal")
+	}
+
+	if stale, kept := fs.files["/actions/mutate-things/action.json"]; kept {
+		t.Fatalf("the refused source left its earlier description shipping: %s", stale)
+	}
+}
+
+// A GENERATOR THAT COULD NOT RUN IS NOT A REFUSAL, and the difference is what
+// the file on disk is worth. An absent toolchain says nothing about whether the
+// action.json beside the source is true; deleting every action's metadata
+// because `node` is missing turns one environment problem into a working tree
+// nobody can build from. The build fails either way, so nothing ships unverified
+// on the strength of a file that was left alone.
+func TestExtractMetadataKeepsTheActionJSONWhenTheGeneratorMerelyFailed(t *testing.T) {
+	fs := &MockFileSystem{files: map[string]string{
+		"/actions/mutate-things/main.go":     "package main\n\nfunc handler() {}\n",
+		"/actions/mutate-things/action.json": `{"description":"Writes things."}`,
+	}}
+
+	if err := ExtractMetadata(fs, "/actions/mutate-things"); err == nil {
+		t.Fatal("expected the extraction to fail")
+	}
+
+	if _, kept := fs.files["/actions/mutate-things/action.json"]; !kept {
+		t.Fatal("a generator that could not run took the action's description with it")
+	}
+}
+
 func TestBuildAIMetadataRefusesMalformedAnnotations(t *testing.T) {
 	cases := []struct {
 		name string

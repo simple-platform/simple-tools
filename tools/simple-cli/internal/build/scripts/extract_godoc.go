@@ -272,10 +272,16 @@ func main() {
 	// one refuses here rather than downstream. An action whose payload could not
 	// be resolved still gets its annotation read, so a typo is never masked by a
 	// second, unrelated problem in the same file.
+	//
+	// A refusal exits with its own status, which is the only thing that survives
+	// this process to say the SOURCE is wrong rather than that this program
+	// could not run. The caller needs the difference: a refused source has made
+	// the action.json already on disk describe an action that no longer exists,
+	// and an absent Go toolchain has not.
 	ai, err := buildAIMetadata(actionName(filePath), tags)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(annotationRefusalExitCode)
 	}
 
 	if payloadStruct == nil {
@@ -284,6 +290,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to write action metadata: %v\n", err)
 			os.Exit(1)
 		}
+
 		return
 	}
 
@@ -496,6 +503,11 @@ func parseEffects(action, raw string) ([]string, error) {
 
 	return effects, nil
 }
+
+// The status a refused exposure statement exits with, told apart from every
+// other way this program can fail so the caller can tell a wrong source from a
+// missing toolchain.
+const annotationRefusalExitCode = 2
 
 func annotationError(action, message string, accepted []string) error {
 	if len(accepted) == 0 {

@@ -492,6 +492,13 @@ func (m *mockWriteTrackingFS) ReadDir(name string) ([]os.DirEntry, error) {
 	return []os.DirEntry{}, nil
 }
 
+func (m *mockWriteTrackingFS) Remove(name string) error {
+	delete(m.files, name)
+	delete(m.written, name)
+
+	return nil
+}
+
 type mockFileInfoSimple struct{}
 
 func (m *mockFileInfoSimple) Name() string       { return "mock" }

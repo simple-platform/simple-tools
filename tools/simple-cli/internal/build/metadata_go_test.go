@@ -43,6 +43,11 @@ func (m *MockFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
 	return nil, nil
 }
 
+func (m *MockFileSystem) Remove(name string) error {
+	delete(m.files, name)
+	return nil
+}
+
 func TestFindPayloadAnnotation(t *testing.T) {
 	tests := []struct {
 		name        string
