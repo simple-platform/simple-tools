@@ -243,7 +243,7 @@ func TestBuildAction_MetadataExtractionFailureStopsTheBuild(t *testing.T) {
 	}()
 
 	metadataError := &AnnotationRefusal{
-		Refusal: `test-action: @ai_effects names an unknown effect "sideways"`,
+		Refusal: `test-action: @effects names an unknown effect "sideways"`,
 	}
 
 	var metadataCallCount, bundleCount, compileCount, optimizeCount int
@@ -308,7 +308,7 @@ func TestBuildAction_MetadataExtractionFailureStopsTheBuild(t *testing.T) {
 		t.Errorf("BuildAction() error = %v, want it to carry the refusal", result.Error)
 	}
 
-	if !strings.Contains(result.Error.Error(), `@ai_effects names an unknown effect "sideways"`) {
+	if !strings.Contains(result.Error.Error(), `@effects names an unknown effect "sideways"`) {
 		t.Errorf("BuildAction() error = %q, want the refusal text an author can act on", result.Error)
 	}
 

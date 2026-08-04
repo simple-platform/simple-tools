@@ -22,20 +22,38 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // writes the sentence that reaches it — rather than reachable until someone
 // remembers to exclude it.
 //
+// `@tool` IS A MODIFIER TAG in the TSDoc sense: it carries no value, and its
+// presence is the whole statement. A tag that took a boolean made absence mean a
+// default — an action was not a tool because nobody said `false` — and a default
+// is a claim about actions nobody has read. Presence-only says the narrower true
+// thing: an action is unmarked until its author marks it, the way a symbol is
+// not `@public` until it says so.
+//
+// Only these four names are claimed as annotations. Every other `@` line is
+// description, because this vocabulary shares a doc comment with `@param`,
+// `@remarks` and the rest of TSDoc, and a generator that lifted every tag out of
+// the description would delete an author's prose to protect its own. What
+// catches a misspelling is tsdoc.json, which declares these four to the editor
+// and to ESLint, so `@toool` is reported where it is typed rather than silently
+// read as a sentence.
+//
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
-const AI_TAG_PREFIX = 'ai_'
-const AI_TOOL_TAG = 'ai_tool'
-const AI_EFFECTS_TAG = 'ai_effects'
-const AI_RETRY_SAFETY_TAG = 'ai_retry_safety'
-const AI_DISCLOSURE_ORIGIN_TAG = 'ai_disclosure_origin'
+const TOOL_TAG = 'tool'
+const EFFECTS_TAG = 'effects'
+const RETRY_TAG = 'retry'
+const DISCLOSES_TAG = 'discloses'
 
-const AI_TAGS = [AI_TOOL_TAG, AI_EFFECTS_TAG, AI_RETRY_SAFETY_TAG, AI_DISCLOSURE_ORIGIN_TAG]
-const AI_TOOL_VALUES = ['true', 'false']
-const AI_EFFECTS = ['read', 'orchestration', 'write', 'destructive', 'external', 'credential']
-const AI_RETRY_SAFETIES = ['safe', 'idempotent_with_key', 'verify_before_retry', 'never_automatic']
-const AI_DISCLOSURE_ORIGINS = ['tenant_record', 'settings_field', 'credential_field', 'secret_field']
-const AI_DEFAULT_DISCLOSURE_ORIGIN = 'tenant_record'
+const EXPOSURE_TAGS = [TOOL_TAG, EFFECTS_TAG, RETRY_TAG, DISCLOSES_TAG]
+
+// The tags that say what CALLING a tool does. Each one qualifies `@tool`, so any
+// of them written without it is a statement about nothing.
+const QUALIFYING_TAGS = [EFFECTS_TAG, RETRY_TAG, DISCLOSES_TAG]
+
+const EFFECT_VALUES = ['read', 'orchestration', 'write', 'destructive', 'external', 'credential']
+const RETRY_VALUES = ['safe', 'keyed', 'verify-first', 'never']
+const DISCLOSES_VALUES = ['tenant_record', 'settings_field', 'credential_field', 'secret_field']
+const DEFAULT_DISCLOSES = 'tenant_record'
 
 // The status a refused exposure statement exits with, told apart from every
 // other way this generator can fail. A caller reading only "non-zero" cannot
@@ -84,11 +102,10 @@ function applyJsDocConstraints(schema, payloadInterface) {
 
 // The exposure statement an action makes about itself, or nothing at all.
 //
-// Absent means false: an action that writes no `@ai_` tag gets no `ai` object,
-// which is how every action that is not a tool regenerates unchanged. Anything
-// short of a complete, well-formed statement refuses instead of degrading,
-// because a half-read annotation is how an action ends up advertised as
-// something it is not.
+// An action that writes no exposure tag gets no `ai` object, which is how every
+// action that is not a tool regenerates unchanged. Anything short of a complete,
+// well-formed statement refuses instead of degrading, because a half-read
+// annotation is how an action ends up advertised as something it is not.
 function buildAiMetadata(action, tags) {
   if (tags.length === 0) {
     return undefined
@@ -97,10 +114,6 @@ function buildAiMetadata(action, tags) {
   const declared = new Map()
 
   for (const tag of tags) {
-    if (!AI_TAGS.includes(tag.name)) {
-      throw annotationError(action, `@${tag.name} is not an exposure annotation`, AI_TAGS.map(name => `@${name}`))
-    }
-
     if (declared.has(tag.name)) {
       throw annotationError(action, `@${tag.name} is declared more than once`)
     }
@@ -108,54 +121,50 @@ function buildAiMetadata(action, tags) {
     declared.set(tag.name, tag.value)
   }
 
-  if (!declared.has(AI_TOOL_TAG)) {
+  if (!declared.has(TOOL_TAG)) {
+    // Named in vocabulary order rather than in the order they were declared, so
+    // the same source is refused with the same sentence every time.
+    const written = QUALIFYING_TAGS.filter(tag => declared.has(tag)).map(tag => `@${tag}`)
+
     throw annotationError(
       action,
-      `declares an exposure annotation without @${AI_TOOL_TAG}, so it is not a tool and the rest says nothing`,
-      AI_TOOL_VALUES,
+      `declares ${written.join(', ')} without @${TOOL_TAG}, so it is not a tool and the rest says nothing`,
     )
   }
 
-  const tool = declared.get(AI_TOOL_TAG)
+  // A modifier tag is its own statement. A value written after one is an author
+  // saying something the vocabulary has no way to hear — most likely the boolean
+  // this tag used to take, whose `false` no longer says anything.
+  const value = declared.get(TOOL_TAG)
 
-  if (!AI_TOOL_VALUES.includes(tool)) {
-    throw annotationError(action, `@${AI_TOOL_TAG} takes "${tool}"`, AI_TOOL_VALUES)
-  }
-
-  if (tool === 'false') {
-    for (const tag of [AI_EFFECTS_TAG, AI_RETRY_SAFETY_TAG, AI_DISCLOSURE_ORIGIN_TAG]) {
-      if (declared.has(tag)) {
-        throw annotationError(action, `@${tag} qualifies a tool, and @${AI_TOOL_TAG} is false`)
-      }
-    }
-
-    return { tool: false }
-  }
-
-  if (!declared.has(AI_EFFECTS_TAG)) {
-    throw annotationError(action, `is a tool and must declare @${AI_EFFECTS_TAG}`, AI_EFFECTS)
-  }
-
-  if (!declared.has(AI_RETRY_SAFETY_TAG)) {
-    throw annotationError(action, `is a tool and must declare @${AI_RETRY_SAFETY_TAG}`, AI_RETRY_SAFETIES)
-  }
-
-  const retrySafety = declared.get(AI_RETRY_SAFETY_TAG)
-
-  if (!AI_RETRY_SAFETIES.includes(retrySafety)) {
-    throw annotationError(action, `@${AI_RETRY_SAFETY_TAG} takes "${retrySafety}"`, AI_RETRY_SAFETIES)
-  }
-
-  const disclosureOrigin = declared.has(AI_DISCLOSURE_ORIGIN_TAG)
-    ? declared.get(AI_DISCLOSURE_ORIGIN_TAG)
-    : AI_DEFAULT_DISCLOSURE_ORIGIN
-
-  if (!AI_DISCLOSURE_ORIGINS.includes(disclosureOrigin)) {
+  if (value !== '') {
     throw annotationError(
       action,
-      `@${AI_DISCLOSURE_ORIGIN_TAG} takes "${disclosureOrigin}"`,
-      AI_DISCLOSURE_ORIGINS,
+      `@${TOOL_TAG} is a modifier tag and takes no value, and this one carries "${value}". `
+      + 'Leave it bare to expose the action, or delete it to leave the action unexposed',
     )
+  }
+
+  if (!declared.has(EFFECTS_TAG)) {
+    throw annotationError(action, `is a tool and must declare @${EFFECTS_TAG}`, EFFECT_VALUES)
+  }
+
+  if (!declared.has(RETRY_TAG)) {
+    throw annotationError(action, `is a tool and must declare @${RETRY_TAG}`, RETRY_VALUES)
+  }
+
+  const retry = declared.get(RETRY_TAG)
+
+  if (!RETRY_VALUES.includes(retry)) {
+    throw annotationError(action, `@${RETRY_TAG} takes "${retry}"`, RETRY_VALUES)
+  }
+
+  const discloses = declared.has(DISCLOSES_TAG)
+    ? declared.get(DISCLOSES_TAG)
+    : DEFAULT_DISCLOSES
+
+  if (!DISCLOSES_VALUES.includes(discloses)) {
+    throw annotationError(action, `@${DISCLOSES_TAG} takes "${discloses}"`, DISCLOSES_VALUES)
   }
 
   // The member order below is the file format rather than a style choice: every
@@ -164,9 +173,9 @@ function buildAiMetadata(action, tags) {
   /* eslint-disable perfectionist/sort-objects */
   return {
     tool: true,
-    effects: parseEffects(action, declared.get(AI_EFFECTS_TAG)),
-    retry_safety: retrySafety,
-    disclosure_origin: disclosureOrigin,
+    effects: parseEffects(action, declared.get(EFFECTS_TAG)),
+    retry,
+    discloses,
   }
   /* eslint-enable perfectionist/sort-objects */
 }
@@ -244,18 +253,18 @@ function parseEffects(action, raw) {
   const effects = raw.split(/[\s,]+/).filter(Boolean)
 
   if (effects.length === 0) {
-    throw annotationError(action, `@${AI_EFFECTS_TAG} names no effect`, AI_EFFECTS)
+    throw annotationError(action, `@${EFFECTS_TAG} names no effect`, EFFECT_VALUES)
   }
 
   const seen = new Set()
 
   for (const effect of effects) {
-    if (!AI_EFFECTS.includes(effect)) {
-      throw annotationError(action, `@${AI_EFFECTS_TAG} names an unknown effect "${effect}"`, AI_EFFECTS)
+    if (!EFFECT_VALUES.includes(effect)) {
+      throw annotationError(action, `@${EFFECTS_TAG} names an unknown effect "${effect}"`, EFFECT_VALUES)
     }
 
     if (seen.has(effect)) {
-      throw annotationError(action, `@${AI_EFFECTS_TAG} names "${effect}" twice`, AI_EFFECTS)
+      throw annotationError(action, `@${EFFECTS_TAG} names "${effect}" twice`, EFFECT_VALUES)
     }
 
     seen.add(effect)
@@ -299,15 +308,18 @@ function refuse(actionDir) {
 //
 // This is the same line-wise rule the Go extractor applies, so one authoring
 // pattern is described identically by both generators.
+//
+// Only the four exposure tags are claimed. A `@param`, a `@remarks` or a
+// `@maxLength` is part of what the author wrote and stays where they wrote it.
 function splitDoc(text) {
   const descriptionLines = []
   const tags = []
 
   for (const line of String(text).split('\n')) {
     const trimmed = line.trim()
+    const name = trimmed.startsWith('@') ? trimmed.slice(1).split(/\s+/)[0] : ''
 
-    if (trimmed.startsWith(`@${AI_TAG_PREFIX}`)) {
-      const name = trimmed.slice(1).split(/\s+/)[0]
+    if (EXPOSURE_TAGS.includes(name)) {
       tags.push({ name, value: trimmed.slice(name.length + 1).trim() })
       continue
     }
@@ -362,7 +374,7 @@ if (tsPath) {
   // Which block describes the action is decided above, by rules about where a
   // payload is declared. Where an author writes the exposure statement must not
   // be decided by those rules as a side effect: a tag written in a block that
-  // did not win would be dropped in silence, and a dropped `@ai_tool` is an
+  // did not win would be dropped in silence, and a dropped `@tool` is an
   // action that quietly stops being callable — the failure this whole
   // annotation exists to make impossible. A file's leading block and a type
   // beside the payload are both places an author reasonably writes it.
@@ -370,13 +382,13 @@ if (tsPath) {
   // The Go extractor already reads every documented declaration. Reading fewer
   // of them here is how one source is a tool in one generator and not in the
   // other.
-  const aiTags = sourceFile
+  const exposureTags = sourceFile
     .getDescendantsOfKind(SyntaxKind.JSDoc)
     .flatMap(jsDoc => splitDoc(jsDoc.getInnerText()).tags)
 
   let ai
   try {
-    ai = buildAiMetadata(path.basename(actionDir), aiTags)
+    ai = buildAiMetadata(path.basename(actionDir), exposureTags)
   }
   catch (err) {
     console.error(err.message)

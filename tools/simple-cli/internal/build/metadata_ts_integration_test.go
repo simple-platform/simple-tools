@@ -312,9 +312,9 @@ func TestExtractTypeScriptMetadataKeepsWhatIsWrittenAroundTheAnnotations(t *test
 	tsContent := `/**
  * The things module.
  *
- * @ai_tool true
- * @ai_effects read
- * @ai_retry_safety safe
+ * @tool
+ * @effects read
+ * @retry safe
  */
 
 import simple from '@simple/sdk'
@@ -350,7 +350,7 @@ simple.Handle(() => ({ ok: true }))
 		t.Fatalf("the description lost the rule written in it, got %q", metadata.Description)
 	}
 
-	if strings.Contains(metadata.Description, "@ai_") {
+	if strings.Contains(metadata.Description, "@") {
 		t.Fatalf("expected every annotation to be lifted out of the description, got %q", metadata.Description)
 	}
 }

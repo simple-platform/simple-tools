@@ -26,42 +26,61 @@ import (
 // writes the sentence that reaches it — rather than reachable until someone
 // remembers to exclude it.
 //
+// `@tool` IS A MODIFIER TAG: it carries no value, and its presence is the whole
+// statement. A tag that took a boolean made absence mean a default — an action
+// was not a tool because nobody said `false` — and a default is a claim about
+// actions nobody has read. Presence-only says the narrower true thing: an action
+// is unmarked until its author marks it, the way a symbol is not `@public` until
+// it says so.
+//
+// Only these four names are claimed as annotations. Every other `@` line is
+// description, because this vocabulary shares a doc comment with `@Payload` here
+// and with `@param`, `@remarks` and the rest of TSDoc on the other generator,
+// and one that lifted every tag out of the description would delete an author's
+// prose to protect its own. What catches a misspelling is tsdoc.json, which
+// declares these four to the editor and to ESLint.
+//
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
 const (
 	payloadAnnotation = "@Payload"
 
-	aiTagPrefix = "@ai_"
+	toolTag      = "tool"
+	effectsTag   = "effects"
+	retryTag     = "retry"
+	disclosesTag = "discloses"
 
-	aiToolTag             = "ai_tool"
-	aiEffectsTag          = "ai_effects"
-	aiRetrySafetyTag      = "ai_retry_safety"
-	aiDisclosureOriginTag = "ai_disclosure_origin"
-
-	aiDefaultDisclosureOrigin = "tenant_record"
+	defaultDiscloses = "tenant_record"
 )
 
 var (
-	aiTags       = []string{aiToolTag, aiEffectsTag, aiRetrySafetyTag, aiDisclosureOriginTag}
-	aiToolValues = []string{"true", "false"}
+	exposureTags = []string{toolTag, effectsTag, retryTag, disclosesTag}
 
-	aiEffects = []string{"read", "orchestration", "write", "destructive", "external", "credential"}
+	// The tags that say what CALLING a tool does. Each one qualifies `@tool`, so
+	// any of them written without it is a statement about nothing.
+	qualifyingTags = []string{effectsTag, retryTag, disclosesTag}
 
-	aiRetrySafeties = []string{"safe", "idempotent_with_key", "verify_before_retry", "never_automatic"}
+	effectValues = []string{"read", "orchestration", "write", "destructive", "external", "credential"}
 
-	aiDisclosureOrigins = []string{"tenant_record", "settings_field", "credential_field", "secret_field"}
+	retryValues = []string{"safe", "keyed", "verify-first", "never"}
+
+	disclosesValues = []string{"tenant_record", "settings_field", "credential_field", "secret_field"}
 )
 
-type aiTag struct {
+type exposureTag struct {
 	name  string
 	value string
 }
 
+// The action's exposure statement as action.json carries it. Tool is always true
+// where this object exists at all — it is how the artifact renders the presence
+// of a modifier tag, so a reader of action.json alone sees the same statement
+// the source makes.
 type aiMetadata struct {
-	Tool             bool     `json:"tool"`
-	Effects          []string `json:"effects,omitempty"`
-	RetrySafety      string   `json:"retry_safety,omitempty"`
-	DisclosureOrigin string   `json:"disclosure_origin,omitempty"`
+	Tool      bool     `json:"tool"`
+	Effects   []string `json:"effects,omitempty"`
+	Retry     string   `json:"retry,omitempty"`
+	Discloses string   `json:"discloses,omitempty"`
 }
 
 type Schema struct {
@@ -206,10 +225,10 @@ func main() {
 	// Which doc block supplies the DESCRIPTION depends on how the payload is
 	// declared, and that choice is made below. Reading annotations only from the
 	// block that happened to win would drop a tag written in any of the others
-	// in silence — and a dropped `@ai_tool` is an action that quietly stops being
+	// in silence — and a dropped `@tool` is an action that quietly stops being
 	// callable, which is the failure this annotation exists to make impossible.
 	// The same tag written twice is refused rather than resolved.
-	tags := collectAITags(node)
+	tags := collectExposureTags(node)
 
 	// Pass 1: Find a function with @Payload annotation
 	for _, decl := range node.Decls {
@@ -314,8 +333,8 @@ func main() {
 // Read from every documented declaration rather than only from the one the
 // description came from, so where an author writes the statement does not
 // decide whether it is heard.
-func collectAITags(file *ast.File) []aiTag {
-	var tags []aiTag
+func collectExposureTags(file *ast.File) []exposureTag {
+	var tags []exposureTag
 
 	for _, decl := range file.Decls {
 		var doc *ast.CommentGroup
@@ -355,45 +374,62 @@ func actionName(filePath string) string {
 // The annotations are LIFTED OUT of the description rather than left in it. A
 // tag left behind travels to the model as part of what the tool says it does —
 // so every line the grammar claims is removed here, in the one place that knows
-// the grammar, and the description is what remains.
-func splitDoc(doc string) (string, []aiTag, string) {
+// the grammar, and the description is what remains. A line naming any other tag
+// is left alone; it belongs to whoever else reads this doc comment.
+func splitDoc(doc string) (string, []exposureTag, string) {
 	var descLines []string
-	var tags []aiTag
+	var tags []exposureTag
 
 	payloadStruct := ""
 
 	for _, line := range strings.Split(doc, "\n") {
 		trimmed := strings.TrimSpace(line)
 
-		switch {
-		case strings.HasPrefix(trimmed, payloadAnnotation):
+		if strings.HasPrefix(trimmed, payloadAnnotation) {
 			if parts := strings.Fields(trimmed); len(parts) >= 2 {
 				payloadStruct = parts[1]
 			}
 
-		case strings.HasPrefix(trimmed, aiTagPrefix):
-			name := strings.TrimPrefix(strings.Fields(trimmed)[0], "@")
-			tags = append(tags, aiTag{
-				name:  name,
-				value: strings.TrimSpace(strings.TrimPrefix(trimmed, "@"+name)),
-			})
-
-		default:
-			descLines = append(descLines, line)
+			continue
 		}
+
+		if tag, annotated := exposureTagFromDocLine(trimmed); annotated {
+			tags = append(tags, tag)
+			continue
+		}
+
+		descLines = append(descLines, line)
 	}
 
 	return strings.TrimSpace(strings.Join(descLines, "\n")), tags, payloadStruct
 }
 
+// One doc-comment line read as an exposure annotation, or left to the
+// description.
+func exposureTagFromDocLine(line string) (exposureTag, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "@") {
+		return exposureTag{}, false
+	}
+
+	name := strings.TrimPrefix(strings.Fields(trimmed)[0], "@")
+	if !contains(exposureTags, name) {
+		return exposureTag{}, false
+	}
+
+	return exposureTag{
+		name:  name,
+		value: strings.TrimSpace(strings.TrimPrefix(trimmed, "@"+name)),
+	}, true
+}
+
 // The exposure statement an action makes about itself, or nothing at all.
 //
-// Absent means false: an action that writes no `@ai_` tag gets no `ai` object,
-// which is how every action that is not a tool regenerates unchanged. Anything
-// short of a complete, well-formed statement refuses instead of degrading,
-// because a half-read annotation is how an action ends up advertised as
-// something it is not.
-func buildAIMetadata(action string, tags []aiTag) (*aiMetadata, error) {
+// An action that writes no exposure tag gets no `ai` object, which is how every
+// action that is not a tool regenerates unchanged. Anything short of a complete,
+// well-formed statement refuses instead of degrading, because a half-read
+// annotation is how an action ends up advertised as something it is not.
+func buildAIMetadata(action string, tags []exposureTag) (*aiMetadata, error) {
 	if len(tags) == 0 {
 		return nil, nil
 	}
@@ -401,11 +437,6 @@ func buildAIMetadata(action string, tags []aiTag) (*aiMetadata, error) {
 	declared := map[string]string{}
 
 	for _, tag := range tags {
-		if !contains(aiTags, tag.name) {
-			return nil, annotationError(action,
-				fmt.Sprintf("@%s is not an exposure annotation", tag.name), prefixed(aiTags))
-		}
-
 		if _, seen := declared[tag.name]; seen {
 			return nil, annotationError(action,
 				fmt.Sprintf("@%s is declared more than once", tag.name), nil)
@@ -414,32 +445,36 @@ func buildAIMetadata(action string, tags []aiTag) (*aiMetadata, error) {
 		declared[tag.name] = tag.value
 	}
 
-	tool, stated := declared[aiToolTag]
-	if !stated {
-		return nil, annotationError(action,
-			fmt.Sprintf("declares an exposure annotation without @%s, so it is not a tool and the rest says nothing", aiToolTag),
-			aiToolValues)
-	}
+	value, marked := declared[toolTag]
+	if !marked {
+		// Named in vocabulary order rather than in the order they were declared,
+		// so the same source is refused with the same sentence every time.
+		var written []string
 
-	if !contains(aiToolValues, tool) {
-		return nil, annotationError(action, fmt.Sprintf("@%s takes %q", aiToolTag, tool), aiToolValues)
-	}
-
-	if tool == "false" {
-		for _, tag := range []string{aiEffectsTag, aiRetrySafetyTag, aiDisclosureOriginTag} {
+		for _, tag := range qualifyingTags {
 			if _, qualified := declared[tag]; qualified {
-				return nil, annotationError(action,
-					fmt.Sprintf("@%s qualifies a tool, and @%s is false", tag, aiToolTag), nil)
+				written = append(written, tag)
 			}
 		}
 
-		return &aiMetadata{Tool: false}, nil
+		return nil, annotationError(action,
+			fmt.Sprintf("declares %s without @%s, so it is not a tool and the rest says nothing",
+				strings.Join(prefixed(written), ", "), toolTag), nil)
 	}
 
-	rawEffects, stated := declared[aiEffectsTag]
+	// A modifier tag is its own statement. A value written after one is an
+	// author saying something the vocabulary has no way to hear — most likely
+	// the boolean this tag used to take, whose `false` no longer says anything.
+	if value != "" {
+		return nil, annotationError(action,
+			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries %q. Leave it bare to expose the action, or delete it to leave the action unexposed",
+				toolTag, value), nil)
+	}
+
+	rawEffects, stated := declared[effectsTag]
 	if !stated {
 		return nil, annotationError(action,
-			fmt.Sprintf("is a tool and must declare @%s", aiEffectsTag), aiEffects)
+			fmt.Sprintf("is a tool and must declare @%s", effectsTag), effectValues)
 	}
 
 	effects, err := parseEffects(action, rawEffects)
@@ -447,32 +482,32 @@ func buildAIMetadata(action string, tags []aiTag) (*aiMetadata, error) {
 		return nil, err
 	}
 
-	retrySafety, stated := declared[aiRetrySafetyTag]
+	retry, stated := declared[retryTag]
 	if !stated {
 		return nil, annotationError(action,
-			fmt.Sprintf("is a tool and must declare @%s", aiRetrySafetyTag), aiRetrySafeties)
+			fmt.Sprintf("is a tool and must declare @%s", retryTag), retryValues)
 	}
 
-	if !contains(aiRetrySafeties, retrySafety) {
+	if !contains(retryValues, retry) {
 		return nil, annotationError(action,
-			fmt.Sprintf("@%s takes %q", aiRetrySafetyTag, retrySafety), aiRetrySafeties)
+			fmt.Sprintf("@%s takes %q", retryTag, retry), retryValues)
 	}
 
-	disclosureOrigin, stated := declared[aiDisclosureOriginTag]
+	discloses, stated := declared[disclosesTag]
 	if !stated {
-		disclosureOrigin = aiDefaultDisclosureOrigin
+		discloses = defaultDiscloses
 	}
 
-	if !contains(aiDisclosureOrigins, disclosureOrigin) {
+	if !contains(disclosesValues, discloses) {
 		return nil, annotationError(action,
-			fmt.Sprintf("@%s takes %q", aiDisclosureOriginTag, disclosureOrigin), aiDisclosureOrigins)
+			fmt.Sprintf("@%s takes %q", disclosesTag, discloses), disclosesValues)
 	}
 
 	return &aiMetadata{
-		Tool:             true,
-		Effects:          effects,
-		RetrySafety:      retrySafety,
-		DisclosureOrigin: disclosureOrigin,
+		Tool:      true,
+		Effects:   effects,
+		Retry:     retry,
+		Discloses: discloses,
 	}, nil
 }
 
@@ -482,20 +517,20 @@ func parseEffects(action, raw string) ([]string, error) {
 	})
 
 	if len(effects) == 0 {
-		return nil, annotationError(action, fmt.Sprintf("@%s names no effect", aiEffectsTag), aiEffects)
+		return nil, annotationError(action, fmt.Sprintf("@%s names no effect", effectsTag), effectValues)
 	}
 
 	seen := map[string]bool{}
 
 	for _, effect := range effects {
-		if !contains(aiEffects, effect) {
+		if !contains(effectValues, effect) {
 			return nil, annotationError(action,
-				fmt.Sprintf("@%s names an unknown effect %q", aiEffectsTag, effect), aiEffects)
+				fmt.Sprintf("@%s names an unknown effect %q", effectsTag, effect), effectValues)
 		}
 
 		if seen[effect] {
 			return nil, annotationError(action,
-				fmt.Sprintf("@%s names %q twice", aiEffectsTag, effect), aiEffects)
+				fmt.Sprintf("@%s names %q twice", effectsTag, effect), effectValues)
 		}
 
 		seen[effect] = true

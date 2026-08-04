@@ -19,9 +19,9 @@ func TestExtractGoMetadataCarriesTheExposureStatement(t *testing.T) {
 
 // Writes things.
 //
-// @ai_tool true
-// @ai_effects write, destructive
-// @ai_retry_safety never_automatic
+// @tool
+// @effects write, destructive
+// @retry never
 //
 // @Payload Input
 func handler() {}
@@ -49,12 +49,12 @@ type Input struct {
 		t.Fatalf("expected the declared effects in order, got %#v", metadata.AI.Effects)
 	}
 
-	if metadata.AI.RetrySafety != "never_automatic" {
-		t.Fatalf("expected the declared retry safety, got %q", metadata.AI.RetrySafety)
+	if metadata.AI.Retry != "never" {
+		t.Fatalf("expected the declared retry, got %q", metadata.AI.Retry)
 	}
 
-	if metadata.AI.DisclosureOrigin != aiDefaultDisclosureOrigin {
-		t.Fatalf("expected the default disclosure origin, got %q", metadata.AI.DisclosureOrigin)
+	if metadata.AI.Discloses != defaultDiscloses {
+		t.Fatalf("expected the default disclosure, got %q", metadata.AI.Discloses)
 	}
 
 	// The description is what the model reads as the tool's own statement about
@@ -107,13 +107,36 @@ type Input struct {
 	}
 }
 
+// THE ARTIFACT SPELLS THE VOCABULARY THE WAY THE SOURCE DOES.
+//
+// action.json is read by hosts that never see the doc comment it came from, so
+// a member named one thing in the source and another in the file gives those two
+// readers different words for one fact. The names and their order are the file
+// format, held here rather than left to whichever struct tag was edited last.
+func TestExposureStatementIsWrittenWithTheVocabularysOwnNames(t *testing.T) {
+	encoded, err := json.Marshal(&AIMetadata{
+		Tool:      true,
+		Effects:   []string{"read"},
+		Retry:     "verify-first",
+		Discloses: "settings_field",
+	})
+	if err != nil {
+		t.Fatalf("failed to marshal the exposure statement: %v", err)
+	}
+
+	want := `{"tool":true,"effects":["read"],"retry":"verify-first","discloses":"settings_field"}`
+	if string(encoded) != want {
+		t.Fatalf("expected %s, got %s", want, encoded)
+	}
+}
+
 func TestExtractGoMetadataRefusesAMalformedExposureStatement(t *testing.T) {
 	fs := &MockFileSystem{files: map[string]string{
 		"/actions/mutate-things/main.go": `package main
 
 // Writes things.
 //
-// @ai_tool true
+// @tool
 //
 // @Payload Input
 func handler() {}
@@ -129,7 +152,7 @@ type Input struct {
 		t.Fatalf("expected a refusal, got %#v", metadata)
 	}
 
-	for _, want := range []string{"mutate-things", "@ai_effects", "read, orchestration, write, destructive, external, credential"} {
+	for _, want := range []string{"mutate-things", "@effects", "read, orchestration, write, destructive, external, credential"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected the refusal to mention %q, got %q", want, err.Error())
 		}
@@ -149,9 +172,9 @@ func TestExtractMetadataDiscardsTheActionJSONARefusedSourceHasMadeUntrue(t *test
 
 // Writes things.
 //
-// @ai_tool true
-// @ai_effects write, sideways
-// @ai_retry_safety never_automatic
+// @tool
+// @effects write, sideways
+// @retry never
 //
 // @Payload Input
 func handler() {}
@@ -196,88 +219,85 @@ func TestExtractMetadataKeepsTheActionJSONWhenTheGeneratorMerelyFailed(t *testin
 func TestBuildAIMetadataRefusesMalformedAnnotations(t *testing.T) {
 	cases := []struct {
 		name string
-		tags []aiTag
+		tags []exposureTag
 		want string
 	}{
 		{
 			name: "an effect outside the vocabulary",
-			tags: []aiTag{
-				{name: "ai_tool", value: "true"},
-				{name: "ai_effects", value: "read, sideways"},
-				{name: "ai_retry_safety", value: "safe"},
+			tags: []exposureTag{
+				{name: "tool"},
+				{name: "effects", value: "read, sideways"},
+				{name: "retry", value: "safe"},
 			},
 			want: `unknown effect "sideways"`,
 		},
 		{
 			name: "the same effect twice",
-			tags: []aiTag{
-				{name: "ai_tool", value: "true"},
-				{name: "ai_effects", value: "read, read"},
-				{name: "ai_retry_safety", value: "safe"},
+			tags: []exposureTag{
+				{name: "tool"},
+				{name: "effects", value: "read, read"},
+				{name: "retry", value: "safe"},
 			},
 			want: `names "read" twice`,
 		},
 		{
-			name: "two retry safeties",
-			tags: []aiTag{
-				{name: "ai_tool", value: "true"},
-				{name: "ai_effects", value: "read"},
-				{name: "ai_retry_safety", value: "safe"},
-				{name: "ai_retry_safety", value: "never_automatic"},
+			name: "two retries",
+			tags: []exposureTag{
+				{name: "tool"},
+				{name: "effects", value: "read"},
+				{name: "retry", value: "safe"},
+				{name: "retry", value: "never"},
 			},
 			want: "declared more than once",
 		},
 		{
-			name: "a tool that states no retry safety",
-			tags: []aiTag{
-				{name: "ai_tool", value: "true"},
-				{name: "ai_effects", value: "read"},
+			name: "a tool that states no retry",
+			tags: []exposureTag{
+				{name: "tool"},
+				{name: "effects", value: "read"},
 			},
-			want: "@ai_retry_safety",
+			want: "@retry",
+		},
+		// The value this tag used to take. It is refused rather than translated,
+		// because a vocabulary that quietly accepts the old spelling is one nobody
+		// finishes migrating.
+		{
+			name: "a retry outside the vocabulary",
+			tags: []exposureTag{
+				{name: "tool"},
+				{name: "effects", value: "read"},
+				{name: "retry", value: "never_automatic"},
+			},
+			want: `@retry takes "never_automatic". Accepted: safe, keyed, verify-first, never`,
 		},
 		{
-			name: "a disclosure origin outside the vocabulary",
-			tags: []aiTag{
-				{name: "ai_tool", value: "true"},
-				{name: "ai_effects", value: "read"},
-				{name: "ai_retry_safety", value: "safe"},
-				{name: "ai_disclosure_origin", value: "audit_log"},
+			name: "a disclosure outside the vocabulary",
+			tags: []exposureTag{
+				{name: "tool"},
+				{name: "effects", value: "read"},
+				{name: "retry", value: "safe"},
+				{name: "discloses", value: "audit_log"},
 			},
-			want: `@ai_disclosure_origin takes "audit_log"`,
-		},
-		{
-			name: "a misspelled annotation",
-			tags: []aiTag{
-				{name: "ai_tool", value: "true"},
-				{name: "ai_effect", value: "read"},
-				{name: "ai_retry_safety", value: "safe"},
-			},
-			want: "not an exposure annotation",
+			want: `@discloses takes "audit_log"`,
 		},
 		{
 			name: "qualifications without the exposure marker",
-			tags: []aiTag{
-				{name: "ai_effects", value: "read"},
-				{name: "ai_retry_safety", value: "safe"},
+			tags: []exposureTag{
+				{name: "effects", value: "read"},
+				{name: "retry", value: "safe"},
 			},
-			want: "without @ai_tool",
+			want: "declares @effects, @retry without @tool",
 		},
+		// The boolean this tag used to take. Read as `true` it would migrate
+		// itself, and `@tool false` would then read as an exposed action.
 		{
-			name: "an exposure marker that is not a boolean",
-			tags: []aiTag{
-				{name: "ai_tool", value: "yes"},
-				{name: "ai_effects", value: "read"},
-				{name: "ai_retry_safety", value: "safe"},
+			name: "a modifier tag carrying the value it used to take",
+			tags: []exposureTag{
+				{name: "tool", value: "true"},
+				{name: "effects", value: "read"},
+				{name: "retry", value: "safe"},
 			},
-			want: `@ai_tool takes "yes"`,
-		},
-		{
-			name: "qualifications on an action that is not a tool",
-			tags: []aiTag{
-				{name: "ai_tool", value: "false"},
-				{name: "ai_effects", value: "read"},
-			},
-			want: "@ai_tool is false",
+			want: `@tool is a modifier tag and takes no value, and this one carries "true"`,
 		},
 	}
 
@@ -300,6 +320,27 @@ func TestBuildAIMetadataRefusesMalformedAnnotations(t *testing.T) {
 	}
 }
 
+// ONLY THE FOUR NAMES ARE CLAIMED; EVERY OTHER TAG IS THE AUTHOR'S.
+//
+// This vocabulary shares a doc comment with `@Payload` here and with `@param`,
+// `@remarks` and the rest of TSDoc on the other generator. One that lifted every
+// `@` line out of the description to be sure of catching its own would delete an
+// author's prose to protect itself — and the deleted line is the one the model
+// most needed, because a tag is where a rule tends to be written down.
+func TestExposureTagsAreClaimedByNameAndNothingElseIs(t *testing.T) {
+	for _, line := range []string{"@tool", "@effects read", "@retry safe", "@discloses secret_field"} {
+		if _, claimed := exposureTagFromDocLine(line); !claimed {
+			t.Fatalf("expected %q to be read as an exposure annotation", line)
+		}
+	}
+
+	for _, line := range []string{"@param name the thing", "@remarks read this", "@toolbox", "@maxLength 40", "Reads things."} {
+		if tag, claimed := exposureTagFromDocLine(line); claimed {
+			t.Fatalf("expected %q to be left to the description, got %#v", line, tag)
+		}
+	}
+}
+
 // AN ANNOTATION BLOCK DOES NOT HAVE TO BE THE LAST THING IN A DOC COMMENT.
 //
 // An author may state the tags and keep writing, and what follows is part of
@@ -313,9 +354,9 @@ func TestExtractGoMetadataKeepsTheDescriptionWrittenAfterTheAnnotations(t *testi
 
 // Reads things.
 //
-// @ai_tool true
-// @ai_effects read
-// @ai_retry_safety safe
+// @tool
+// @effects read
+// @retry safe
 //
 // A name matching no row is REFUSED rather than answered with an empty
 // result, so an empty answer is never false good news.
@@ -348,7 +389,7 @@ type Input struct {
 // Which block supplies the DESCRIPTION is settled by rules about where a
 // payload is declared. Letting those rules also decide where an exposure
 // statement counts drops a tag written anywhere else in silence, and a dropped
-// `@ai_tool` is an action that quietly stops being callable.
+// `@tool` is an action that quietly stops being callable.
 func TestExtractGoMetadataHearsAnAnnotationWrittenOutsideTheDescribingBlock(t *testing.T) {
 	fs := &MockFileSystem{files: map[string]string{
 		"/actions/query-things/main.go": `package main
@@ -360,9 +401,9 @@ func handler() {}
 
 // The shape the host resolves.
 //
-// @ai_tool true
-// @ai_effects read
-// @ai_retry_safety safe
+// @tool
+// @effects read
+// @retry safe
 type Resolved struct{}
 
 type Input struct {

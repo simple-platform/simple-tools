@@ -60,9 +60,9 @@ func extractGoMetadata(fs fsx.FileSystem, actionDir string) (*ActionMetadata, er
 	//
 	// The statement is read from every documented declaration in the file rather
 	// than only from the one the description came from: where an author writes it
-	// must not decide whether it is heard, and a dropped `@ai_tool` is an action
+	// must not decide whether it is heard, and a dropped `@tool` is an action
 	// that quietly stops being callable.
-	ai, err := buildAIMetadata(filepath.Base(actionDir), collectAITags(file))
+	ai, err := buildAIMetadata(filepath.Base(actionDir), collectExposureTags(file))
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,7 @@ func findPayloadAnnotation(_ *token.FileSet, file *ast.File) (*PayloadInfo, erro
 			// An exposure annotation is lifted out of the description rather than
 			// left in it: the description is what the model reads as the tool's
 			// own statement, and a tag left behind ships as part of it.
-			if _, annotated := aiTagFromDocLine(text); annotated {
+			if _, annotated := exposureTagFromDocLine(text); annotated {
 				continue
 			}
 

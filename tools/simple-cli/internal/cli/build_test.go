@@ -65,7 +65,7 @@ func TestRunBuild(t *testing.T) {
 	build.ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
 		if strings.HasSuffix(actionDir, "refused") {
 			return &build.AnnotationRefusal{
-				Refusal: `refused: @ai_effects names an unknown effect "sideways"`,
+				Refusal: `refused: @effects names an unknown effect "sideways"`,
 			}
 		}
 

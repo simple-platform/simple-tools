@@ -39,6 +39,7 @@ func TestCreateMonorepoStructure_Success(t *testing.T) {
 		"AGENTS.md",
 		"README.md",
 		"simple.scl",
+		"tsdoc.json",
 		".simple/context/01-platform-overview.md",
 		".simple/context/02-scl-grammar.md",
 		".simple/context/03-data-layer-scl.md",
