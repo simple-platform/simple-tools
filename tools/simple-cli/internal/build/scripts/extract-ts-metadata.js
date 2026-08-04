@@ -32,10 +32,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // Only these four names are claimed as annotations. Every other `@` line is
 // description, because this vocabulary shares a doc comment with `@param`,
 // `@remarks` and the rest of TSDoc, and a generator that lifted every tag out of
-// the description would delete an author's prose to protect its own. What
-// catches a misspelling is tsdoc.json, which declares these four to the editor
-// and to ESLint, so `@toool` is reported where it is typed rather than silently
-// read as a sentence.
+// the description would delete an author's prose to protect its own.
+//
+// A NAME ONE EDIT AWAY FROM A CLAIMED ONE IS REFUSED RATHER THAN LEFT AS PROSE.
+// tsdoc.json declares these four to the editor and to ESLint, and that was taken
+// here as the answer to a misspelling. It is not one: it reports `@toool` in an
+// editor an author may not be running, it says nothing at build time, and the
+// other generator reads Go doc comments that tsdoc.json does not reach at all —
+// so the same typo stopped nothing in either language. What it costs is silent
+// twice over: the class `@dicloses secret_field` was written to tighten falls
+// back to the loosest one, and the line itself travels into the description a
+// model reads.
 //
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
@@ -177,7 +184,30 @@ function applySourceDescriptions(schema, description, type) {
 // action that is not a tool regenerates unchanged. Anything short of a complete,
 // well-formed statement refuses instead of degrading, because a half-read
 // annotation is how an action ends up advertised as something it is not.
-function buildAiMetadata(action, tags) {
+function buildAiMetadata(action, tags, misspellings) {
+  // A MISTYPED NAME IS REFUSED BEFORE ANYTHING ELSE IS READ.
+  //
+  // It is checked ahead of the tags because it explains them: an action missing
+  // the tag it looks like it declares is missing it BECAUSE of this line, and a
+  // refusal naming the incomplete statement would send its author to add a tag
+  // they have already written.
+  //
+  // Refused even where the action declares nothing else, which is the case that
+  // shipped. A lone mistyped `@discloses` left the action carrying the loosest
+  // class by default and the line itself in the description, and nothing
+  // anywhere said so.
+  // The first one written, so fixing it and running again surfaces the next
+  // rather than a list an author has to work through in one pass.
+  const [near] = misspellings
+
+  if (near) {
+    throw annotationError(
+      action,
+      `writes @${near.written}, which nothing claims and which is one edit from @${near.meant}`,
+      EXPOSURE_TAGS.map(tag => `@${tag}`),
+    )
+  }
+
   if (tags.length === 0) {
     return undefined
   }
@@ -434,6 +464,7 @@ function refuse(actionDir) {
 // author wrote: a `@param` or a `@remarks` stays where they put it.
 function splitDoc(text) {
   const descriptionLines = []
+  const misspellings = []
   const tags = []
 
   for (const line of String(text).split('\n')) {
@@ -449,10 +480,54 @@ function splitDoc(text) {
       continue
     }
 
+    // A near miss is left in the description rather than lifted out of it,
+    // because it is refused before any description ships.
+    const meant = name && EXPOSURE_TAGS.find(claimed => withinOneEdit(name, claimed))
+
+    if (meant) {
+      misspellings.push({ meant, written: name })
+    }
+
     descriptionLines.push(line)
   }
 
-  return { description: descriptionLines.join('\n').trim(), tags }
+  return { description: descriptionLines.join('\n').trim(), misspellings, tags }
+}
+
+// Whether one name reaches the other by inserting, deleting or replacing a
+// single character.
+//
+// One edit is the distance a typo travels. Any more and a name stops being a
+// misspelling of this vocabulary and starts being somebody else's word, which
+// this generator has no business refusing — a doc comment here is shared with
+// TSDoc and with whatever else reads it.
+function withinOneEdit(written, claimed) {
+  if (written === claimed) {
+    return true
+  }
+
+  const [longer, shorter] = written.length >= claimed.length ? [written, claimed] : [claimed, written]
+
+  if (longer.length - shorter.length > 1) {
+    return false
+  }
+
+  for (let index = 0; index < shorter.length; index++) {
+    if (longer[index] === shorter[index]) {
+      continue
+    }
+
+    return longer.length === shorter.length
+      // A replacement: the rest must match exactly.
+      ? longer.slice(index + 1) === shorter.slice(index + 1)
+      // An insertion in the longer name: the rest must match what is left of
+      // the shorter one.
+      : longer.slice(index + 1) === shorter.slice(index)
+  }
+
+  // Every character matched up to the shorter name's end, so the longer name is
+  // at most one character further on.
+  return true
 }
 
 let actionDir = process.argv[2]
@@ -501,13 +576,16 @@ if (tsPath) {
   // The Go extractor already reads every documented declaration. Reading fewer
   // of them here is how one source is a tool in one generator and not in the
   // other.
-  const exposureTags = sourceFile
+  const docBlocks = sourceFile
     .getDescendantsOfKind(SyntaxKind.JSDoc)
-    .flatMap(jsDoc => splitDoc(jsDoc.getInnerText()).tags)
+    .map(jsDoc => splitDoc(jsDoc.getInnerText()))
+
+  const exposureTags = docBlocks.flatMap(block => block.tags)
+  const misspellings = docBlocks.flatMap(block => block.misspellings)
 
   let ai
   try {
-    ai = buildAiMetadata(path.basename(actionDir), exposureTags)
+    ai = buildAiMetadata(path.basename(actionDir), exposureTags, misspellings)
   }
   catch (err) {
     console.error(err.message)

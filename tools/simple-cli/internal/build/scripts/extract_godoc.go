@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go/ast"
+	"go/doc"
 	"go/parser"
 	"go/token"
 	"os"
@@ -37,8 +38,14 @@ import (
 // description, because this vocabulary shares a doc comment with `@Payload` here
 // and with `@param`, `@remarks` and the rest of TSDoc on the other generator,
 // and one that lifted every tag out of the description would delete an author's
-// prose to protect its own. What catches a misspelling is tsdoc.json, which
-// declares these four to the editor and to ESLint.
+// prose to protect its own.
+//
+// A NAME ONE EDIT AWAY FROM A CLAIMED ONE IS REFUSED RATHER THAN LEFT AS PROSE.
+// Nothing else can catch it here: a Go doc comment has no editor lint behind it,
+// so `@dicloses secret_field` was read as a sentence, the class it was written to
+// tighten fell back to the loosest one, and the line itself travelled into the
+// description a model reads. Both halves of that are silent, and the tag an
+// author most wants heard is the one that says what calling the tool discloses.
 //
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
@@ -70,6 +77,23 @@ var (
 type exposureTag struct {
 	name  string
 	value string
+}
+
+// A tag one edit from a claimed name: what the author wrote, and the name it is
+// one edit from.
+type misspelledTag struct {
+	written string
+	meant   string
+}
+
+// What one doc comment says: the prose it states, the annotations claimed out of
+// it, the payload struct it names, and any tag written one edit from a claimed
+// name.
+type docContent struct {
+	description   string
+	tags          []exposureTag
+	payloadStruct string
+	misspelled    []misspelledTag
 }
 
 // The action's exposure statement as action.json carries it. Tool is always true
@@ -216,76 +240,35 @@ func main() {
 		os.Exit(1)
 	}
 
-	var targetStruct string
-	var overallDoc string
+	// WHICH COMMENT DOCUMENTS WHICH DECLARATION IS GO'S QUESTION, AND GO ANSWERS
+	// IT.
+	//
+	// This program used to decide, by walking the file's declarations and reading
+	// the doc hanging off each one. That walk knew about two shapes and the
+	// language has more: a comment above `package` documented the package and was
+	// read by nothing, and a declaration written inside a `type (...)` or
+	// `const (...)` group carries its doc on the spec rather than on the group, so
+	// that was read by nothing either.
+	//
+	// `AllDecls` because an action's handler is unexported and its payload need
+	// not be; `PreserveAST` because the same tree is read again below for the
+	// schema, and go/doc otherwise edits what it was handed.
+	pkg, err := doc.NewFromFiles(fset, []*ast.File{node}, "action", doc.AllDecls|doc.PreserveAST)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Doc error: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Every exposure annotation in the file, collected once, wherever its author
 	// wrote it.
 	//
-	// Which doc block supplies the DESCRIPTION depends on how the payload is
-	// declared, and that choice is made below. Reading annotations only from the
-	// block that happened to win would drop a tag written in any of the others
-	// in silence — and a dropped `@tool` is an action that quietly stops being
-	// callable, which is the failure this annotation exists to make impossible.
-	// The same tag written twice is refused rather than resolved.
-	tags := collectExposureTags(node)
-
-	// Pass 1: Find a function with @Payload annotation
-	for _, decl := range node.Decls {
-		if fnDecl, ok := decl.(*ast.FuncDecl); ok {
-			if fnDecl.Doc != nil {
-				description, _, declaredStruct := splitDoc(fnDecl.Doc.Text())
-				if declaredStruct != "" {
-					targetStruct = declaredStruct
-					overallDoc = description
-					break
-				}
-			}
-		}
-	}
-
-	// Pass 1.5: If no @Payload annotation exists, infer payload struct from req.Parse(&x).
-	// This keeps schema generation resilient even when docs omit @Payload.
-	if targetStruct == "" {
-		if inferredStruct, inferredDoc := inferPayloadStruct(node); inferredStruct != "" {
-			targetStruct = inferredStruct
-			overallDoc = inferredDoc
-		}
-	}
-
-	var payloadStruct *ast.StructType
-
-	// Pass 2: Find the matching struct
-	for _, decl := range node.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.TYPE {
-			continue
-		}
-
-		for _, spec := range genDecl.Specs {
-			typeSpec, ok := spec.(*ast.TypeSpec)
-			if !ok {
-				continue
-			}
-
-			if targetStruct != "" {
-				if typeSpec.Name.Name != targetStruct {
-					continue
-				}
-			} else {
-				if typeSpec.Name.Name != "Input" && typeSpec.Name.Name != "Payload" && typeSpec.Name.Name != "AIProxyPayload" {
-					continue
-				}
-			}
-
-			if st, ok := typeSpec.Type.(*ast.StructType); ok {
-				payloadStruct = st
-				if targetStruct == "" && genDecl.Doc != nil {
-					overallDoc, _, _ = splitDoc(genDecl.Doc.Text())
-				}
-			}
-		}
-	}
+	// Which doc block supplies the DESCRIPTION is decided just below, by where
+	// the payload is declared. Reading annotations only from the block that
+	// happened to win would drop a tag written in any of the others in silence —
+	// and a dropped `@tool` is an action that quietly stops being callable, which
+	// is the failure this annotation exists to make impossible. The same tag
+	// written twice is refused rather than resolved.
+	stated := collectExposureTags(node)
 
 	// The exposure statement is settled before the schema is, and a malformed
 	// one refuses here rather than downstream. An action whose payload could not
@@ -297,11 +280,15 @@ func main() {
 	// could not run. The caller needs the difference: a refused source has made
 	// the action.json already on disk describe an action that no longer exists,
 	// and an absent Go toolchain has not.
-	ai, err := buildAIMetadata(actionName(filePath), tags)
+	ai, err := buildAIMetadata(actionName(filePath), stated)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(annotationRefusalExitCode)
 	}
+
+	schemas := newSchemaParser(node)
+	targetStruct, overallDoc := describedPayload(pkg)
+	payloadStruct := schemas.structNamed(targetStruct)
 
 	if payloadStruct == nil {
 		// No target struct: emit the canonical no-input schema.
@@ -313,12 +300,9 @@ func main() {
 		return
 	}
 
-	parser := newSchemaParser(node)
-	schema := parser.parseStruct(payloadStruct)
-
 	out := Output{
 		Description: strings.TrimSpace(overallDoc),
-		Schema:      schema,
+		Schema:      schemas.parseStruct(payloadStruct),
 		AI:          ai,
 	}
 
@@ -328,62 +312,84 @@ func main() {
 	}
 }
 
-// Every exposure annotation written in a file.
+// The struct an action's payload is declared as, and the description the action
+// states about itself.
 //
-// Read from every documented declaration rather than only from the one the
-// description came from, so where an author writes the statement does not
-// decide whether it is heard.
+// Both are read from the doc Go itself attributes to a declaration, which is
+// what an editor shows and what `go doc` prints. The rule that produced them
+// here knew about a doc comment written on a `type` declaration and not about
+// one written on a spec inside a `type (...)` group, so an author who grouped
+// their payload with anything else shipped an action with no description and
+// nothing said.
 //
-// A PAYLOAD FIELD'S COMMENT IS ONE OF THOSE PLACES. It was not read here, and
-// what a field carried was neither heard nor removed: the qualifier was
-// dropped, the action kept whatever the enclosing declaration said, and the tag
-// text travelled on into the field's description as part of what the tool tells
-// a model it does. Nothing failed — the same input is refused outright by the
-// TypeScript generator, so one authoring mistake stopped a build in one
-// language and shipped a wrong advertisement in the other.
-func collectExposureTags(file *ast.File) []exposureTag {
-	var tags []exposureTag
-
-	for _, decl := range file.Decls {
-		var doc *ast.CommentGroup
-
-		switch typed := decl.(type) {
-		case *ast.FuncDecl:
-			doc = typed.Doc
-		case *ast.GenDecl:
-			doc = typed.Doc
+// The order is what an author most specifically wrote: the function that names
+// the payload, then the function that parses one without saying so, then a
+// conventionally named payload type describing itself. A package's own doc is
+// not in that order — it describes the file, and an action that says nothing
+// about itself is better left undescribed than described by the wrong sentence.
+func describedPayload(pkg *doc.Package) (string, string) {
+	for _, function := range pkg.Funcs {
+		if content := splitDoc(function.Doc); content.payloadStruct != "" {
+			return content.payloadStruct, content.description
 		}
-
-		if doc == nil {
-			continue
-		}
-
-		_, docTags, _ := splitDoc(doc.Text())
-		tags = append(tags, docTags...)
 	}
 
-	// Fields carry two comments an author writes in — the block above and the
-	// line beside — and both are read, because a tag heard in one and ignored in
-	// the other is the same silence in a smaller place.
+	// No `@Payload`: the struct the handler parses into says the same thing
+	// without saying it, so schema generation survives a doc comment that omits
+	// the annotation.
+	for _, function := range pkg.Funcs {
+		if inferred := parsedPayloadStruct(function.Decl); inferred != "" {
+			return inferred, splitDoc(function.Doc).description
+		}
+	}
+
+	for _, name := range []string{"Input", "Payload", "AIProxyPayload"} {
+		for _, declared := range pkg.Types {
+			if declared.Name == name {
+				return name, splitDoc(declared.Doc).description
+			}
+		}
+	}
+
+	return "", ""
+}
+
+// Every exposure annotation written in a file, and every tag written one edit
+// from one, collected once each wherever their author wrote them.
+//
+// EVERY COMMENT THE PARSER ATTACHED TO A DECLARATION IS A DOC COMMENT, and
+// that — rather than a list of the declaration shapes this program happens to
+// know about — is what is read. A list is what was here, and it was missing the
+// package's own comment, a spec's comment inside a group, and an import's; each
+// omission was an author's statement heard by nothing, and a `@tool` nobody
+// hears is an action that quietly is not callable.
+//
+// Asking `go/doc` for the same thing does not work, measured rather than
+// assumed: it hands one group's comment back once per spec declared under it,
+// which reads as the same tag declared twice, and it drops that comment
+// entirely when a spec under it carries its own. Walking what the parser
+// attached visits each comment exactly once and invents nothing.
+//
+// A comment inside a function body is attached to no declaration and is not
+// read. Go has no doc comment there, and an implementation note that happened to
+// mention a tag is not an author exposing an action.
+func collectExposureTags(file *ast.File) docContent {
+	var stated docContent
+
 	ast.Inspect(file, func(node ast.Node) bool {
-		field, isField := node.(*ast.Field)
-		if !isField {
+		group, attached := node.(*ast.CommentGroup)
+		if !attached {
 			return true
 		}
 
-		for _, doc := range []*ast.CommentGroup{field.Doc, field.Comment} {
-			if doc == nil {
-				continue
-			}
-
-			_, docTags, _ := splitDoc(doc.Text())
-			tags = append(tags, docTags...)
-		}
+		content := splitDoc(group.Text())
+		stated.tags = append(stated.tags, content.tags...)
+		stated.misspelled = append(stated.misspelled, content.misspelled...)
 
 		return true
 	})
 
-	return tags
+	return stated
 }
 
 // The action a source file belongs to, so a refusal names the action its author
@@ -405,51 +411,124 @@ func actionName(filePath string) string {
 // so every line the grammar claims is removed here, in the one place that knows
 // the grammar, and the description is what remains. A line naming any other tag
 // is left alone; it belongs to whoever else reads this doc comment.
-func splitDoc(doc string) (string, []exposureTag, string) {
+func splitDoc(text string) docContent {
+	var content docContent
 	var descLines []string
-	var tags []exposureTag
 
-	payloadStruct := ""
-
-	for _, line := range strings.Split(doc, "\n") {
+	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 
 		if strings.HasPrefix(trimmed, payloadAnnotation) {
 			if parts := strings.Fields(trimmed); len(parts) >= 2 {
-				payloadStruct = parts[1]
+				content.payloadStruct = parts[1]
 			}
 
 			continue
 		}
 
 		if tag, annotated := exposureTagFromDocLine(trimmed); annotated {
-			tags = append(tags, tag)
+			content.tags = append(content.tags, tag)
 			continue
+		}
+
+		// A near miss is left in the description rather than lifted out of it,
+		// because it is refused before any description ships.
+		if near, mistyped := misspelledTagFromDocLine(trimmed); mistyped {
+			content.misspelled = append(content.misspelled, near)
 		}
 
 		descLines = append(descLines, line)
 	}
 
-	return strings.TrimSpace(strings.Join(descLines, "\n")), tags, payloadStruct
+	content.description = strings.TrimSpace(strings.Join(descLines, "\n"))
+
+	return content
 }
 
 // One doc-comment line read as an exposure annotation, or left to the
 // description.
 func exposureTagFromDocLine(line string) (exposureTag, bool) {
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "@") {
-		return exposureTag{}, false
-	}
-
-	name := strings.TrimPrefix(strings.Fields(trimmed)[0], "@")
-	if !contains(exposureTags, name) {
+	name, tagged := docLineTagName(line)
+	if !tagged || !contains(exposureTags, name) {
 		return exposureTag{}, false
 	}
 
 	return exposureTag{
 		name:  name,
-		value: strings.TrimSpace(strings.TrimPrefix(trimmed, "@"+name)),
+		value: strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "@"+name)),
 	}, true
+}
+
+// One doc-comment line read as a claimed name its author mistyped.
+//
+// Only a name NOTHING claims is a candidate: `@Payload` is this generator's, and
+// a tag some other reader of the comment claims is that reader's business. What
+// is left is a line an author wrote as an annotation that no reader will ever
+// hear, and the whole point of the vocabulary is that such a line cannot pass
+// silently.
+func misspelledTagFromDocLine(line string) (misspelledTag, bool) {
+	name, tagged := docLineTagName(line)
+	if !tagged || name == strings.TrimPrefix(payloadAnnotation, "@") || contains(exposureTags, name) {
+		return misspelledTag{}, false
+	}
+
+	for _, claimed := range exposureTags {
+		if withinOneEdit(name, claimed) {
+			return misspelledTag{written: name, meant: claimed}, true
+		}
+	}
+
+	return misspelledTag{}, false
+}
+
+// The tag name a doc-comment line begins with, if it begins with one at all.
+func docLineTagName(line string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "@") {
+		return "", false
+	}
+
+	return strings.TrimPrefix(strings.Fields(trimmed)[0], "@"), true
+}
+
+// Whether one name reaches the other by inserting, deleting or replacing a
+// single character.
+//
+// One edit is the distance a typo travels. Any more and a name stops being a
+// misspelling of this vocabulary and starts being somebody else's word, which
+// this generator has no business refusing.
+func withinOneEdit(written, claimed string) bool {
+	if written == claimed {
+		return true
+	}
+
+	longer, shorter := written, claimed
+	if len(shorter) > len(longer) {
+		longer, shorter = shorter, longer
+	}
+
+	if len(longer)-len(shorter) > 1 {
+		return false
+	}
+
+	for index := 0; index < len(shorter); index++ {
+		if longer[index] == shorter[index] {
+			continue
+		}
+
+		if len(longer) == len(shorter) {
+			// A replacement: the rest must match exactly.
+			return longer[index+1:] == shorter[index+1:]
+		}
+
+		// An insertion in the longer name: the rest must match what is left of
+		// the shorter one.
+		return longer[index+1:] == shorter[index:]
+	}
+
+	// Every character matched up to the shorter name's end, so the longer name
+	// is at most one character further on.
+	return true
 }
 
 // The exposure statement an action makes about itself, or nothing at all.
@@ -458,14 +537,35 @@ func exposureTagFromDocLine(line string) (exposureTag, bool) {
 // action that is not a tool regenerates unchanged. Anything short of a complete,
 // well-formed statement refuses instead of degrading, because a half-read
 // annotation is how an action ends up advertised as something it is not.
-func buildAIMetadata(action string, tags []exposureTag) (*aiMetadata, error) {
-	if len(tags) == 0 {
+func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
+	// A MISTYPED NAME IS REFUSED BEFORE ANYTHING ELSE IS READ.
+	//
+	// It is checked ahead of the tags because it explains them: an action
+	// missing the tag it looks like it declares is missing it BECAUSE of this
+	// line, and a refusal naming the incomplete statement would send its author
+	// to add a tag they have already written.
+	//
+	// Refused even where the action declares nothing else, which is the case
+	// that shipped. A lone mistyped `@discloses` left the action carrying the
+	// loosest class by default and the line itself in the description, and
+	// nothing anywhere said so.
+	// The first one written, so fixing it and running again surfaces the next
+	// rather than a list an author has to work through in one pass.
+	if len(statement.misspelled) > 0 {
+		near := statement.misspelled[0]
+
+		return nil, annotationError(action,
+			fmt.Sprintf("writes @%s, which nothing claims and which is one edit from @%s",
+				near.written, near.meant), prefixed(exposureTags))
+	}
+
+	if len(statement.tags) == 0 {
 		return nil, nil
 	}
 
 	declared := map[string]string{}
 
-	for _, tag := range tags {
+	for _, tag := range statement.tags {
 		if _, seen := declared[tag.name]; seen {
 			return nil, annotationError(action,
 				fmt.Sprintf("@%s is declared more than once", tag.name), nil)
@@ -609,94 +709,86 @@ func noInputSchema() Schema {
 	}
 }
 
-func inferPayloadStruct(file *ast.File) (string, string) {
-	for _, decl := range file.Decls {
-		fnDecl, ok := decl.(*ast.FuncDecl)
-		if !ok || fnDecl.Body == nil {
-			continue
-		}
-
-		structByVar := map[string]string{}
-		resolvedStruct := ""
-		resolvedDoc := ""
-
-		ast.Inspect(fnDecl.Body, func(n ast.Node) bool {
-			if resolvedStruct != "" {
-				return false
-			}
-
-			switch node := n.(type) {
-			case *ast.DeclStmt:
-				genDecl, ok := node.Decl.(*ast.GenDecl)
-				if !ok || genDecl.Tok != token.VAR {
-					return true
-				}
-
-				for _, spec := range genDecl.Specs {
-					valueSpec, ok := spec.(*ast.ValueSpec)
-					if !ok {
-						continue
-					}
-
-					typeName := typeNameFromExpr(valueSpec.Type)
-					if typeName == "" {
-						continue
-					}
-
-					for _, name := range valueSpec.Names {
-						structByVar[name.Name] = typeName
-					}
-				}
-
-			case *ast.AssignStmt:
-				if node.Tok != token.DEFINE {
-					return true
-				}
-
-				for idx, lhs := range node.Lhs {
-					lhsIdent, ok := lhs.(*ast.Ident)
-					if !ok || idx >= len(node.Rhs) {
-						continue
-					}
-
-					rhsType := typeNameFromCompositeLit(node.Rhs[idx])
-					if rhsType != "" {
-						structByVar[lhsIdent.Name] = rhsType
-					}
-				}
-
-			case *ast.CallExpr:
-				selector, ok := node.Fun.(*ast.SelectorExpr)
-				if !ok || selector.Sel.Name != "Parse" || len(node.Args) != 1 {
-					return true
-				}
-
-				varName := identNameFromParseArg(node.Args[0])
-				if varName == "" {
-					return true
-				}
-
-				structName, exists := structByVar[varName]
-				if !exists {
-					return true
-				}
-
-				resolvedStruct = structName
-				if fnDecl.Doc != nil {
-					resolvedDoc, _, _ = splitDoc(fnDecl.Doc.Text())
-				}
-				return false
-			}
-
-			return true
-		})
-
-		if resolvedStruct != "" {
-			return resolvedStruct, resolvedDoc
-		}
+// The struct a function parses its request into, for an action whose doc
+// comment never says.
+func parsedPayloadStruct(fnDecl *ast.FuncDecl) string {
+	if fnDecl == nil || fnDecl.Body == nil {
+		return ""
 	}
 
-	return "", ""
+	structByVar := map[string]string{}
+	resolvedStruct := ""
+
+	ast.Inspect(fnDecl.Body, func(n ast.Node) bool {
+		if resolvedStruct != "" {
+			return false
+		}
+
+		switch node := n.(type) {
+		case *ast.DeclStmt:
+			genDecl, ok := node.Decl.(*ast.GenDecl)
+			if !ok || genDecl.Tok != token.VAR {
+				return true
+			}
+
+			for _, spec := range genDecl.Specs {
+				valueSpec, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+
+				typeName := typeNameFromExpr(valueSpec.Type)
+				if typeName == "" {
+					continue
+				}
+
+				for _, name := range valueSpec.Names {
+					structByVar[name.Name] = typeName
+				}
+			}
+
+		case *ast.AssignStmt:
+			if node.Tok != token.DEFINE {
+				return true
+			}
+
+			for idx, lhs := range node.Lhs {
+				lhsIdent, ok := lhs.(*ast.Ident)
+				if !ok || idx >= len(node.Rhs) {
+					continue
+				}
+
+				rhsType := typeNameFromCompositeLit(node.Rhs[idx])
+				if rhsType != "" {
+					structByVar[lhsIdent.Name] = rhsType
+				}
+			}
+
+		case *ast.CallExpr:
+			selector, ok := node.Fun.(*ast.SelectorExpr)
+			if !ok || selector.Sel.Name != "Parse" || len(node.Args) != 1 {
+				return true
+			}
+
+			varName := identNameFromParseArg(node.Args[0])
+			if varName == "" {
+				return true
+			}
+
+			structName, exists := structByVar[varName]
+			if !exists {
+				return true
+			}
+
+			resolvedStruct = structName
+
+			return false
+		}
+
+		return true
+	})
+
+	return resolvedStruct
 }
 
 func typeNameFromExpr(expr ast.Expr) string {
@@ -759,6 +851,27 @@ func newSchemaParser(file *ast.File) *schemaParser {
 	return parser
 }
 
+// The struct a name is declared as, wherever in the file it is declared —
+// including inside a `type (...)` group, which the search that read the file's
+// declarations one by one could not see.
+func (p *schemaParser) structNamed(name string) *ast.StructType {
+	if name == "" {
+		return nil
+	}
+
+	declared, exists := p.typeSpecs[name]
+	if !exists {
+		return nil
+	}
+
+	structType, isStruct := declared.(*ast.StructType)
+	if !isStruct {
+		return nil
+	}
+
+	return structType
+}
+
 func (p *schemaParser) parseStruct(st *ast.StructType) Schema {
 	schema := Schema{
 		Type:            "object",
@@ -800,9 +913,9 @@ func (p *schemaParser) parseStruct(st *ast.StructType) Schema {
 		// grammar, and a description that skipped it shipped `@effects
 		// destructive` to a model as a sentence about what the field means.
 		if field.Doc != nil {
-			propSchema.Description, _, _ = splitDoc(field.Doc.Text())
+			propSchema.Description = splitDoc(field.Doc.Text()).description
 		} else if field.Comment != nil {
-			propSchema.Description, _, _ = splitDoc(field.Comment.Text())
+			propSchema.Description = splitDoc(field.Comment.Text()).description
 		}
 
 		if tags.required {

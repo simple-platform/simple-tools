@@ -19,11 +19,17 @@ var extractScriptContent string
 //go:embed scripts/extract_godoc.go
 var extractGoDocContent string
 
-// extractTypeScriptMetadata describes a TypeScript action from its own source
-// by running the Node generator, which parses TypeScript with ts-morph and
-// ts-json-schema-generator rather than having this package reimplement either.
+// describeActionFromSource describes an action from its own source by running
+// the generator the platform runs, rather than having this package reimplement
+// what it does.
 //
-// The extraction script is located at ~/.simple/scripts/extract-ts-metadata.js
+// ONE GENERATOR, BOTH LANGUAGES. It reads the action's source itself and
+// dispatches on what it finds there: TypeScript through ts-morph and
+// ts-json-schema-generator, Go through the extractor it builds from the file
+// carried beside it. Which is why both files are written out together — the
+// generator looks for the Go extractor NEXT TO ITSELF, and this tool used to
+// leave the two in different directories, so the Go half of the one generator
+// could not be found by the half that runs it.
 //
 // THE GENERATOR'S OUTPUT IS THE FILE. It writes action.json itself and what it
 // wrote is left exactly as it wrote it — read back only far enough to prove it
@@ -43,10 +49,10 @@ var extractGoDocContent string
 //   - Extraction script is not found
 //   - Script execution fails, including refusing a malformed exposure statement
 //   - No readable action.json was produced
-func extractTypeScriptMetadata(fs fsx.FileSystem, actionDir string) error {
+func describeActionFromSource(fs fsx.FileSystem, actionDir string) error {
 	// Check if Node.js is available
 	if err := checkNodeJS(); err != nil {
-		return fmt.Errorf("node.js is required for TypeScript metadata extraction: %w", err)
+		return fmt.Errorf("node.js is required for action metadata extraction: %w", err)
 	}
 
 	// Ensure required npm packages are installed
@@ -54,14 +60,8 @@ func extractTypeScriptMetadata(fs fsx.FileSystem, actionDir string) error {
 		return fmt.Errorf("failed to install required npm packages: %w", err)
 	}
 
-	// Get the script path from ~/.simple/scripts
-	scriptPath, err := getScriptPath()
-	if err != nil {
-		return fmt.Errorf("failed to locate extraction script: %w", err)
-	}
-
-	// Execute the Node.js script
-	if err := executeScript(scriptPath, actionDir); err != nil {
+	// Execute the generator
+	if err := executeScript(actionDir); err != nil {
 		// A refusal is handed back as the generator wrote it. Wrapping it would
 		// put this layer's account of how a child process ended in front of the
 		// one sentence the author has to read to fix their source.
@@ -174,69 +174,65 @@ func findWorkspaceRoot() (string, error) {
 	}
 }
 
-// getScriptPath returns the path to the extraction script in ~/.simple/scripts
-// If the script doesn't exist, it extracts the embedded script to that location
-func getScriptPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
+// unpackGenerator writes both halves of the embedded generator into a directory
+// of this invocation's own, under the workspace root, and hands back the script
+// to run and the way to discard them.
+//
+// UNDER THE WORKSPACE ROOT because ESM resolves `node_modules` from the
+// IMPORTING FILE's directory upwards, so a generator run from anywhere else
+// cannot find ts-morph. BOTH HALVES because the generator looks for the Go
+// extractor beside itself, and writing the two to different directories left a
+// Go action describable by neither tool.
+//
+// OF THIS INVOCATION'S OWN because one fixed path was shared by every concurrent
+// extraction in a build. Each wrote the same bytes there, so nothing was
+// corrupted — but each also deleted the file when it finished, and a build runs
+// these in parallel. One action's cleanup removed the script another action's
+// node process had not finished starting up with, and that action failed to
+// build with `Cannot find module` naming a path nothing in the source mentions.
+// Measured at 1 failure in 48 actions at 16-way concurrency, which is a build
+// that fails on which actions happened to finish first.
+func unpackGenerator(workspaceRoot string) (string, func(), error) {
+	dir, err := os.MkdirTemp(workspaceRoot, ".simple-extract-")
 	if err != nil {
-		return "", fmt.Errorf("failed to get user home directory: %w", err)
+		return "", nil, fmt.Errorf("failed to create a directory for the generator: %w", err)
 	}
 
-	scriptsDir := filepath.Join(homeDir, ".simple", "scripts")
-	scriptPath := filepath.Join(scriptsDir, "extract-ts-metadata.js")
+	discard := func() { _ = os.RemoveAll(dir) }
 
-	// Create ~/.simple/scripts directory if it doesn't exist
-	if err := os.MkdirAll(scriptsDir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create scripts directory: %w", err)
+	scriptPath := filepath.Join(dir, "extract-ts-metadata.js")
+	if err := os.WriteFile(scriptPath, []byte(extractScriptContent), 0644); err != nil {
+		discard()
+		return "", nil, fmt.Errorf("failed to write the generator: %w", err)
 	}
 
-	if err := writeIfChanged(scriptPath, []byte(extractScriptContent)); err != nil {
-		return "", fmt.Errorf("failed to write extraction script: %w", err)
+	goDocPath := filepath.Join(dir, "extract_godoc.go")
+	if err := os.WriteFile(goDocPath, []byte(extractGoDocContent), 0644); err != nil {
+		discard()
+		return "", nil, fmt.Errorf("failed to write the Go extractor: %w", err)
 	}
 
-	goDocPath := filepath.Join(scriptsDir, "extract_godoc.go")
-	if err := writeIfChanged(goDocPath, []byte(extractGoDocContent)); err != nil {
-		return "", fmt.Errorf("failed to write Go metadata helper: %w", err)
-	}
-
-	return scriptPath, nil
+	return scriptPath, discard, nil
 }
 
-func writeIfChanged(path string, content []byte) error {
-	existing, err := os.ReadFile(path)
-	if err == nil && string(existing) == string(content) {
-		return nil
-	}
-
-	return os.WriteFile(path, content, 0644)
-}
-
-// executeScript runs the Node.js extraction script
-func executeScript(scriptPath, actionDir string) error {
+// executeScript runs the embedded generator over one action
+func executeScript(actionDir string) error {
 	// Find workspace root to run the script from there (so Node.js can find packages)
 	workspaceRoot, err := findWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find workspace root: %w", err)
 	}
 
-	// Copy the script to workspace root temporarily so Node.js ESM can find node_modules
-	// ESM module resolution looks for node_modules relative to the script location
-	tempScriptPath := filepath.Join(workspaceRoot, ".extract-ts-metadata.tmp.js")
-	scriptContent, err := os.ReadFile(scriptPath)
+	scriptPath, discard, err := unpackGenerator(workspaceRoot)
 	if err != nil {
-		return fmt.Errorf("failed to read extraction script: %w", err)
+		return err
 	}
 
-	if err := os.WriteFile(tempScriptPath, scriptContent, 0644); err != nil {
-		return fmt.Errorf("failed to create temporary script: %w", err)
-	}
-	defer func() {
-		_ = os.Remove(tempScriptPath) // Clean up after execution
-	}()
+	defer discard()
 
 	// Captured, not inherited: this runs once per action while the progress UI
 	// is repainting, and interleaved child output corrupts the frame.
-	cmd := exec.Command("node", tempScriptPath, actionDir)
+	cmd := exec.Command("node", scriptPath, actionDir)
 	cmd.Dir = workspaceRoot
 
 	if out, err := cmd.CombinedOutput(); err != nil {

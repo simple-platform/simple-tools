@@ -1,7 +1,6 @@
 package build
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -9,162 +8,32 @@ import (
 	"simple-cli/internal/fsx"
 )
 
-// ActionMetadata represents the output structure for action.json.
-//
-// The TypeScript path writes this file through a Node script and then reads it
-// back through this struct before writing it again, so anything this struct
-// does not model is dropped on the way through. The exposure statement is
-// modelled here for that reason: a field missing from it is a key the build
-// silently deletes from its own output.
-type ActionMetadata struct {
-	Description string      `json:"description"`
-	Schema      JSONSchema  `json:"schema"`
-	AI          *AIMetadata `json:"ai,omitempty"`
-}
-
-// JSONSchema represents JSON Schema structure
-type JSONSchema struct {
-	Ref                  string                     `json:"$ref,omitempty"` // For $ref format
-	Type                 string                     `json:"type,omitempty"` // For inline format
-	Description          string                     `json:"description,omitempty"`
-	Properties           map[string]Property        `json:"properties,omitempty"` // For inline format
-	Required             []string                   `json:"required,omitempty"`
-	Definitions          map[string]PropertyWithDef `json:"definitions,omitempty"` // For $ref format
-	Items                *Property                  `json:"items,omitempty"`
-	AdditionalProperties any                        `json:"additionalProperties,omitempty"` // Can be bool, Property, or raw schema map
-	Enum                 []any                      `json:"enum,omitempty"`
-	AnyOf                []Property                 `json:"anyOf,omitempty"`
-	Format               string                     `json:"format,omitempty"`
-	Pattern              string                     `json:"pattern,omitempty"`
-	MinItems             *int                       `json:"minItems,omitempty"`
-	MaxItems             *int                       `json:"maxItems,omitempty"`
-	MinLength            *int                       `json:"minLength,omitempty"`
-	MaxLength            *int                       `json:"maxLength,omitempty"`
-	Minimum              *float64                   `json:"minimum,omitempty"`
-	Maximum              *float64                   `json:"maximum,omitempty"`
-	MultipleOf           *float64                   `json:"multipleOf,omitempty"`
-	Default              any                        `json:"default,omitempty"`
-}
-
-func (s JSONSchema) MarshalJSON() ([]byte, error) {
-	out := map[string]any{}
-
-	if s.Ref != "" {
-		out["$ref"] = s.Ref
-	}
-	if s.Type != "" {
-		out["type"] = s.Type
-	}
-	if s.Description != "" {
-		out["description"] = s.Description
-	}
-	if s.Properties != nil {
-		out["properties"] = s.Properties
-	}
-	if len(s.Required) > 0 {
-		out["required"] = s.Required
-	}
-	if len(s.Definitions) > 0 {
-		out["definitions"] = s.Definitions
-	}
-	if s.Items != nil {
-		out["items"] = s.Items
-	}
-	if s.AdditionalProperties != nil {
-		out["additionalProperties"] = s.AdditionalProperties
-	}
-	if len(s.Enum) > 0 {
-		out["enum"] = s.Enum
-	}
-	if len(s.AnyOf) > 0 {
-		out["anyOf"] = s.AnyOf
-	}
-	if s.Format != "" {
-		out["format"] = s.Format
-	}
-	if s.Pattern != "" {
-		out["pattern"] = s.Pattern
-	}
-	if s.MinItems != nil {
-		out["minItems"] = *s.MinItems
-	}
-	if s.MaxItems != nil {
-		out["maxItems"] = *s.MaxItems
-	}
-	if s.MinLength != nil {
-		out["minLength"] = *s.MinLength
-	}
-	if s.MaxLength != nil {
-		out["maxLength"] = *s.MaxLength
-	}
-	if s.Minimum != nil {
-		out["minimum"] = *s.Minimum
-	}
-	if s.Maximum != nil {
-		out["maximum"] = *s.Maximum
-	}
-	if s.MultipleOf != nil {
-		out["multipleOf"] = *s.MultipleOf
-	}
-	if s.Default != nil {
-		out["default"] = s.Default
-	}
-
-	return json.Marshal(out)
-}
-
-// PropertyWithDef is like Property but can have its own definitions
-type PropertyWithDef struct {
-	Type                 string              `json:"type,omitempty"`
-	Description          string              `json:"description,omitempty"`
-	Items                *Property           `json:"items,omitempty"`
-	Properties           map[string]Property `json:"properties,omitempty"`
-	AdditionalProperties any                 `json:"additionalProperties,omitempty"` // Can be bool or Property
-	Required             []string            `json:"required,omitempty"`
-	Default              any                 `json:"default,omitempty"`
-	Minimum              *float64            `json:"minimum,omitempty"`
-	Maximum              *float64            `json:"maximum,omitempty"`
-	Pattern              string              `json:"pattern,omitempty"`
-	Enum                 []any               `json:"enum,omitempty"`
-	AnyOf                []Property          `json:"anyOf,omitempty"`
-	Format               string              `json:"format,omitempty"`
-	MinItems             *int                `json:"minItems,omitempty"`
-	MaxItems             *int                `json:"maxItems,omitempty"`
-	MinLength            *int                `json:"minLength,omitempty"`
-	MaxLength            *int                `json:"maxLength,omitempty"`
-	MultipleOf           *float64            `json:"multipleOf,omitempty"`
-}
-
-// Property represents a JSON Schema property with support for nested objects and arrays
-type Property struct {
-	Type                 string              `json:"type,omitempty"`
-	Description          string              `json:"description,omitempty"`
-	Items                *Property           `json:"items,omitempty"`                // For arrays
-	Properties           map[string]Property `json:"properties,omitempty"`           // For nested objects
-	AdditionalProperties any                 `json:"additionalProperties,omitempty"` // Can be bool or Property
-	Required             []string            `json:"required,omitempty"`             // For nested objects
-	Default              any                 `json:"default,omitempty"`              // Default value
-	Minimum              *float64            `json:"minimum,omitempty"`              // Minimum constraint
-	Maximum              *float64            `json:"maximum,omitempty"`              // Maximum constraint
-	Pattern              string              `json:"pattern,omitempty"`              // Regex pattern
-	Enum                 []any               `json:"enum,omitempty"`                 // Enumerated values
-	AnyOf                []Property          `json:"anyOf,omitempty"`                // Union schemas
-	Format               string              `json:"format,omitempty"`               // Semantic format
-	MinItems             *int                `json:"minItems,omitempty"`             // Array length minimum
-	MaxItems             *int                `json:"maxItems,omitempty"`             // Array length maximum
-	MinLength            *int                `json:"minLength,omitempty"`            // String length minimum
-	MaxLength            *int                `json:"maxLength,omitempty"`            // String length maximum
-	MultipleOf           *float64            `json:"multipleOf,omitempty"`           // Numeric multiple constraint
-}
-
 // ExtractMetadata generates action.json from an action's own source.
 //
-// It detects the action language (TypeScript or Go) and routes to the matching
-// extractor. FAILING IS FATAL TO THE BUILD: what comes out of here is the
-// action's description, its input schema, and its statement about whether an
-// agent may call it, so a build that could not produce them has verified
-// nothing about any of the three — and the build carries on to package
-// artifacts that the file beside them no longer describes.
+// FAILING IS FATAL TO THE BUILD: what comes out of here is the action's
+// description, its input schema, and its statement about whether an agent may
+// call it, so a build that could not produce them has verified nothing about any
+// of the three — and the build carries on to package artifacts that the file
+// beside them no longer describes.
+//
+// ONE GENERATOR DESCRIBES AN ACTION, AND THIS TOOL RUNS IT RATHER THAN ITS OWN
+// READING OF THE SAME CONTRACT. A Go action used to be described by seven
+// hundred lines of Go living in this package, parsing the same doc comments and
+// the same struct tags as the generator the platform runs. Two implementations
+// of one contract is two contracts: they had already drifted — one joined a
+// description's lines with spaces where the other kept the newlines, and one
+// read a payload field's annotations where the other did not — and an author
+// building through this tool got a different file from the same source.
+//
+// Nothing here could reach that code. The build refuses an action without
+// `src/index.ts` before extraction runs, and a third party authors in
+// TypeScript, so what it produced was a second contract that could never be
+// exercised or contradicted.
+//
+// The language is still detected, because THAT question this tool must answer:
+// an action with both sources or neither has a problem the generator would
+// describe as a missing root type, and an empty action.json is worse than a
+// refusal.
 //
 // When the failure is a refusal — the source says something the exposure
 // vocabulary does not admit — the action.json already on disk is discarded
@@ -172,41 +41,12 @@ type Property struct {
 // rejected edit still ships, because every later reader sees a well-formed file
 // and nothing that says which source it came from.
 func ExtractMetadata(fs fsx.FileSystem, actionDir string) error {
-	// Detect action language
-	lang, err := detectLanguage(fs, actionDir)
-	if err != nil {
+	if _, err := detectLanguage(fs, actionDir); err != nil {
 		return fmt.Errorf("failed to detect action language: %w", err)
 	}
 
-	// Each extractor leaves action.json on disk itself. What is shared is the
-	// policy over the outcome, not the writing.
-	switch lang {
-	case "typescript":
-		err = extractTypeScriptMetadata(fs, actionDir)
-	case "go":
-		err = writeGoActionJSON(fs, actionDir)
-	default:
-		return fmt.Errorf("unsupported action language: %s", lang)
-	}
-
-	if err != nil {
+	if err := describeActionFromSource(fs, actionDir); err != nil {
 		return discardStaleActionJSON(fs, actionDir, err)
-	}
-
-	return nil
-}
-
-// writeGoActionJSON describes a Go action from its own source and writes the
-// result. The Go extractor runs in this process, so this is where its output
-// becomes the file.
-func writeGoActionJSON(fs fsx.FileSystem, actionDir string) error {
-	metadata, err := extractGoMetadata(fs, actionDir)
-	if err != nil {
-		return err
-	}
-
-	if err := writeActionJSON(fs, actionDir, metadata); err != nil {
-		return fmt.Errorf("failed to write action.json: %w", err)
 	}
 
 	return nil
@@ -233,7 +73,7 @@ func discardStaleActionJSON(fs fsx.FileSystem, actionDir string, cause error) er
 	return cause
 }
 
-// extractTypeScriptMetadata is implemented in metadata_ts.go
+// describeActionFromSource is implemented in metadata_generator.go
 
 // detectLanguage determines if action is TypeScript or Go based on source file presence.
 // Returns "typescript" if index.ts or src/index.ts exists, "go" if main.go exists.
@@ -271,28 +111,4 @@ func detectLanguage(fs fsx.FileSystem, actionDir string) (string, error) {
 		return "typescript", nil
 	}
 	return "go", nil
-}
-
-// writeActionJSON writes ActionMetadata to action.json with atomic file writing.
-// Uses temp file + rename pattern to prevent partial writes.
-func writeActionJSON(fs fsx.FileSystem, actionDir string, metadata *ActionMetadata) error {
-	// Marshal metadata to JSON with 2-space indentation
-	data, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal metadata: %w", err)
-	}
-
-	// Add trailing newline for POSIX compliance
-	data = append(data, '\n')
-
-	// Write directly to final location
-	// Note: For production with OSFileSystem, this could be enhanced to use
-	// temp file + rename for atomic writes, but for testing with MockFileSystem
-	// we write directly since rename is not supported in the mock.
-	finalPath := filepath.Join(actionDir, "action.json")
-	if err := fs.WriteFile(finalPath, data, fsx.FilePerm); err != nil {
-		return fmt.Errorf("failed to write action.json: %w", err)
-	}
-
-	return nil
 }
