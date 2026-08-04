@@ -16,9 +16,9 @@ import (
 
 // THE AUTHOR-FACING EXPOSURE VOCABULARY.
 //
-// An action becomes callable by an agent because its own doc comment says so,
-// one tag per line, in any doc block in the action's source. Carrying it
-// in the source is what lets regeneration keep it: this generator rewrites
+// An action becomes callable by an agent because its own source says so, one
+// tag per line, anywhere in a comment in the action's main file, once. Carrying
+// it in the source is what lets regeneration keep it: this generator rewrites
 // action.json wholesale, so anything added to that file by hand is deleted the
 // next time an author touches the action.
 //
@@ -262,8 +262,8 @@ func main() {
 	// Every exposure annotation in the file, collected once, wherever its author
 	// wrote it.
 	//
-	// Which doc block supplies the DESCRIPTION is decided just below, by where
-	// the payload is declared. Reading annotations only from the block that
+	// Which comment supplies the DESCRIPTION is decided just below, by where the
+	// payload is declared. Reading annotations only from the comment that
 	// happened to win would drop a tag written in any of the others in silence —
 	// and a dropped `@tool` is an action that quietly stops being callable, which
 	// is the failure this annotation exists to make impossible. The same tag
@@ -357,37 +357,25 @@ func describedPayload(pkg *doc.Package) (string, string) {
 // Every exposure annotation written in a file, and every tag written one edit
 // from one, collected once each wherever their author wrote them.
 //
-// EVERY COMMENT THE PARSER ATTACHED TO A DECLARATION IS A DOC COMMENT, and
-// that — rather than a list of the declaration shapes this program happens to
-// know about — is what is read. A list is what was here, and it was missing the
-// package's own comment, a spec's comment inside a group, and an import's; each
-// omission was an author's statement heard by nothing, and a `@tool` nobody
-// hears is an action that quietly is not callable.
+// EVERY COMMENT IN THE FILE IS READ, whatever it is or is not attached to. The
+// parser hands back the whole set, and that is the whole rule: a tag is heard
+// because it was written, not because of where.
 //
-// Asking `go/doc` for the same thing does not work, measured rather than
-// assumed: it hands one group's comment back once per spec declared under it,
-// which reads as the same tag declared twice, and it drops that comment
-// entirely when a spec under it carries its own. Walking what the parser
-// attached visits each comment exactly once and invents nothing.
-//
-// A comment inside a function body is attached to no declaration and is not
-// read. Go has no doc comment there, and an implementation note that happened to
-// mention a tag is not an author exposing an action.
+// Reading only the comments attached to a declaration is what was here, and
+// attachment is not something an author controls or sees. A blank line between
+// a statement and the declaration under it detaches the comment, so the same
+// four lines exposed the action or did not depending on an empty line nobody
+// would think to look at — and the build stayed green either way, because an
+// unheard `@tool` is indistinguishable from an action that never claimed to be
+// a tool.
 func collectExposureTags(file *ast.File) docContent {
 	var stated docContent
 
-	ast.Inspect(file, func(node ast.Node) bool {
-		group, attached := node.(*ast.CommentGroup)
-		if !attached {
-			return true
-		}
-
+	for _, group := range file.Comments {
 		content := splitDoc(group.Text())
 		stated.tags = append(stated.tags, content.tags...)
 		stated.misspelled = append(stated.misspelled, content.misspelled...)
-
-		return true
-	})
+	}
 
 	return stated
 }

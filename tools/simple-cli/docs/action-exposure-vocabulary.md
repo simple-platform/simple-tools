@@ -141,12 +141,20 @@ func handler(req simple.Request) (any, error) { ... }
 
 ## Where an author may write it
 
-Anywhere in the action's source, in any doc block, one tag per line. Both
-generators read **every** documented declaration — and every payload member's
-own comment — not only the block that supplied the description. Where an author
-writes the statement must not decide whether it is heard: a dropped `@tool` is
-an action that quietly stops being callable, and a dropped qualifier is an
-action advertised as something it is not while the build stays green.
+**Anywhere in a comment in the action's main source file, once.** One tag per
+line. Position is not part of the rule: both generators read every comment in
+the file, whatever it is or is not attached to, so there is no list of legal
+places to learn and none to get wrong. Writing the same tag twice fails the
+build rather than letting one copy win.
+
+Where an author writes the statement must not decide whether it is heard: a
+dropped `@tool` is an action that quietly stops being callable, and a dropped
+qualifier is an action advertised as something it is not while the build stays
+green. There used to be a list, and the list was the defect — it described what
+each parser happened to reach rather than anything an author could see. A blank
+line between the statement and the declaration under it detaches the comment in
+Go and does nothing in TypeScript, so the same four lines exposed the action in
+one language and left it uncallable in the other, both at exit 0.
 
 A block does not have to end with the tags, either. An author may state them and
 keep writing, and what follows is part of what the tool says it does — in the

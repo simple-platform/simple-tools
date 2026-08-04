@@ -5,15 +5,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BasicAnnotationsReader, createGenerator } from 'ts-json-schema-generator'
-import { Project, SyntaxKind } from 'ts-morph'
+import { Project, SyntaxKind, ts } from 'ts-morph'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // THE AUTHOR-FACING EXPOSURE VOCABULARY.
 //
-// An action becomes callable by an agent because its own doc comment says so,
-// one tag per line, in any doc block in the action's source. Carrying it
-// in the source is what lets regeneration keep it: this file rewrites
+// An action becomes callable by an agent because its own source says so, one
+// tag per line, anywhere in a comment in the action's main file, once. Carrying
+// it in the source is what lets regeneration keep it: this file rewrites
 // action.json wholesale, so anything added to that file by hand is deleted the
 // next time an author touches the action.
 //
@@ -78,6 +78,19 @@ const SCHEMA_TAGS = new Set([
   ...BasicAnnotationsReader.jsonTags,
   ...BasicAnnotationsReader.textTags,
 ])
+
+// `@description` IS THE ONE NAME IN THAT SET THIS FILE MUST NOT REMOVE.
+//
+// Every other name reaches the artifact as a constraint the schema generator
+// wrote — `@maximum 500` leaves the prose and arrives as `maximum`, so removing
+// the line moves the meaning rather than losing it. This one arrives as the
+// description, which the walk above then OVERWRITES with the prose that was
+// kept; removing the line therefore deletes the author's sentence outright and
+// the artifact carries neither the tag nor the text. Measured: an action
+// documented only by `@description` shipped an empty description, and a member
+// documented only by one shipped no description key at all, from a build that
+// exited zero.
+SCHEMA_TAGS.delete('description')
 
 // The tags that say what CALLING a tool does. Each one qualifies `@tool`, so any
 // of them written without it is a statement about nothing.
@@ -281,6 +294,38 @@ function buildAiMetadata(action, tags, misspellings) {
   /* eslint-enable perfectionist/sort-objects */
 }
 
+// Every comment in a source file, with the syntax that makes it a comment taken
+// off and nothing else touched.
+//
+// THE SCANNER IS ASKED RATHER THAN THE SYNTAX TREE. A `/** */` block is a node
+// the tree hands back; an ordinary `//` line is trivia and is not. So a walk
+// over the tree heard the first and was silent on the second, and the same four
+// lines exposed the action or did not depending on which comment syntax their
+// author reached for — while the other generator, which reads every comment its
+// parser found, heard both. One vocabulary answering differently in two
+// languages is two vocabularies wearing one name.
+//
+// Only the four names are claimed and each may be written once, so reading more
+// comments cannot make an author's prose mean something: a line either is one of
+// the four or is left exactly where it was written.
+function commentsIn(sourceText) {
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, false)
+  const comments = []
+
+  scanner.setText(sourceText)
+
+  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
+    if (
+      token === ts.SyntaxKind.SingleLineCommentTrivia
+      || token === ts.SyntaxKind.MultiLineCommentTrivia
+    ) {
+      comments.push(withoutCommentMarkers(scanner.getTokenText()))
+    }
+  }
+
+  return comments
+}
+
 // The declaration a symbol's doc comment is written on.
 //
 // Almost always the only one. A symbol declared more than once is documented by
@@ -438,11 +483,11 @@ function refuse(actionDir) {
   process.exit(ANNOTATION_REFUSAL_EXIT_CODE)
 }
 
-// The description a doc block states, and the exposure annotations written
-// inside it.
+// The description a comment states, and the exposure annotations written inside
+// it.
 //
 // The annotations are LIFTED OUT of the description line by line, and the
-// description is everything else. A block does not have to end with them: an
+// description is everything else. A comment does not have to end with them: an
 // author may state the tags and keep writing, and what follows is part of what
 // the tool says it does.
 //
@@ -458,10 +503,14 @@ function refuse(actionDir) {
 //
 // Two vocabularies are claimed and only one is returned. The exposure tags are
 // this file's own and are what a caller asks for; the schema generator's tags
-// are removed because it has already turned them into constraints, and a
+// are removed because it has already turned them into CONSTRAINTS, and a
 // constraint stated twice — once as a keyword and once as English — is a member
-// documented by whichever one the reader believes. Everything else is what the
-// author wrote: a `@param` or a `@remarks` stays where they put it.
+// documented by whichever one the reader believes. `@description` is the
+// exception and is kept, because it is the one of those that arrives as prose
+// this file then replaces rather than as a constraint that survives.
+//
+// Everything else is what the author wrote: a `@param` or a `@remarks` stays
+// where they put it.
 function splitDoc(text) {
   const descriptionLines = []
   const misspellings = []
@@ -530,6 +579,19 @@ function withinOneEdit(written, claimed) {
   return true
 }
 
+// One comment's text: what its author wrote, with the leading `//`, the
+// enclosing `/* */` and the `*` that conventionally starts each line of a block
+// removed, so a tag reads the same whichever syntax carries it.
+function withoutCommentMarkers(comment) {
+  return comment
+    .replace(/^\/{2,}/, '')
+    .replace(/^\/\*+/, '')
+    .replace(/\*+\/$/, '')
+    .split('\n')
+    .map(line => line.replace(/^\s*\*+ ?/, ''))
+    .join('\n')
+}
+
 let actionDir = process.argv[2]
 if (!actionDir) {
   console.error('Usage: node extract-action-metadata.js <action_dir>')
@@ -562,26 +624,19 @@ if (tsPath) {
 
   const description = describedBy(payloadInterface) || describedBy(handlerNode)
 
-  // EVERY doc block in the file is read for exposure annotations, not only the
+  // EVERY comment in the file is read for exposure annotations, not only the
   // one that supplied the description.
   //
-  // Which block describes the action is decided above, by rules about where a
+  // Which comment describes the action is decided above, by rules about where a
   // payload is declared. Where an author writes the exposure statement must not
-  // be decided by those rules as a side effect: a tag written in a block that
-  // did not win would be dropped in silence, and a dropped `@tool` is an
-  // action that quietly stops being callable — the failure this whole
-  // annotation exists to make impossible. A file's leading block and a type
-  // beside the payload are both places an author reasonably writes it.
-  //
-  // The Go extractor already reads every documented declaration. Reading fewer
-  // of them here is how one source is a tool in one generator and not in the
-  // other.
-  const docBlocks = sourceFile
-    .getDescendantsOfKind(SyntaxKind.JSDoc)
-    .map(jsDoc => splitDoc(jsDoc.getInnerText()))
+  // be decided by those rules as a side effect: a tag written in a comment that
+  // did not win would be dropped in silence, and a dropped `@tool` is an action
+  // that quietly stops being callable — the failure this whole annotation
+  // exists to make impossible.
+  const comments = commentsIn(sourceFile.getFullText()).map(splitDoc)
 
-  const exposureTags = docBlocks.flatMap(block => block.tags)
-  const misspellings = docBlocks.flatMap(block => block.misspellings)
+  const exposureTags = comments.flatMap(comment => comment.tags)
+  const misspellings = comments.flatMap(comment => comment.misspellings)
 
   let ai
   try {
