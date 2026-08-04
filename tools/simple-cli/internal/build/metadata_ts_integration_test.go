@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"simple-cli/internal/fsx"
@@ -284,5 +285,72 @@ export async function handler(): Promise<{ ok: boolean }> {
 
 	if string(again) != string(written) {
 		t.Fatalf("the generated contract is not stable across runs:\n%s\n---\n%s", written, again)
+	}
+}
+
+// THE SAME TWO PROPERTIES FOR THE TYPESCRIPT PATH, WHICH IS A DIFFERENT
+// GENERATOR IN A CHILD PROCESS.
+//
+// The two describe one authoring vocabulary, so they have to agree about one
+// doc block. They did not: the TypeScript one read the description as the text
+// before the first tag, which a TypeScript parser hands back with everything
+// after that tag folded into the tag's own comment — so a paragraph written
+// after the annotations was deleted from the text a model reads, silently, on a
+// build that exited zero. And it read annotations only from the block that
+// supplied the description, so a statement written anywhere else in the file
+// left the action quietly not a tool.
+func TestExtractTypeScriptMetadataKeepsWhatIsWrittenAroundTheAnnotations(t *testing.T) {
+	if err := checkNodeJS(); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	actionDir := filepath.Join(t.TempDir(), "query-things")
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("Failed to create test action directory: %v", err)
+	}
+
+	tsContent := `/**
+ * The things module.
+ *
+ * @ai_tool true
+ * @ai_effects read
+ * @ai_retry_safety safe
+ */
+
+import simple from '@simple/sdk'
+
+/**
+ * Reads things.
+ *
+ * A name matching no row is REFUSED rather than answered with an empty
+ * result, so an empty answer is never false good news.
+ */
+export interface Payload {
+  name: string;
+}
+
+simple.Handle(() => ({ ok: true }))
+`
+
+	if err := os.WriteFile(filepath.Join(actionDir, "index.ts"), []byte(tsContent), 0644); err != nil {
+		t.Fatalf("Failed to write test TypeScript file: %v", err)
+	}
+
+	if err := extractTypeScriptMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if metadata.AI == nil || !metadata.AI.Tool {
+		t.Fatalf("an exposure statement written outside the describing block was dropped: %#v", metadata.AI)
+	}
+
+	if !strings.Contains(metadata.Description, "REFUSED rather than answered") {
+		t.Fatalf("the description lost the rule written in it, got %q", metadata.Description)
+	}
+
+	if strings.Contains(metadata.Description, "@ai_") {
+		t.Fatalf("expected every annotation to be lifted out of the description, got %q", metadata.Description)
 	}
 }

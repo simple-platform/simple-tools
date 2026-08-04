@@ -299,3 +299,88 @@ func TestBuildAIMetadataRefusesMalformedAnnotations(t *testing.T) {
 		})
 	}
 }
+
+// AN ANNOTATION BLOCK DOES NOT HAVE TO BE THE LAST THING IN A DOC COMMENT.
+//
+// An author may state the tags and keep writing, and what follows is part of
+// what the tool says it does. Read as the text BEFORE the first tag, that
+// trailing paragraph is not merely misplaced, it is deleted — and the sentence
+// most likely to be written there is the one that says what the action refuses,
+// which is exactly the rule a planner needs before it acts on an empty answer.
+func TestExtractGoMetadataKeepsTheDescriptionWrittenAfterTheAnnotations(t *testing.T) {
+	fs := &MockFileSystem{files: map[string]string{
+		"/actions/query-things/main.go": `package main
+
+// Reads things.
+//
+// @ai_tool true
+// @ai_effects read
+// @ai_retry_safety safe
+//
+// A name matching no row is REFUSED rather than answered with an empty
+// result, so an empty answer is never false good news.
+//
+// @Payload Input
+func handler() {}
+
+type Input struct {
+	Name string ` + "`json:\"name\"`" + `
+}
+`,
+	}}
+
+	metadata, err := extractGoMetadata(fs, "/actions/query-things")
+	if err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	if !strings.Contains(metadata.Description, "REFUSED rather than answered") {
+		t.Fatalf("the description written after the annotations was dropped, got %q", metadata.Description)
+	}
+
+	if strings.Contains(metadata.Description, "@") {
+		t.Fatalf("expected every annotation to be lifted out of the description, got %q", metadata.Description)
+	}
+}
+
+// WHERE AN AUTHOR WRITES THE STATEMENT MUST NOT DECIDE WHETHER IT IS HEARD.
+//
+// Which block supplies the DESCRIPTION is settled by rules about where a
+// payload is declared. Letting those rules also decide where an exposure
+// statement counts drops a tag written anywhere else in silence, and a dropped
+// `@ai_tool` is an action that quietly stops being callable.
+func TestExtractGoMetadataHearsAnAnnotationWrittenOutsideTheDescribingBlock(t *testing.T) {
+	fs := &MockFileSystem{files: map[string]string{
+		"/actions/query-things/main.go": `package main
+
+// Reads things.
+//
+// @Payload Input
+func handler() {}
+
+// The shape the host resolves.
+//
+// @ai_tool true
+// @ai_effects read
+// @ai_retry_safety safe
+type Resolved struct{}
+
+type Input struct {
+	Name string ` + "`json:\"name\"`" + `
+}
+`,
+	}}
+
+	metadata, err := extractGoMetadata(fs, "/actions/query-things")
+	if err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	if metadata.AI == nil || !metadata.AI.Tool {
+		t.Fatalf("an exposure statement written outside the describing block was dropped: %#v", metadata.AI)
+	}
+
+	if metadata.Description != "Reads things." {
+		t.Fatalf("expected the describing block to still supply the description, got %q", metadata.Description)
+	}
+}

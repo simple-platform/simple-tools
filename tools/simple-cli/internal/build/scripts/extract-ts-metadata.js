@@ -1,6 +1,7 @@
 /* eslint-disable node/prefer-global/process */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createGenerator } from 'ts-json-schema-generator'
@@ -11,7 +12,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // THE AUTHOR-FACING EXPOSURE VOCABULARY.
 //
 // An action becomes callable by an agent because its own doc comment says so,
-// one tag per line, in the same block the description is read from. Carrying it
+// one tag per line, in any doc block in the action's source. Carrying it
 // in the source is what lets regeneration keep it: this file rewrites
 // action.json wholesale, so anything added to that file by hand is deleted the
 // next time an author touches the action.
@@ -170,28 +171,6 @@ function buildAiMetadata(action, tags) {
   /* eslint-enable perfectionist/sort-objects */
 }
 
-// Every `@ai_*` tag written in one doc block, in the order the author wrote it.
-//
-// The tags are read off the same block the description comes from, and the
-// description is the text BEFORE them, so an annotation can never reach the
-// model as part of what the tool says about itself.
-function collectAiTags(jsDoc, into) {
-  if (!jsDoc) {
-    return
-  }
-
-  for (const tag of jsDoc.getTags()) {
-    const name = tag.getTagName()
-
-    if (!name.startsWith(AI_TAG_PREFIX)) {
-      continue
-    }
-
-    const comment = tag.getCommentText() || tag.getComment() || ''
-    into.push({ name, value: String(comment).split('\n')[0].trim() })
-  }
-}
-
 function inlineRootDefinition(schema) {
   if (
     schema
@@ -303,6 +282,42 @@ function refuse(actionDir) {
   process.exit(ANNOTATION_REFUSAL_EXIT_CODE)
 }
 
+// The description a doc block states, and the exposure annotations written
+// inside it.
+//
+// The annotations are LIFTED OUT of the description line by line, and the
+// description is everything else. A block does not have to end with them: an
+// author may state the tags and keep writing, and what follows is part of what
+// the tool says it does.
+//
+// Read as a tail instead — the text before the first tag — that trailing
+// sentence is not merely misplaced, it is DELETED. A TypeScript parser hands
+// every line after a tag back as that tag's own comment, so the description
+// silently loses the paragraph while the build stays green and the annotation
+// still parses. The rule an author wrote down then never reaches the model,
+// which is worse than an unparsed one, because nothing failed.
+//
+// This is the same line-wise rule the Go extractor applies, so one authoring
+// pattern is described identically by both generators.
+function splitDoc(text) {
+  const descriptionLines = []
+  const tags = []
+
+  for (const line of String(text).split('\n')) {
+    const trimmed = line.trim()
+
+    if (trimmed.startsWith(`@${AI_TAG_PREFIX}`)) {
+      const name = trimmed.slice(1).split(/\s+/)[0]
+      tags.push({ name, value: trimmed.slice(name.length + 1).trim() })
+      continue
+    }
+
+    descriptionLines.push(line)
+  }
+
+  return { description: descriptionLines.join('\n').trim(), tags }
+}
+
 let actionDir = process.argv[2]
 if (!actionDir) {
   console.error('Usage: node extract-action-metadata.js <action_dir>')
@@ -335,20 +350,29 @@ if (tsPath) {
     : handlerFunc
   const handlerDoc = handlerNode ? handlerNode.getJsDocs()[0] : undefined
 
-  let description = payloadDoc ? payloadDoc.getDescription().trim() : ''
+  let description = payloadDoc ? splitDoc(payloadDoc.getInnerText()).description : ''
 
   if (!description && handlerDoc) {
-    description = handlerDoc.getDescription().trim()
+    description = splitDoc(handlerDoc.getInnerText()).description
   }
 
-  // Both blocks are read for exposure annotations even though only one of them
-  // supplies the description. A tag written in the block that did not win would
-  // otherwise be dropped in silence, and a dropped `@ai_tool` is an action that
-  // quietly stops being callable — the failure this whole annotation exists to
-  // make impossible.
-  const aiTags = []
-  collectAiTags(payloadDoc, aiTags)
-  collectAiTags(handlerDoc, aiTags)
+  // EVERY doc block in the file is read for exposure annotations, not only the
+  // one that supplied the description.
+  //
+  // Which block describes the action is decided above, by rules about where a
+  // payload is declared. Where an author writes the exposure statement must not
+  // be decided by those rules as a side effect: a tag written in a block that
+  // did not win would be dropped in silence, and a dropped `@ai_tool` is an
+  // action that quietly stops being callable — the failure this whole
+  // annotation exists to make impossible. A file's leading block and a type
+  // beside the payload are both places an author reasonably writes it.
+  //
+  // The Go extractor already reads every documented declaration. Reading fewer
+  // of them here is how one source is a tool in one generator and not in the
+  // other.
+  const aiTags = sourceFile
+    .getDescendantsOfKind(SyntaxKind.JSDoc)
+    .flatMap(jsDoc => splitDoc(jsDoc.getInnerText()).tags)
 
   let ai
   try {
@@ -405,27 +429,57 @@ if (tsPath) {
   console.log(`Generated action.json for ${actionDir} (TypeScript)`)
 }
 else if (fs.existsSync(goPath)) {
-  // Use Go script
+  // THE GO EXTRACTOR IS BUILT AND THEN RUN, RATHER THAN RUN THROUGH `go run`.
+  //
+  // `go run` is a launcher, and the status it exits with describes the
+  // LAUNCHER: it collapses every non-zero status its program raises into 1 and
+  // prints the real one as a line of text on stderr. A refusal reached this
+  // process as an ordinary failure, so the branch below never fired for a Go
+  // action and the stale action.json survived every refusal — leaving a tree
+  // that reads as healthy to every later gate, because the file they read is
+  // well-formed and describes a source that no longer exists.
+  //
+  // Recovering the status from that stderr line would be matching on a message
+  // to decide whether to delete a file, which is the thing the distinct status
+  // exists to replace. Building the extractor takes the launcher out of the
+  // path instead, so the status the extractor raises is the status its caller
+  // observes — and it stays that way for every caller, not only for one that
+  // knows about a side channel.
+  const goScriptPath = path.join(__dirname, 'extract_godoc.go')
+  const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'simple-extract-godoc-'))
+  const extractorPath = path.join(buildDir, 'extract_godoc')
+  const discardExtractor = () => fs.rmSync(buildDir, { force: true, recursive: true })
+
+  // Only the extractor's own status is read as a refusal. `go` exits 2 for a
+  // usage error of its own, and a build that failed has said nothing about
+  // whether the action's exposure statement is well-formed.
   try {
-    const goScriptPath = path.join(__dirname, 'extract_godoc.go')
-    const outBuf = execFileSync('go', ['run', goScriptPath, '--', goPath])
-    const outStr = outBuf.toString()
-    const outData = JSON.parse(outStr)
-    fs.writeFileSync(path.join(actionDir, 'action.json'), `${JSON.stringify(outData, null, 2)}\n`)
-    console.log(`Generated action.json for ${actionDir} (Go)`)
+    execFileSync('go', ['build', '-o', extractorPath, goScriptPath])
   }
   catch (err) {
-    // A Go action that cannot be described — including because the Go
-    // toolchain is absent — must fail the run, not leave the stale action.json
-    // in place while the process exits cleanly. A silent success here lets a
-    // metadata gate pass having verified nothing.
+    discardExtractor()
+    console.error(`Failed to build the Go metadata extractor for ${actionDir}:`, err.message)
+    if (err.stderr)
+      console.error(err.stderr.toString())
+    process.exit(1)
+  }
+
+  let outData
+  try {
+    outData = JSON.parse(execFileSync(extractorPath, ['--', goPath]).toString())
+  }
+  catch (err) {
+    discardExtractor()
+
+    // A Go action that cannot be described must fail the run, not leave the
+    // stale action.json in place while the process exits cleanly. A silent
+    // success here lets a metadata gate pass having verified nothing.
     //
-    // The Go half refuses a malformed exposure statement with its own status,
-    // and that status is carried out of here unchanged: a refusal reads the
-    // same to this generator's caller whichever language the action is written
-    // in, and only a refusal discards the stale file. Its own refusal has
-    // already reached this process's stderr, so it is not restated under a
-    // heading that would make an author's mistake read as a broken toolchain.
+    // A refusal reads the same to this generator's caller whichever language
+    // the action is written in, and only a refusal discards the stale file. Its
+    // own refusal has already reached this process's stderr, so it is not
+    // restated under a heading that would make an author's mistake read as a
+    // broken toolchain.
     if (err.status === ANNOTATION_REFUSAL_EXIT_CODE) {
       refuse(actionDir)
     }
@@ -437,6 +491,10 @@ else if (fs.existsSync(goPath)) {
       console.error(err.stderr.toString())
     process.exit(1)
   }
+
+  discardExtractor()
+  fs.writeFileSync(path.join(actionDir, 'action.json'), `${JSON.stringify(outData, null, 2)}\n`)
+  console.log(`Generated action.json for ${actionDir} (Go)`)
 }
 else {
   fs.writeFileSync(

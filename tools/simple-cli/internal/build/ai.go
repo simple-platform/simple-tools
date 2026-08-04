@@ -9,7 +9,7 @@ import (
 // THE AUTHOR-FACING EXPOSURE VOCABULARY.
 //
 // An action becomes callable by an agent because its own doc comment says so,
-// one tag per line, in the same block the description is read from. Carrying it
+// one tag per line, in any doc block in the action's source. Carrying it
 // in the source is what lets regeneration keep it: action.json is rewritten
 // wholesale on every build, so anything added to that file by hand is deleted
 // the next time an author touches the action.
