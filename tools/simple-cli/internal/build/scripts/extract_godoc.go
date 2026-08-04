@@ -328,11 +328,19 @@ func main() {
 	}
 }
 
-// Every exposure annotation written in a file, in source order.
+// Every exposure annotation written in a file.
 //
 // Read from every documented declaration rather than only from the one the
 // description came from, so where an author writes the statement does not
 // decide whether it is heard.
+//
+// A PAYLOAD FIELD'S COMMENT IS ONE OF THOSE PLACES. It was not read here, and
+// what a field carried was neither heard nor removed: the qualifier was
+// dropped, the action kept whatever the enclosing declaration said, and the tag
+// text travelled on into the field's description as part of what the tool tells
+// a model it does. Nothing failed — the same input is refused outright by the
+// TypeScript generator, so one authoring mistake stopped a build in one
+// language and shipped a wrong advertisement in the other.
 func collectExposureTags(file *ast.File) []exposureTag {
 	var tags []exposureTag
 
@@ -353,6 +361,27 @@ func collectExposureTags(file *ast.File) []exposureTag {
 		_, docTags, _ := splitDoc(doc.Text())
 		tags = append(tags, docTags...)
 	}
+
+	// Fields carry two comments an author writes in — the block above and the
+	// line beside — and both are read, because a tag heard in one and ignored in
+	// the other is the same silence in a smaller place.
+	ast.Inspect(file, func(node ast.Node) bool {
+		field, isField := node.(*ast.Field)
+		if !isField {
+			return true
+		}
+
+		for _, doc := range []*ast.CommentGroup{field.Doc, field.Comment} {
+			if doc == nil {
+				continue
+			}
+
+			_, docTags, _ := splitDoc(doc.Text())
+			tags = append(tags, docTags...)
+		}
+
+		return true
+	})
 
 	return tags
 }
@@ -766,10 +795,14 @@ func (p *schemaParser) parseStruct(st *ast.StructType) Schema {
 		tags := parseJSONSchemaTags(jsonschemaTags)
 		propSchema = applySchemaTags(propSchema, tags)
 
+		// Split like every other description, rather than trimmed and kept whole.
+		// The grammar's lines are removed in the one place that knows the
+		// grammar, and a description that skipped it shipped `@effects
+		// destructive` to a model as a sentence about what the field means.
 		if field.Doc != nil {
-			propSchema.Description = strings.TrimSpace(field.Doc.Text())
+			propSchema.Description, _, _ = splitDoc(field.Doc.Text())
 		} else if field.Comment != nil {
-			propSchema.Description = strings.TrimSpace(field.Comment.Text())
+			propSchema.Description, _, _ = splitDoc(field.Comment.Text())
 		}
 
 		if tags.required {

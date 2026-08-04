@@ -67,6 +67,56 @@ function annotationError(action, message, accepted) {
   return new Error(`${action}: ${message}.${suffix}`)
 }
 
+// THE ROOT DESCRIPTION IN THE ARTIFACT IS THE ONE THIS FILE READ.
+//
+// Two parsers read the same doc comment on the way to action.json. `splitDoc`
+// below lifts the annotations out line by line and keeps everything else. The
+// schema generator opens the source itself and asks TypeScript for the doc
+// comment, and TypeScript ENDS a doc comment at its first tag — so a block
+// whose annotations are written anywhere but last leaves the schema describing
+// the action with every sentence after them deleted.
+//
+// Nothing fails when that happens. The generator exits zero, the file is
+// well-formed, and the two descriptions inside it disagree with no reader able
+// to tell which one is the source's. A description cut at a tag is worse than a
+// missing one, because the cut lands mid-sentence and the surviving half reads
+// as a complete claim: an action that says its script is "evaluated with only
+// the language's computational builtins in scope" — with the clause naming what
+// is ABSENT deleted — advertises the opposite of the rule its author wrote.
+//
+// So the schema generator's root description is DISCARDED rather than
+// reconciled. Reconciling would leave two parsers to keep agreeing; there is
+// one authority instead, and the other's answer is overwritten unread.
+//
+// The catalog already replaces a schema description with the action's own
+// before advertising it to a model. This is the same rule one layer earlier, so
+// every consumer of action.json sees it rather than only the tools that catalog
+// reaches — and a third-party action, which never passes through it, is
+// described by the sentences its author wrote.
+//
+// MEMBER descriptions are left as the schema generator rendered them, and that
+// is not an oversight. A member's doc comment is where `@minimum`, `@maximum`
+// and `@asType` are written, and the schema generator READS those into the
+// constraints beside the description. Ending the text at the first tag is how
+// they stay out of the prose; text kept past them ships `@maximum 500` to a
+// model as a sentence about what the member means. The four names claimed here
+// are not that vocabulary and cannot stand in for it.
+function applyAuthoritativeDescription(schema, payloadDescription) {
+  if (!schema || typeof schema !== 'object') {
+    return
+  }
+
+  // A schema either states a description or carries none. An empty string is a
+  // third thing, and it reads as a statement to every consumer that checks
+  // whether the key is there.
+  if (payloadDescription) {
+    schema.description = payloadDescription
+  }
+  else {
+    delete schema.description
+  }
+}
+
 function applyJsDocConstraints(schema, payloadInterface) {
   if (!schema || typeof schema !== 'object' || !payloadInterface) {
     return
@@ -362,7 +412,9 @@ if (tsPath) {
     : handlerFunc
   const handlerDoc = handlerNode ? handlerNode.getJsDocs()[0] : undefined
 
-  let description = payloadDoc ? splitDoc(payloadDoc.getInnerText()).description : ''
+  const payloadDescription = payloadDoc ? splitDoc(payloadDoc.getInnerText()).description : ''
+
+  let description = payloadDescription
 
   if (!description && handlerDoc) {
     description = splitDoc(handlerDoc.getInnerText()).description
@@ -415,6 +467,7 @@ if (tsPath) {
       delete schema.$schema
       schema = normalizeGeneratedSchema(schema)
       applyJsDocConstraints(schema, payloadInterface)
+      applyAuthoritativeDescription(schema, payloadDescription)
     }
     catch (err) {
       // A missing root type means the action declares no Payload, which is a

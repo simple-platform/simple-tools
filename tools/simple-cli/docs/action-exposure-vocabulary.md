@@ -142,13 +142,16 @@ func handler(req simple.Request) (any, error) { ... }
 ## Where an author may write it
 
 Anywhere in the action's source, in any doc block, one tag per line. Both
-generators read **every** documented declaration, not only the block that
-supplied the description — where an author writes the statement must not decide
-whether it is heard, and a dropped `@tool` is an action that quietly stops being
-callable.
+generators read **every** documented declaration — and every payload member's
+own comment — not only the block that supplied the description. Where an author
+writes the statement must not decide whether it is heard: a dropped `@tool` is
+an action that quietly stops being callable, and a dropped qualifier is an
+action advertised as something it is not while the build stays green.
 
 A block does not have to end with the tags, either. An author may state them and
-keep writing, and what follows is part of what the tool says it does.
+keep writing, and what follows is part of what the tool says it does — in the
+description the artifact carries **and** in the copy of it inside the schema,
+which state the same text.
 
 ## What the build writes
 

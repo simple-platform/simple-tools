@@ -354,3 +354,67 @@ simple.Handle(() => ({ ok: true }))
 		t.Fatalf("expected every annotation to be lifted out of the description, got %q", metadata.Description)
 	}
 }
+
+// THE SCHEMA STATES THE SAME DESCRIPTION THE ACTION DOES.
+//
+// A SECOND parser reads the source on the way to the input schema, and it ends a
+// doc comment at the first tag. An author who writes anything after the
+// annotations left the artifact carrying two descriptions: the action's, whole,
+// and the schema's, cut short — from one run, at exit 0, with no warning and no
+// way for a reader of the file to tell which of the two the author wrote.
+//
+// This is the path a THIRD PARTY builds through, and it is the only one they
+// have. It is also the only place the cut can be caught: nothing later in this
+// tool re-reads the source, so a description that arrives here already severed
+// arrives severed everywhere.
+//
+// Held as EQUALITY rather than as "mentions the rule somewhere". A cut lands
+// mid-sentence, and a half-sentence is not a weaker version of a rule — it is a
+// different and confident claim, which is what makes it worse than a description
+// that was never written.
+func TestExtractTypeScriptMetadataStatesOneDescription(t *testing.T) {
+	if err := checkNodeJS(); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	actionDir := filepath.Join(t.TempDir(), "query-things")
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("Failed to create test action directory: %v", err)
+	}
+
+	tsContent := `/**
+ * Reads things.
+ *
+ * @tool
+ * @effects read
+ * @retry safe
+ *
+ * A name matching no row is REFUSED rather than answered with an empty
+ * result, so an empty answer is never false good news.
+ */
+export interface Payload {
+  name: string;
+}
+
+simple.Handle(() => ({ ok: true }))
+`
+
+	if err := os.WriteFile(filepath.Join(actionDir, "index.ts"), []byte(tsContent), 0644); err != nil {
+		t.Fatalf("Failed to write test TypeScript file: %v", err)
+	}
+
+	if err := extractTypeScriptMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if !strings.Contains(metadata.Description, "REFUSED rather than answered") {
+		t.Fatalf("the description lost the rule written in it, got %q", metadata.Description)
+	}
+
+	if metadata.Schema.Description != metadata.Description {
+		t.Fatalf("the schema describes the action differently from the action:\n%q\n---\n%q",
+			metadata.Schema.Description, metadata.Description)
+	}
+}
