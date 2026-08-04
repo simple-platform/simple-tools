@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createGenerator } from 'ts-json-schema-generator'
+import { BasicAnnotationsReader, createGenerator } from 'ts-json-schema-generator'
 import { Project, SyntaxKind } from 'ts-morph'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -46,6 +46,32 @@ const DISCLOSES_TAG = 'discloses'
 
 const EXPOSURE_TAGS = [TOOL_TAG, EFFECTS_TAG, RETRY_TAG, DISCLOSES_TAG]
 
+// THE TAGS THE SCHEMA GENERATOR TURNS INTO A CONSTRAINT, ASKED OF IT RATHER
+// THAN LISTED HERE.
+//
+// A payload member's doc comment carries two vocabularies. The exposure
+// statement above is one; `@minimum`, `@maxLength`, `@asType` and the rest are
+// the other, and the schema generator reads them into the constraints beside
+// the description. Neither is prose: a description that kept them ships
+// `@maximum 500` to a model as a sentence about what the member means.
+//
+// Read off the generator's own reader, so a tag it starts claiming stops being
+// prose in the same release rather than the next time somebody notices a
+// constraint advertised twice — once as a keyword and once as English. Its
+// extended reader takes three more from the symbol directly and they belong to
+// no such set, so those are the only names written out.
+//
+// The Go extractor claims none of this, and that is not two vocabularies
+// wearing one name: a Go action states its constraints in the struct tag, where
+// a doc comment never sees them.
+const SCHEMA_TAGS = new Set([
+  'asType',
+  'example',
+  'nullable',
+  ...BasicAnnotationsReader.jsonTags,
+  ...BasicAnnotationsReader.textTags,
+])
+
 // The tags that say what CALLING a tool does. Each one qualifies `@tool`, so any
 // of them written without it is a statement about nothing.
 const QUALIFYING_TAGS = [EFFECTS_TAG, RETRY_TAG, DISCLOSES_TAG]
@@ -67,26 +93,29 @@ function annotationError(action, message, accepted) {
   return new Error(`${action}: ${message}.${suffix}`)
 }
 
-// THE ROOT DESCRIPTION IN THE ARTIFACT IS THE ONE THIS FILE READ.
+// EVERY DESCRIPTION IN THE ARTIFACT IS READ ONCE, FROM THE SOURCE, BY THIS
+// FILE.
 //
-// Two parsers read the same doc comment on the way to action.json. `splitDoc`
-// below lifts the annotations out line by line and keeps everything else. The
-// schema generator opens the source itself and asks TypeScript for the doc
-// comment, and TypeScript ENDS a doc comment at its first tag — so a block
-// whose annotations are written anywhere but last leaves the schema describing
-// the action with every sentence after them deleted.
+// Two parsers used to read the same doc comments on the way to one file.
+// `splitDoc` below lifts the annotations out line by line and keeps everything
+// else; the schema generator opens the source itself and asks TypeScript, and
+// TypeScript ENDS a doc comment at its first tag. Both answers shipped — the
+// action's own description from one reader, every description inside the schema
+// from the other — so an author who wrote a sentence after a tag had it kept in
+// one place and deleted in the other, from a single run that exited zero with a
+// well-formed file and no reader able to tell which half its author wrote.
 //
-// Nothing fails when that happens. The generator exits zero, the file is
-// well-formed, and the two descriptions inside it disagree with no reader able
-// to tell which one is the source's. A description cut at a tag is worse than a
-// missing one, because the cut lands mid-sentence and the surviving half reads
-// as a complete claim: an action that says its script is "evaluated with only
-// the language's computational builtins in scope" — with the clause naming what
-// is ABSENT deleted — advertises the opposite of the rule its author wrote.
+// A description cut at a tag is worse than a missing one, because the cut lands
+// mid-sentence and the surviving half reads as a complete claim: an action that
+// says its script is "evaluated with only the language's computational builtins
+// in scope" — with the clause naming what is ABSENT deleted — advertises the
+// opposite of the rule its author wrote.
 //
-// So the schema generator's root description is DISCARDED rather than
-// reconciled. Reconciling would leave two parsers to keep agreeing; there is
-// one authority instead, and the other's answer is overwritten unread.
+// So the schema generator is no longer asked what anything MEANS. It
+// contributes the shape and the constraints; every sentence the walk below
+// reaches is stated from the source or removed, and two readings have nothing
+// left to disagree about. Reconciling them instead left two parsers to keep
+// agreeing, and deciding which of them wins is what shipped the wrong block.
 //
 // The catalog already replaces a schema description with the action's own
 // before advertising it to a model. This is the same rule one layer earlier, so
@@ -94,59 +123,51 @@ function annotationError(action, message, accepted) {
 // reaches — and a third-party action, which never passes through it, is
 // described by the sentences its author wrote.
 //
-// MEMBER descriptions are left as the schema generator rendered them, and that
-// is not an oversight. A member's doc comment is where `@minimum`, `@maximum`
-// and `@asType` are written, and the schema generator READS those into the
-// constraints beside the description. Ending the text at the first tag is how
-// they stay out of the prose; text kept past them ships `@maximum 500` to a
-// model as a sentence about what the member means. The four names claimed here
-// are not that vocabulary and cannot stand in for it.
-function applyAuthoritativeDescription(schema, payloadDescription) {
-  if (!schema || typeof schema !== 'object') {
+// The walk follows what a payload IS: an object's members, and an array's
+// elements. A node reached only through a union's branches is described by the
+// TYPE that branch names rather than by any member of the payload, and it is
+// left as the schema generator rendered it — the one description in the
+// artifact this file did not read.
+function applySourceDescriptions(schema, description, type) {
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
     return
   }
 
   // A schema either states a description or carries none. An empty string is a
   // third thing, and it reads as a statement to every consumer that checks
   // whether the key is there.
-  if (payloadDescription) {
-    schema.description = payloadDescription
+  if (description) {
+    schema.description = description
   }
   else {
     delete schema.description
   }
-}
 
-function applyJsDocConstraints(schema, payloadInterface) {
-  if (!schema || typeof schema !== 'object' || !payloadInterface) {
+  if (!type) {
     return
   }
 
   const properties = schema.properties
-  if (!properties || typeof properties !== 'object') {
-    return
-  }
 
-  for (const property of payloadInterface.getProperties()) {
-    const propertyName = property.getName()
-    const propertySchema = properties[propertyName]
+  if (properties && typeof properties === 'object') {
+    for (const [name, propertySchema] of Object.entries(properties)) {
+      const symbol = type.getProperty(name)
+      const declaration = symbol && declarationOf(symbol)
 
-    if (!propertySchema || typeof propertySchema !== 'object') {
-      continue
-    }
-
-    for (const jsDoc of property.getJsDocs()) {
-      for (const tag of jsDoc.getTags()) {
-        if (tag.getTagName() === 'maxLength') {
-          const rawValue = tag.getCommentText() || tag.getComment() || ''
-          const maxLength = Number.parseInt(String(rawValue).trim(), 10)
-
-          if (Number.isInteger(maxLength) && maxLength > 0) {
-            propertySchema.maxLength = maxLength
-          }
-        }
+      if (declaration) {
+        applySourceDescriptions(
+          propertySchema,
+          describedBy(declaration),
+          symbol.getTypeAtLocation(declaration),
+        )
       }
     }
+  }
+
+  const elementType = type.getArrayElementType()
+
+  if (schema.items && elementType) {
+    applySourceDescriptions(schema.items, describedBy(declarationOfType(elementType)), elementType)
   }
 }
 
@@ -228,6 +249,52 @@ function buildAiMetadata(action, tags) {
     discloses,
   }
   /* eslint-enable perfectionist/sort-objects */
+}
+
+// The declaration a symbol's doc comment is written on.
+//
+// Almost always the only one. A symbol declared more than once is documented by
+// whichever of them an author wrote the comment on, so the search runs backwards
+// and stops at the first documented declaration rather than assuming a position.
+function declarationOf(symbol) {
+  const declarations = symbol.getDeclarations()
+
+  return declarations.findLast(declaration => docBlockOf(declaration))
+    ?? declarations[declarations.length - 1]
+}
+
+// The declaration a TYPE is documented on, for the schema nodes that describe a
+// type rather than a member of one — an array's elements are the case that
+// exists.
+function declarationOfType(type) {
+  const symbol = type.getAliasSymbol() ?? type.getSymbol()
+
+  return symbol ? declarationOf(symbol) : undefined
+}
+
+// The description a declaration's own doc block states, with the annotations
+// lifted out of it.
+function describedBy(node) {
+  const docBlock = docBlockOf(node)
+
+  return docBlock ? splitDoc(docBlock.getInnerText()).description : ''
+}
+
+// THE DOC BLOCK A DECLARATION STATES IS THE ONE WRITTEN AGAINST IT.
+//
+// Where an author leaves two blocks stacked above one declaration, TypeScript
+// attributes the LOWER one: it is what an editor shows on hover and what the
+// schema generator reads. Taking the first described the action by whichever
+// block was written earliest — most often the one the author had just replaced,
+// and always the opposite of what they were looking at.
+function docBlockOf(node) {
+  if (!node || typeof node.getJsDocs !== 'function') {
+    return undefined
+  }
+
+  const blocks = node.getJsDocs()
+
+  return blocks[blocks.length - 1]
 }
 
 function inlineRootDefinition(schema) {
@@ -359,8 +426,12 @@ function refuse(actionDir) {
 // This is the same line-wise rule the Go extractor applies, so one authoring
 // pattern is described identically by both generators.
 //
-// Only the four exposure tags are claimed. A `@param`, a `@remarks` or a
-// `@maxLength` is part of what the author wrote and stays where they wrote it.
+// Two vocabularies are claimed and only one is returned. The exposure tags are
+// this file's own and are what a caller asks for; the schema generator's tags
+// are removed because it has already turned them into constraints, and a
+// constraint stated twice — once as a keyword and once as English — is a member
+// documented by whichever one the reader believes. Everything else is what the
+// author wrote: a `@param` or a `@remarks` stays where they put it.
 function splitDoc(text) {
   const descriptionLines = []
   const tags = []
@@ -371,6 +442,10 @@ function splitDoc(text) {
 
     if (EXPOSURE_TAGS.includes(name)) {
       tags.push({ name, value: trimmed.slice(name.length + 1).trim() })
+      continue
+    }
+
+    if (SCHEMA_TAGS.has(name)) {
       continue
     }
 
@@ -404,21 +479,13 @@ if (tsPath) {
   // The two blocks an author may describe an action in: the Payload interface,
   // and the handler when the interface says nothing.
   const payloadInterface = sourceFile.getInterface('Payload')
-  const payloadDoc = payloadInterface ? payloadInterface.getJsDocs()[0] : undefined
 
   const handlerFunc = sourceFile.getFunction('handler') || sourceFile.getVariableDeclaration('handler')
   const handlerNode = handlerFunc && handlerFunc.getKindName() === 'VariableDeclaration'
     ? handlerFunc.getFirstAncestorByKind(SyntaxKind.VariableStatement)
     : handlerFunc
-  const handlerDoc = handlerNode ? handlerNode.getJsDocs()[0] : undefined
 
-  const payloadDescription = payloadDoc ? splitDoc(payloadDoc.getInnerText()).description : ''
-
-  let description = payloadDescription
-
-  if (!description && handlerDoc) {
-    description = splitDoc(handlerDoc.getInnerText()).description
-  }
+  const description = describedBy(payloadInterface) || describedBy(handlerNode)
 
   // EVERY doc block in the file is read for exposure annotations, not only the
   // one that supplied the description.
@@ -466,8 +533,7 @@ if (tsPath) {
       schema = generator.createSchema(config.type)
       delete schema.$schema
       schema = normalizeGeneratedSchema(schema)
-      applyJsDocConstraints(schema, payloadInterface)
-      applyAuthoritativeDescription(schema, payloadDescription)
+      applySourceDescriptions(schema, description, payloadInterface.getType())
     }
     catch (err) {
       // A missing root type means the action declares no Payload, which is a
