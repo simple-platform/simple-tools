@@ -201,11 +201,29 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		return ActionBuildResult{ActionName: actionName, Error: fmt.Errorf("npm install failed: %w", err)}
 	}
 
-	// Extract metadata (non-blocking - log warning on failure)
+	// AN ACTION THAT CANNOT BE DESCRIBED FROM ITS OWN SOURCE DOES NOT BUILD.
+	//
+	// This step produces the description a model reads, the input schema a
+	// caller is validated against, and the action's statement about whether an
+	// agent may call it at all. It was allowed to fail and carry on, which made
+	// it a gate that never closed: the failure was reported into a progress row
+	// the next step overwrote milliseconds later, the build said Done and exited
+	// zero, and the action.json from before the edit stayed on disk and stayed
+	// authoritative. An author who mistyped an effect was told nothing and
+	// shipped the old exposure statement.
+	//
+	// It is also the only reason the two build entry points could disagree about
+	// the same source. The platform's mix task raises on this, so a source that
+	// failed there built cleanly here — and a rule enforced by whichever tool
+	// the author happened to run is not a rule.
+	//
+	// The failure is carried out whole rather than summarised: every error this
+	// step produces already names what could not be done, and a refusal is the
+	// exact sentence its author has to read to fix their source.
 	report("Extracting metadata...")
 	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
-		// Log warning but continue build (metadata extraction failure is non-fatal)
-		report(fmt.Sprintf("Metadata extraction warning: %v", err))
+		report("Failed")
+		return ActionBuildResult{ActionName: actionName, Error: err}
 	}
 
 	// Create build directory

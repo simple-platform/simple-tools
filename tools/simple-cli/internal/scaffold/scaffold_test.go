@@ -1,9 +1,12 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"strings"
 	"testing"
@@ -492,6 +495,13 @@ func (m *mockWriteTrackingFS) ReadDir(name string) ([]os.DirEntry, error) {
 	return []os.DirEntry{}, nil
 }
 
+func (m *mockWriteTrackingFS) Remove(name string) error {
+	delete(m.files, name)
+	delete(m.written, name)
+
+	return nil
+}
+
 type mockFileInfoSimple struct{}
 
 func (m *mockFileInfoSimple) Name() string       { return "mock" }
@@ -613,5 +623,126 @@ func TestAppendTriggerRecord_Errors(t *testing.T) {
 	// mockWriteTrackingFS.ReadFile returns "file not found" if files map is nil or key missing
 	if err == nil || !strings.Contains(err.Error(), "failed to read existing") {
 		t.Errorf("Expected read existing error, got: %v", err)
+	}
+}
+
+// THE EDITOR IS TOLD THE SAME VOCABULARY THE BUILD ENFORCES.
+//
+// `@tool` is what makes an action reachable by an agent, and TSDoc reports a tag
+// it has not been told about as an unknown one. An author writing the single
+// line that exposes their action would be underlined for it — which teaches the
+// wrong lesson at exactly the wrong moment, and the lesson sticks because the
+// build says nothing until the tag is already missing.
+//
+// So the names are read from the package that enforces them rather than restated
+// here: a tag added to the vocabulary and not to this file fails, instead of
+// shipping as a squiggle under every author who uses it.
+func TestScaffoldedSpaceDeclaresTheExposureVocabulary(t *testing.T) {
+	raw, err := TemplatesFS.ReadFile("templates/tsdoc.json")
+	if err != nil {
+		t.Fatalf("a scaffolded space carries no tsdoc.json: %v", err)
+	}
+
+	var config struct {
+		Schema         string `json:"$schema"`
+		TagDefinitions []struct {
+			TagName    string `json:"tagName"`
+			SyntaxKind string `json:"syntaxKind"`
+		} `json:"tagDefinitions"`
+	}
+
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("tsdoc.json is not readable as the format TSDoc defines: %v", err)
+	}
+
+	if config.Schema != "https://developer.microsoft.com/json-schemas/tsdoc/v0/tsdoc.schema.json" {
+		t.Fatalf("tsdoc.json names no TSDoc schema, got %q", config.Schema)
+	}
+
+	declared := map[string]string{}
+	for _, definition := range config.TagDefinitions {
+		declared[definition.TagName] = definition.SyntaxKind
+	}
+
+	if len(declared) != len(config.TagDefinitions) {
+		t.Fatalf("tsdoc.json declares a tag twice: %#v", config.TagDefinitions)
+	}
+
+	for _, name := range build.ExposureTagNames() {
+		// `@tool` carries no value, so it is a modifier tag; the three that
+		// qualify it carry one, so they are block tags. Declaring a modifier as a
+		// block tag makes TSDoc read the next line as its content.
+		want := "block"
+		if name == "tool" {
+			want = "modifier"
+		}
+
+		kind, known := declared["@"+name]
+		if !known {
+			t.Fatalf("the build enforces @%s and tsdoc.json does not declare it", name)
+		}
+
+		if kind != want {
+			t.Fatalf("@%s is declared as a %s tag and is a %s tag", name, kind, want)
+		}
+
+		delete(declared, "@"+name)
+	}
+
+	if len(declared) != 0 {
+		t.Fatalf("tsdoc.json declares tags the build does not enforce: %#v", declared)
+	}
+}
+
+// THE VOCABULARY IS REACHABLE FROM WHERE AN AUTHOR WRITES IT.
+//
+// A TSDoc reader walks up from the source file and stops at the first folder
+// holding a package.json or a tsconfig.json, then looks for tsdoc.json THERE and
+// nowhere further up. Every scaffolded action holds both of those files, so the
+// walk always stops inside the action — and a vocabulary kept only at the space
+// root is never found, leaving `@tool` an undefined tag in every action of a
+// space that carries a perfectly good declaration one directory above.
+//
+// So the action's own file inherits from the space's, and the path between them
+// is a property of the layout this package creates. It is computed here from the
+// two paths the scaffold actually writes, so moving either one fails rather than
+// silently pointing at nothing.
+func TestAnActionInheritsTheVocabularyFromItsSpace(t *testing.T) {
+	raw, err := TemplatesFS.ReadFile("templates/action/tsdoc.json")
+	if err != nil {
+		t.Fatalf("a scaffolded action carries no tsdoc.json: %v", err)
+	}
+
+	var config struct {
+		Extends        []string `json:"extends"`
+		TagDefinitions []any    `json:"tagDefinitions"`
+	}
+
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("an action's tsdoc.json is not readable as the format TSDoc defines: %v", err)
+	}
+
+	if len(config.TagDefinitions) != 0 {
+		t.Fatal("an action restates the vocabulary instead of inheriting it, so the two can disagree")
+	}
+
+	if len(config.Extends) != 1 {
+		t.Fatalf("expected an action to inherit from exactly one file, got %#v", config.Extends)
+	}
+
+	// TSDoc reads a base path that does not start with `./` as an NPM package
+	// name, so a relative one that omits it resolves to nothing installed.
+	if !strings.HasPrefix(config.Extends[0], "./") {
+		t.Fatalf("a relative base path must begin with \"./\" or it is read as a package name, got %q", config.Extends[0])
+	}
+
+	// The two paths the scaffold writes, from a space root, as it writes them.
+	spaceConfig := filepath.Join("/space", "tsdoc.json")
+	actionConfig := filepath.Join("/space", "apps", "com.acme.app", "actions", "read-things", "tsdoc.json")
+
+	inherited := filepath.Join(filepath.Dir(actionConfig), config.Extends[0])
+	if filepath.Clean(inherited) != spaceConfig {
+		t.Fatalf("an action inherits from %q, and its space declares the vocabulary at %q",
+			filepath.Clean(inherited), spaceConfig)
 	}
 }

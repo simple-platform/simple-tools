@@ -47,6 +47,30 @@ func TestRunBuild(t *testing.T) {
 	build.EnsureSCLParserFunc = func(f func(string)) (string, error) { return "scl", nil }
 	build.EnsureJavyFunc = func(f func(string)) (string, error) { return "javy", nil }
 	build.EnsureWasmOptFunc = func(f func(string)) (string, error) { return "wasm-opt", nil }
+
+	// The per-action steps are mocked too, so a case named for a successful
+	// build is one. Left unmocked, the fixture action here has no source and
+	// fails on the first step — which used to read as success because a failed
+	// build reported as JSON returned no error at all.
+	origValidate := build.ValidateLanguageFunc
+	origParseEnv := build.ParseExecutionEnvironmentFunc
+	origExtract := build.ExtractMetadataFunc
+	defer func() {
+		build.ValidateLanguageFunc = origValidate
+		build.ParseExecutionEnvironmentFunc = origParseEnv
+		build.ExtractMetadataFunc = origExtract
+	}()
+	build.ValidateLanguageFunc = func(dir string) error { return nil }
+	build.ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
+	build.ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
+		if strings.HasSuffix(actionDir, "refused") {
+			return &build.AnnotationRefusal{
+				Refusal: `refused: @effects names an unknown effect "sideways"`,
+			}
+		}
+
+		return nil
+	}
 	// === MOCKING END ===
 
 	// Define test cases covering various usage scenarios
@@ -87,6 +111,20 @@ func TestRunBuild(t *testing.T) {
 				return strings.Contains(err.Error(), "requires a target argument")
 			},
 		},
+		// A BUILD FAILS THE SAME WAY IN BOTH OUTPUT MODES. These cases run with
+		// the JSON flag set, which is the mode a pipeline uses — and the mode
+		// that used to print a failure summary and then return success, so the
+		// only reader that could act on the outcome was the one that could not
+		// see it.
+		{
+			name:     "a refused annotation fails the build under --json",
+			args:     []string{"myapp/refused"},
+			buildAll: false,
+			wantErr:  true,
+			errCheck: func(err error) bool {
+				return strings.Contains(err.Error(), "1 action(s) failed to build")
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -105,16 +143,17 @@ func TestRunBuild(t *testing.T) {
 			_ = os.Chdir(tmpDir)
 			defer func() { _ = os.Chdir(oldWd) }()
 
-			// Create dummy targets for success cases so the builder finds them
-			if !tt.wantErr {
-				if tt.name == "build target success" {
-					_ = os.MkdirAll("myapp/action", 0755)
-					_ = os.WriteFile("myapp/action/action.scl", []byte{}, 0644)
-				}
-				if tt.name == "build all success" {
-					_ = os.MkdirAll("apps/myapp/action", 0755)
-					_ = os.WriteFile("apps/myapp/action/action.scl", []byte{}, 0644)
-				}
+			// Create dummy targets so the builder finds them
+			switch tt.name {
+			case "build target success":
+				_ = os.MkdirAll("myapp/action", 0755)
+				_ = os.WriteFile("myapp/action/action.scl", []byte{}, 0644)
+			case "build all success":
+				_ = os.MkdirAll("apps/myapp/action", 0755)
+				_ = os.WriteFile("apps/myapp/action/action.scl", []byte{}, 0644)
+			case "a refused annotation fails the build under --json":
+				_ = os.MkdirAll("myapp/refused", 0755)
+				_ = os.WriteFile("myapp/refused/action.scl", []byte{}, 0644)
 			}
 
 			// Execution

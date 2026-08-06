@@ -38,7 +38,8 @@ func invokeCmd(args ...string) (string, string, error) {
 	// Execute the command
 	err := RootCmd.Execute()
 
-	_ = outW.Close(); _ = errW.Close()
+	_ = outW.Close()
+	_ = errW.Close()
 	_, _ = io.Copy(outBuf, outR)
 	_, _ = io.Copy(errBuf, errR)
 

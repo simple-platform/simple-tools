@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
@@ -314,7 +315,7 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 	totalFailures := actionFailures + spaceFailures
 
 	if jsonOutput {
-		return printJSON(map[string]interface{}{
+		if err := printJSON(map[string]interface{}{
 			"status":        "complete",
 			"total":         totalCount,
 			"success":       actionSuccesses + spaceSuccesses,
@@ -322,9 +323,43 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 			"failedActions": failedActions,
 			"failedSpaces":  failedSpaces,
 			"errors":        errors,
-		})
+		}); err != nil {
+			return err
+		}
+	} else if totalFailures > 0 {
+		// WHY A FAILURE IS PRINTED HERE AND NOT REPORTED AS PROGRESS.
+		//
+		// The progress view is an in-place repaint: a row is overwritten by the
+		// next status the same target reports, and the whole frame is cleared
+		// when the program quits. Anything written into it is gone before it can
+		// be read, so a build's failures were counted here and their text thrown
+		// away — the run said how many targets failed and never once said why.
+		//
+		// So the reasons are written after the view has torn down, where they
+		// stay on screen. Ordered by results rather than by a map, so a run
+		// prints the same list in the same order twice.
+		fmt.Fprintln(os.Stderr)
+		for _, r := range results {
+			if r.err == nil {
+				continue
+			}
+
+			kind := "Action"
+			if r.isSpace {
+				kind = "Space"
+			}
+
+			fmt.Fprintf(os.Stderr, "❌ [%s] %s: %v\n", kind, r.name, r.err)
+		}
+		fmt.Fprintln(os.Stderr)
 	}
 
+	// THE OUTCOME IS THE SAME IN BOTH OUTPUT MODES.
+	//
+	// A failed build reported as JSON used to exit zero: the summary was printed
+	// and returned as success, so the machine-readable mode — the one a pipeline
+	// uses — was the one that could not fail. A gate that only closes when a
+	// human is watching is not a gate.
 	if totalFailures > 0 {
 		var parts []string
 		if actionFailures > 0 {
@@ -333,7 +368,9 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 		if spaceFailures > 0 {
 			parts = append(parts, fmt.Sprintf("%d space(s)", spaceFailures))
 		}
+
 		return fmt.Errorf("%s failed to build", strings.Join(parts, " and "))
 	}
+
 	return nil
 }
