@@ -228,16 +228,66 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		return m.buildTypeScriptAction(actionDir, actionName, needsSync, needsAsync, report)
 	case LanguageRust:
 		return m.buildRustAction(actionDir, actionName, needsSync, needsAsync, report)
+	case LanguageGo:
+		return m.buildGoAction(actionDir, actionName, report)
 	default:
-		// A Go action is compiled by the platform, not here. Saying so is the
-		// whole job: reporting success without writing a module would leave a
-		// developer waiting for an artifact that was never going to appear.
+		// Every language the detector can answer with is named above, so this is
+		// reached only by one added to the detector and not to the build. It is
+		// refused by name rather than handed to whichever branch happens to be
+		// written last: an action compiled by the wrong toolchain, or described
+		// by nothing at all, is a failure its author meets at deploy time.
 		report("Failed")
 		return ActionBuildResult{
 			ActionName: actionName,
-			Error:      fmt.Errorf("this action is written in Go, which this CLI does not compile: the platform builds a Go action when the app is deployed"),
+			Error:      fmt.Errorf("this action is written in %s, and this build has no path for that language", lang),
 		}
 	}
+}
+
+// buildGoAction describes a Go action, and says where its module comes from.
+//
+// DESCRIBING AN ACTION IS NOT COMPILING IT, AND ONLY ONE OF THE TWO BELONGS TO
+// THE PLATFORM. The module does: a Go action is compiled when the app is
+// deployed, and this CLI has no part in that. The description does not — the
+// sentences a model reads, the input schema a caller is validated against and
+// the action's statement about whether an agent may call it are all generated
+// from the source by the same generator every other language goes through, and
+// nothing else in a developer's loop generates them.
+//
+// Saying "the platform compiles this" and returning was therefore an answer to
+// a question nobody had asked. A Go action reached this tool, was told where its
+// module comes from, and went away with whatever action.json an earlier run had
+// left beside it — or with none at all, which the platform's own build reads as
+// an action that has never been built. A whole app written in Go could be built
+// by this tool with no file describing any of it, and the run said nothing,
+// because the step that would have said something was never reached.
+//
+// AN ACTION THAT CANNOT BE DESCRIBED FROM ITS OWN SOURCE DOES NOT BUILD, which
+// is the sentence the other two languages already enforce. The failure is
+// carried out whole rather than summarised: a refusal is the exact sentence its
+// author has to read to fix their source, and every other failure this step
+// raises already names what could not be done.
+//
+// IT ENDS IN A FAILURE EVEN WHEN EVERY STEP WORKED, because the module is half
+// of what a build is asked for and this half is not produced here. The progress
+// view repaints each row in place and is torn down when the run ends, so a
+// status reported into it is gone before it can be read — the error is the only
+// thing that survives to reach a developer, and a Go action reported as built
+// leaves one waiting for an artifact that was never going to appear. What the
+// build did do is named in the same sentence, so the failure is not read as
+// nothing having happened.
+func (*BuildManager) buildGoAction(actionDir, actionName string, report func(string)) ActionBuildResult {
+	fail := func(err error) ActionBuildResult {
+		report("Failed")
+		return ActionBuildResult{ActionName: actionName, Error: err}
+	}
+
+	report("Extracting metadata...")
+	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
+		return fail(err)
+	}
+
+	return fail(fmt.Errorf("this action is written in Go: its action.json was written here from its source, and its module was not, because this CLI does not compile Go — the platform compiles a Go action when the app is deployed"))
 }
 
 func (m *BuildManager) buildTypeScriptAction(actionDir, actionName string, needsSync, needsAsync bool, report func(string)) ActionBuildResult {

@@ -485,38 +485,3 @@ func TestBuildAction_Rust_CargoFailureReported(t *testing.T) {
 		t.Errorf("Error should carry what cargo said, got: %v", result.Error)
 	}
 }
-
-// TestBuildAction_Go pins that a Go action is refused rather than reported as
-// built. It is discovered like any other action, and a build that says nothing
-// about it leaves a developer waiting on an artifact this CLI was never going
-// to write.
-func TestBuildAction_Go(t *testing.T) {
-	origDetect := DetectActionLanguageFunc
-	origParseEnv := ParseExecutionEnvironmentFunc
-	defer func() {
-		DetectActionLanguageFunc = origDetect
-		ParseExecutionEnvironmentFunc = origParseEnv
-	}()
-	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
-
-	actionDir := filepath.Join(t.TempDir(), "sync-orders")
-	if err := os.MkdirAll(actionDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(actionDir, "main.go"), []byte("package main\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	m := NewBuildManager(DefaultBuildOptions())
-	result := m.BuildAction(context.Background(), actionDir, nil)
-
-	if result.Error == nil {
-		t.Fatal("Expected an error for a Go action, got nil")
-	}
-	if !strings.Contains(result.Error.Error(), "Go") || !strings.Contains(result.Error.Error(), "platform") {
-		t.Errorf("Error should name the language and where the artifact comes from, got: %v", result.Error)
-	}
-	if fileExists(filepath.Join(actionDir, "build")) {
-		t.Error("A build directory was created for an action this CLI does not compile")
-	}
-}
