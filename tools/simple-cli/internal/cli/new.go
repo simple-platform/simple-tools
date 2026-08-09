@@ -68,19 +68,28 @@ func runNewApp(cmd *cobra.Command, args []string) error {
 }
 
 // newActionCmd represents the 'new action' command.
-// It scaffolds a new action (TypeScript function) within an existing application.
+// It scaffolds a new action within an existing application.
 var newActionCmd = &cobra.Command{
 	Use:   "action <app> <name> <display_name>",
 	Short: "Create a new action",
-	Long: `Scaffold a new TypeScript action inside an app's actions/ directory.
+	Long: `Scaffold a new TypeScript or Rust action inside an app's actions/ directory.
 
 Arguments:
   <app>:          App ID where the action will be created (e.g., com.mycompany.crm)
   <name>:         Action name in kebab-case (e.g., send-email)
   <display_name>: Human-readable display name (e.g., "Send Email")`,
-	Example: `  simple new action com.mycompany.crm send-email "Send Email" --lang ts --scope mycompany --desc "Sends an email notification"`,
-	Args:    cobra.ExactArgs(3),
-	RunE:    runNewAction,
+	Example: `  simple new action com.mycompany.crm send-email "Send Email" --lang ts --scope mycompany --desc "Sends an email notification"
+  simple new action com.mycompany.crm close-lead "Close Lead" --lang rust --desc "Closes a duplicate lead"`,
+	Args: cobra.ExactArgs(3),
+	RunE: runNewAction,
+}
+
+// actionLanguages maps the --lang shorthand a developer types onto the language
+// the platform's logic record names. The shorthand is the CLI's, the value is
+// the platform's, and this is the one place the two meet.
+var actionLanguages = map[string]string{
+	"ts":   scaffold.LanguageTypeScript,
+	"rust": scaffold.LanguageRust,
 }
 
 // validExecutionEnvs lists the valid execution environment values
@@ -98,6 +107,28 @@ func validateActionName(name string) error {
 	return nil
 }
 
+// validateActionText checks a free-text field that is copied verbatim into the
+// files the scaffold writes.
+//
+// Both fields land inside a double-quoted SCL string, and a Rust action's
+// description lands inside a doc comment as well. Neither of those is escaped
+// on the way in, so a double quote closes the SCL string early and a newline
+// ends the comment and turns the rest of the sentence into source — in the
+// first case leaving behind a record that the next 'simple new action' in the
+// same app cannot even parse, and in the second an action that does not
+// compile. Both are quiet: the command reports the action was created. Refusing
+// the character is the honest answer, because there is no spelling of it that
+// the templates would carry through correctly.
+func validateActionText(field, value string) error {
+	if strings.ContainsAny(value, "\n\r") {
+		return fmt.Errorf("%s must be a single line: it is written into the action's record and source, which cannot carry a line break", field)
+	}
+	if strings.Contains(value, `"`) {
+		return fmt.Errorf("%s must not contain a double quote: it is written into a quoted field in the action's record, which the quote would end early", field)
+	}
+	return nil
+}
+
 // runNewAction executes the logic to scaffold a new action.
 func runNewAction(cmd *cobra.Command, args []string) error {
 	appID := args[0]
@@ -111,8 +142,9 @@ func runNewAction(cmd *cobra.Command, args []string) error {
 	env, _ := cmd.Flags().GetString("env")
 
 	// Validate language
-	if lang != "ts" {
-		return fmt.Errorf("unsupported language: %s. Only 'ts' (TypeScript) is supported", lang)
+	language, known := actionLanguages[lang]
+	if !known {
+		return fmt.Errorf("unsupported language: %s. Supported: 'ts' (TypeScript), 'rust' (Rust)", lang)
 	}
 
 	// Validate action name format
@@ -120,8 +152,21 @@ func runNewAction(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Validate scope is provided
-	if scope == "" {
+	if err := validateActionText("display name", displayName); err != nil {
+		return err
+	}
+	if err := validateActionText("description", desc); err != nil {
+		return err
+	}
+
+	// Validate scope is provided.
+	//
+	// A scope is the npm scope the action's package.json is published under, so
+	// it is asked for only where there is a package.json to put it in. A Rust
+	// action's crate is named after the action itself and is never published to
+	// a registry, so requiring a scope there would be asking for a value with
+	// nowhere to go.
+	if language == scaffold.LanguageTypeScript && scope == "" {
 		return fmt.Errorf("--scope is required (e.g., --scope mycompany)")
 	}
 
@@ -155,6 +200,7 @@ func runNewAction(cmd *cobra.Command, args []string) error {
 		Description:  desc,
 		Scope:        scope,
 		ExecutionEnv: env,
+		Language:     language,
 	}
 
 	if err := scaffold.CreateActionStructure(fsys, scaffold.TemplatesFS, cwd, cfg); err != nil {
@@ -177,11 +223,10 @@ func runNewAction(cmd *cobra.Command, args []string) error {
 func init() {
 	newAppCmd.Flags().StringP("desc", "d", "", "Application description")
 
-	newActionCmd.Flags().StringP("lang", "l", "ts", "Action language (only 'ts' supported)")
+	newActionCmd.Flags().StringP("lang", "l", "ts", "Action language: ts or rust")
 	newActionCmd.Flags().StringP("desc", "d", "", "Action description")
-	newActionCmd.Flags().StringP("scope", "s", "", "NPM package scope without @ (e.g., mycompany)")
+	newActionCmd.Flags().StringP("scope", "s", "", "NPM package scope without @ (e.g., mycompany); TypeScript actions only")
 	newActionCmd.Flags().StringP("env", "e", "server", "Execution environment: server, client, or both")
-	_ = newActionCmd.MarkFlagRequired("scope")
 
 	RootCmd.AddCommand(newCmd)
 	newCmd.AddCommand(newAppCmd)

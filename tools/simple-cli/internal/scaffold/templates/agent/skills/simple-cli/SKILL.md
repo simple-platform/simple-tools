@@ -24,7 +24,8 @@ Scaffold a new empty application structure.
 
 ### `simple new action`
 
-Create a new server-side action with TypeScript boilerplate.
+Create a new action, in TypeScript or in Rust, with boilerplate that builds and
+tests as written.
 
 - **Usage:** `simple new action <app-id> <name> <display-name>`
 - **Args:**
@@ -32,7 +33,8 @@ Create a new server-side action with TypeScript boilerplate.
   - `<name>`: Action name in kebab-case (e.g., `calculate-tax`).
   - `<display-name>`: Human readable label.
 - **Flags:**
-  - `--scope <string>`: **REQUIRED**. NPM package scope (e.g., `@acme`).
+  - `--lang <string>`: Action language (`ts`, `rust`). Defaults to `ts`.
+  - `--scope <string>`: NPM package scope (e.g., `acme`). **REQUIRED for `--lang ts`.** A Rust action is a cargo crate named after the action itself and is never published to a registry, so it takes no scope.
   - `--env <string>`: Execution environment (`server`, `client`, `both`). Defaults to `server`.
   - `--desc <string>`: Description of the logic.
 
@@ -133,7 +135,8 @@ Install a deployed app to an environment (migrations, cache warming).
 
 ### `simple test`
 
-Run the unified test runner (Vitest + SCL Linter).
+Run the unified test runner. Each target is handed to its own runner: Vitest for
+TypeScript and JavaScript, `cargo test` for Rust actions.
 
 - **Usage:** `simple test [app-id]`
 - **Args:**

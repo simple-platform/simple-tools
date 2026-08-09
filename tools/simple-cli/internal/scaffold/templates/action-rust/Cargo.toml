@@ -1,0 +1,40 @@
+[package]
+name = "{{.ActionName}}"
+version = "1.0.0"
+edition = "2021"
+
+# An action is deployed to the platform, never to crates.io, so the registry is
+# closed off here rather than being left to a mistake at the command line.
+publish = false
+
+[dependencies]
+# The SDK is the only platform dependency an action names. `serde` and
+# `serde_json` are direct dependencies because `#[derive(Deserialize)]` expands
+# to code that names `serde` by crate, so the action depends on it even though
+# the prelude re-exports the derive.
+simpleplatform-sdk = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+# THIS IS WHAT MAKES THE BROWSER ARTIFACT BUILDABLE.
+#
+# One source produces two modules, and each declares exactly the imports its
+# host binds: the server host binds six names, the browser host four. The SDK
+# selects between them with its own `async` feature, and a feature of a
+# dependency can only be turned on from the crate that is being built — so an
+# action built for the browser is built with `--features async`, and this line
+# is what gives that flag something to name. Without it the browser build stops
+# at "none of the selected packages contains these features: async", and an
+# action whose execution environment is `client` or `both` cannot be built at
+# all.
+async = ["simpleplatform-sdk/async"]
+
+# The profile the SDK asks a published action for: as small as the optimiser can
+# make it, linked as one unit, with the symbol table dropped. A wasm module is
+# fetched before it runs, so its size is part of how fast the action is.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

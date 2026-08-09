@@ -120,7 +120,11 @@ simple build apps/com.company.crm --concurrency 8
 
 ### `simple test`
 
-Run tests for applications, actions, or record behaviors using Vitest.
+Run tests for applications, actions, or record behaviors.
+
+Each target runs under its own test runner: TypeScript and JavaScript under
+Vitest, Rust actions under `cargo test`. A Rust action's tests run on this
+machine against the SDK's test seam, so they need no wasm build and no emulator.
 
 **Usage:**
 
@@ -138,7 +142,7 @@ simple test [app-id] [flags]
 |------|-------|---------|-------------|
 | `--action` | `-a` | - | Run tests for a specific action. |
 | `--behavior` | `-b` | - | Run tests for a specific record behavior. |
-| `--coverage` | | `false` | Enable code coverage reporting. |
+| `--coverage` | | `false` | Enable code coverage reporting. Vitest targets only; Rust coverage is a separate tool (`cargo-llvm-cov`), so Rust actions run without it and the run says so. |
 | `--json` | | `false` | Output results in JSON format. |
 
 **Examples:**
@@ -299,10 +303,10 @@ simple new action <app> <name> <display_name> [flags]
 **Flags:**
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--scope` | `-s` | **Required** | The NPM scope for the package (without `@`). |
+| `--scope` | `-s` | Required for `--lang ts` | The NPM scope for the package (without `@`). A Rust action's crate is named after the action and is never published to a registry, so it takes no scope. |
 | `--env` | `-e` | `server` | Execution environment: `server`, `client`, or `both`. |
 | `--desc` | `-d` | `""` | Description of the action. |
-| `--lang` | `-l` | `ts` | Programming language (currently only `ts` is supported). |
+| `--lang` | `-l` | `ts` | Programming language: `ts` or `rust`. |
 
 **Examples:**
 
@@ -316,6 +320,11 @@ simple new action com.mycompany.crm send-invite "Send Invite" \
 simple new action com.mycompany.crm validate-form "Validate Form" \
   --scope mycompany \
   --env client
+
+# Create a Rust action (a cargo crate; no NPM scope)
+simple new action com.mycompany.crm close-lead "Close Lead" \
+  --lang rust \
+  --env server
 ```
 
 **Making an action callable by an agent:** a scaffolded action is not a tool. It

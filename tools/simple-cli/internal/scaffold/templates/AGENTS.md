@@ -56,16 +56,17 @@ You are an expert **Simple Platform Engineer** for this project.
 
 Use these commands to build and deploy your work.
 
-| Command                                        | Description                                                  |
-| :--------------------------------------------- | :----------------------------------------------------------- |
-| `simple init <path>`                           | Initialize a new workspace                                   |
-| `simple new app <app> <name>`                  | Scaffold a new application directory                         |
-| `simple new action <app> <name> --lang ts`     | Scaffold a new TypeScript action                             |
-| `simple new space <app> <name> <display_name>` | Scaffold a new React space (custom UI)                       |
-| `simple build <app>/<action>`                  | Build a single action                                        |
-| `simple build <app>`                           | Build all actions and spaces in an app in parallel           |
-| `simple build --all`                           | Build all actions and spaces in all apps in parallel         |
-| `simple deploy <app>`                          | Bundle and deploy an application (Schema, Logic, and Spaces) |
+| Command                                        | Description                                                    |
+| :--------------------------------------------- | :------------------------------------------------------------- |
+| `simple init <path>`                           | Initialize a new workspace                                     |
+| `simple new app <app> <name>`                  | Scaffold a new application directory                           |
+| `simple new action <app> <name> --lang ts`     | Scaffold a new TypeScript action                               |
+| `simple new action <app> <name> --lang rust`   | Scaffold a new Rust action (a cargo crate; takes no `--scope`) |
+| `simple new space <app> <name> <display_name>` | Scaffold a new React space (custom UI)                         |
+| `simple build <app>/<action>`                  | Build a single action                                          |
+| `simple build <app>`                           | Build all actions and spaces in an app in parallel             |
+| `simple build --all`                           | Build all actions and spaces in all apps in parallel           |
+| `simple deploy <app>`                          | Bundle and deploy an application (Schema, Logic, and Spaces)   |
 
 ## AI Coding Guidelines
 

@@ -14,12 +14,12 @@ A Simple Platform monorepo.
 
 ## Commands
 
-| Command | Description |
-| :--- | :--- |
-| `simple new app <app> <name>` | Create a new application |
-| `simple new action <app> <name> --lang ts` | Scaffold a new Action |
-| `simple build <app>` | Build all Actions in an app |
-| `simple deploy <app>` | Deploy application (Schema + Logic) |
+| Command                                          | Description                         |
+| :----------------------------------------------- | :---------------------------------- |
+| `simple new app <app> <name>`                    | Create a new application            |
+| `simple new action <app> <name> --lang ts\|rust` | Scaffold a new Action               |
+| `simple build <app>`                             | Build all Actions in an app         |
+| `simple deploy <app>`                            | Deploy application (Schema + Logic) |
 
 ## Getting Started
 
@@ -46,10 +46,11 @@ table contact {
 
 ### 3. Add Logic (Optional)
 
-Create a server-side action:
+Create a server-side action, in TypeScript or in Rust:
 
 ```bash
-simple new action com.mycompany.crm import-contacts --lang ts
+simple new action com.mycompany.crm import-contacts --lang ts --scope mycompany
+simple new action com.mycompany.crm import-contacts --lang rust
 ```
 
 ### 4. Deploy
@@ -62,5 +63,5 @@ simple deploy com.mycompany.crm
 
 ## Documentation
 
-*   **AI Agents:** See [AGENTS.md](./AGENTS.md) for detailed coding rules.
-*   **Platform Ref:** See `.simple/context/` for SCL grammar, SDK reference, and more.
+- **AI Agents:** See [AGENTS.md](./AGENTS.md) for detailed coding rules.
+- **Platform Ref:** See `.simple/context/` for SCL grammar, SDK reference, and more.

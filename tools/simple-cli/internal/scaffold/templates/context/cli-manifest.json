@@ -70,21 +70,22 @@
         { "name": "display-name", "type": "string", "description": "Human-readable display name" }
       ],
       "flags": [
-        { "name": "--scope", "type": "string", "required": true, "description": "NPM package scope" },
+        { "name": "--lang", "type": "string", "description": "Action language (ts, rust); defaults to ts" },
+        { "name": "--scope", "type": "string", "description": "NPM package scope; required for --lang ts, and unused for --lang rust" },
         { "name": "--env", "type": "string", "description": "Execution environment (server, client, both)" },
         { "name": "--desc", "type": "string", "description": "Action description" }
       ]
     },
     "test": {
       "usage": "simple test [app-id]",
-      "description": "Run tests for applications, actions, or behaviors",
+      "description": "Run tests for applications, actions, or behaviors, each under its own runner: Vitest for TypeScript and JavaScript, cargo test for Rust actions",
       "args": [
         { "name": "app-id", "type": "string", "optional": true, "description": "Specific app to test" }
       ],
       "flags": [
         { "name": "--action", "type": "string", "description": "Test a specific action" },
         { "name": "--behavior", "type": "string", "description": "Test a specific behavior" },
-        { "name": "--coverage", "type": "boolean", "description": "Enable coverage reporting" },
+        { "name": "--coverage", "type": "boolean", "description": "Enable coverage reporting; Vitest targets only, Rust actions run without it" },
         { "name": "--json", "type": "boolean", "description": "Output JSON results" }
       ]
     },
