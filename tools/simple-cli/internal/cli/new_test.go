@@ -378,3 +378,160 @@ func TestNewActionCmd_InvalidActionName(t *testing.T) {
 		})
 	}
 }
+
+// TestNewActionCmd_Rust covers the whole of what --lang rust writes: a crate
+// rather than a package, no npm scope, and an SCL record that says which of the
+// two languages the platform is being handed.
+func TestNewActionCmd_Rust(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+
+	oldWd, _ := os.Getwd()
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	// Cobra flag values survive between invocations in this test binary, so the
+	// language is put back afterwards for the tests that do not name one.
+	defer func() { _ = newActionCmd.Flags().Set("lang", "ts") }()
+
+	// An empty scope is passed deliberately: a Rust action must not need one.
+	args := []string{
+		"new", "action", "com.example.test", "greet-user", "Greet User",
+		"--lang", "rust", "--scope", "", "--env", "server", "--desc", "Greets a person by name",
+	}
+	out, _, err := invokeCmd(args...)
+	if err != nil {
+		t.Fatalf("New Rust action failed: %v", err)
+	}
+
+	if !strings.Contains(out, "Created action Greet User (greet-user)") {
+		t.Errorf("Unexpected output: %s", out)
+	}
+
+	actionDir := filepath.Join(appDir, "actions", "greet-user")
+	for _, file := range []string{"Cargo.toml", "src/main.rs", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(actionDir, file)); os.IsNotExist(err) {
+			t.Errorf("%s not created", file)
+		}
+	}
+
+	// A Rust action carries nothing from the TypeScript toolchain: no manifest
+	// for a package manager, and no tests directory, because its tests live
+	// inside its source.
+	for _, file := range []string{"package.json", "tsconfig.json", "vitest.config.ts", "tests"} {
+		if _, err := os.Stat(filepath.Join(actionDir, file)); err == nil {
+			t.Errorf("%s should not be created for a Rust action", file)
+		}
+	}
+
+	cargoToml, _ := os.ReadFile(filepath.Join(actionDir, "Cargo.toml"))
+	for _, want := range []string{
+		`name = "greet-user"`,
+		`simpleplatform-sdk = "0.1"`,
+		`async = ["simpleplatform-sdk/async"]`,
+		`opt-level = "z"`,
+	} {
+		if !strings.Contains(string(cargoToml), want) {
+			t.Errorf("Cargo.toml missing %q, got: %s", want, string(cargoToml))
+		}
+	}
+
+	mainRs, _ := os.ReadFile(filepath.Join(actionDir, "src", "main.rs"))
+	for _, want := range []string{
+		"use simpleplatform_sdk::prelude::*;",
+		"#[simple(",
+		"@tool",
+		"@shortdesc",
+		"@usewhen",
+		"simple::run(handler)",
+		"#[cfg(test)]",
+		"/// Greets a person by name",
+	} {
+		if !strings.Contains(string(mainRs), want) {
+			t.Errorf("main.rs missing %q", want)
+		}
+	}
+
+	actionsScl, _ := os.ReadFile(filepath.Join(appDir, "records", "10_actions.scl"))
+	if !strings.Contains(string(actionsScl), "language rust") {
+		t.Errorf("10_actions.scl should record the Rust language, got: %s", string(actionsScl))
+	}
+}
+
+// TestNewActionCmd_TypeScriptRecordsItsLanguage guards the SCL record now that
+// the language it advertises is chosen rather than fixed.
+func TestNewActionCmd_TypeScriptRecordsItsLanguage(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+	_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+	_ = os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+
+	oldWd, _ := os.Getwd()
+	_ = os.Chdir(tmpDir)
+	defer func() { _ = os.Chdir(oldWd) }()
+
+	args := []string{"new", "action", "com.example.test", "send-email", "Send Email", "--lang", "ts", "--scope", "mycompany"}
+	if _, _, err := invokeCmd(args...); err != nil {
+		t.Fatalf("New TypeScript action failed: %v", err)
+	}
+
+	actionsScl, _ := os.ReadFile(filepath.Join(appDir, "records", "10_actions.scl"))
+	if !strings.Contains(string(actionsScl), "language typescript") {
+		t.Errorf("10_actions.scl should record the TypeScript language, got: %s", string(actionsScl))
+	}
+}
+
+// TestNewActionCmd_UnquotableText covers the two characters that the display
+// name and the description cannot carry: they are copied into a quoted SCL
+// field, and the description is copied into a Rust doc comment as well. Left
+// alone, a newline in a description produces a crate that does not compile and
+// a record the next scaffold in the same app cannot parse, and the command
+// reports the action as created either way.
+func TestNewActionCmd_UnquotableText(t *testing.T) {
+	cases := []struct {
+		name        string
+		displayName string
+		desc        string
+		wantIn      string
+	}{
+		{"newline in description", "Greet User", "line one\nlet x = 1;", "single line"},
+		{"newline in display name", "Greet\nUser", "", "single line"},
+		{"quote in description", "Greet User", `says "hello"`, "double quote"},
+		{"quote in display name", `Greet "User"`, "", "double quote"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			appDir := filepath.Join(tmpDir, "apps", "com.example.test")
+			_ = os.MkdirAll(filepath.Join(appDir, "actions"), 0755)
+			_ = os.MkdirAll(filepath.Join(appDir, "records"), 0755)
+
+			oldWd, _ := os.Getwd()
+			_ = os.Chdir(tmpDir)
+			defer func() { _ = os.Chdir(oldWd) }()
+
+			args := []string{
+				"new", "action", "com.example.test", "greet-user", tc.displayName,
+				"--lang", "ts", "--scope", "mycompany", "--desc", tc.desc,
+			}
+			_, _, err := invokeCmd(args...)
+			if err == nil {
+				t.Fatal("Expected the scaffold to be refused")
+			}
+			if !strings.Contains(err.Error(), tc.wantIn) {
+				t.Errorf("Error should say %q, got: %v", tc.wantIn, err)
+			}
+
+			// Refused before anything is written: a half-written action is
+			// worse than none, because the next attempt reports it exists.
+			if _, statErr := os.Stat(filepath.Join(appDir, "actions", "greet-user")); statErr == nil {
+				t.Error("A refused scaffold must leave no action directory behind")
+			}
+		})
+	}
+}

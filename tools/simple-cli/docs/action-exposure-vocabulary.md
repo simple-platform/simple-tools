@@ -50,11 +50,11 @@ nothing here for an author to get wrong about it.
 ### A second vocabulary is in the generator and is not reachable from here
 
 The generator this CLI embeds is carried over from the platform verbatim, and it
-also describes a **Rust** vocabulary — `@tool`, `@short_desc`, `@when_use` — that
-does not apply to anything this CLI builds. `simple build` detects TypeScript or
-Go and nothing else.
+also describes a **Rust** vocabulary — `@tool`, `@shortdesc`, `@usewhen`. `simple
+build` compiles a Rust action, but its metadata does not yet go through this
+generator, so that vocabulary reaches nothing from here.
 
-So `@short_desc` written in a TypeScript or Go action is not an exposure tag
+So `@shortdesc` written in a TypeScript or Go action is not an exposure tag
 here, and it does not fail the build either: like any other unclaimed `@name`, it
 stays where the author put it and ships as part of the description. Only a **near
 miss** of a tag in the table above — one edit away from `@effects`, say — is

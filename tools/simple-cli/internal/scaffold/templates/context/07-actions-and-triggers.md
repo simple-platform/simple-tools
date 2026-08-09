@@ -11,8 +11,13 @@ Register Actions (Logic) as compiled WASM modules that can execute in both **ser
 Use the CLI to scaffold a new Action with the correct structure and configuration:
 
 ```bash
-simple new action com.mycompany.myapp import-data --lang ts
+simple new action com.mycompany.myapp import-data --lang ts --scope mycompany
+simple new action com.mycompany.myapp import-data --lang rust
 ```
+
+A TypeScript action is an npm package and takes a `--scope`. A Rust action is a
+cargo crate named after the action itself, is never published to a registry, and
+so takes none.
 
 This generates the source code and configuration. You then register it in SCL.
 
@@ -33,14 +38,14 @@ set dev_simple_system.logic, import_data {
 
 ### Logic Properties
 
-| Property                | Values                     | Description                |
-| ----------------------- | -------------------------- | -------------------------- |
-| `name`                  | string                     | Matches action folder name (kebab-case)    |
-| `display_name`          | string                     | UI display name            |
-| `description`           | string                     | Detailed description       |
-| `application_id`        | string                     | App ID                     |
-| `execution_environment` | `server`, `client`, `both` | Where Action runs          |
-| `language`              | `typescript`, `go`         | Source language            |
+| Property                | Values                     | Description                             |
+| ----------------------- | -------------------------- | --------------------------------------- |
+| `name`                  | string                     | Matches action folder name (kebab-case) |
+| `display_name`          | string                     | UI display name                         |
+| `description`           | string                     | Detailed description                    |
+| `application_id`        | string                     | App ID                                  |
+| `execution_environment` | `server`, `client`, `both` | Where Action runs                       |
+| `language`              | `typescript`, `go`, `rust` | Source language                         |
 
 ---
 
@@ -196,7 +201,7 @@ Finally, bind your Logic to the Trigger (see [Logic-Trigger Bindings](#logic-tri
 
 The `condition` filter has access to the following data context:
 
-```json
+```text
 {
   "record": { ... },       // The full record data (new state)
   "changes": { ... },      // Only the changed fields

@@ -2,8 +2,10 @@ package build
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -121,6 +123,62 @@ func extractWasmOpt(srcPath, destPath string) error {
 
 	rootDir := filepath.Dir(filepath.Dir(destPath))
 	return ExtractTarGz(srcPath, rootDir, 1)
+}
+
+// InstallRustURL is where a developer with no Rust toolchain is sent. It is
+// named once so that every refusal below points at the same place.
+const InstallRustURL = "https://rustup.rs"
+
+// EnsureCargo locates the cargo that compiles a Rust action.
+//
+// javy and wasm-opt are fetched into ~/.simple because they are build tooling
+// nobody installs on purpose. A Rust toolchain is the opposite: it is the
+// developer's own installation, pinned to a channel they chose, and it is what
+// `simple test` already runs their tests with. Downloading a second one beside
+// it would compile the shipped artifact with a compiler they never tested
+// against, so this only looks — and when there is nothing to find it says so in
+// the one sentence that ends with the fix.
+func EnsureCargo() (string, error) {
+	path, err := exec.LookPath("cargo")
+	if err != nil {
+		return "", fmt.Errorf("cargo was not found on PATH, and this action is written in Rust. Install a Rust toolchain (%s), then build again", InstallRustURL)
+	}
+	return path, nil
+}
+
+// EnsureRustWasmTarget checks that the standard library for RustWasmTarget is
+// installed, which is a separate thing from having a Rust toolchain at all.
+//
+// Without it cargo fails deep in the build with "can't find crate for `std`"
+// repeated once per dependency, which reads like a broken action rather than a
+// missing component. Refusing here turns that into the one command that fixes
+// it.
+func EnsureRustWasmTarget() error {
+	rustc, err := exec.LookPath("rustc")
+	if err != nil {
+		return fmt.Errorf("rustc was not found on PATH, and this action is written in Rust. Install a Rust toolchain (%s), then build again", InstallRustURL)
+	}
+
+	// rustc prints where the target's library directory *would* be whether or
+	// not anyone has installed it, so the exit status and the directory answer
+	// two different questions: a non-zero exit means this rustc has never heard
+	// of the target, and a path that does not exist means it knows the target
+	// but the component was never added.
+	out, err := exec.Command(rustc, "--print", "target-libdir", "--target", RustWasmTarget).Output()
+	if err != nil {
+		return fmt.Errorf("this rustc does not know the %s target. Install a current Rust toolchain (%s), then build again", RustWasmTarget, InstallRustURL)
+	}
+
+	libDir := strings.TrimSpace(string(out))
+	if libDir == "" || !dirExists(libDir) {
+		return fmt.Errorf("the %s target is not installed. Add it with 'rustup target add %s', then build again", RustWasmTarget, RustWasmTarget)
+	}
+	return nil
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func CompileToWasm(javyPath, jsPath, pluginPath, outputPath string) error {

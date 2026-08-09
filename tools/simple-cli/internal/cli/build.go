@@ -326,6 +326,11 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 		}); err != nil {
 			return err
 		}
+		// Fall through to the failure below rather than returning here. The
+		// summary is written to stdout either way, but a build that produced no
+		// artifact has to say so in the only channel a pipeline reads without
+		// parsing anything: the exit status. Returning nil here made every
+		// '--json build' succeed, however many actions failed.
 	} else if totalFailures > 0 {
 		// WHY A FAILURE IS PRINTED HERE AND NOT REPORTED AS PROGRESS.
 		//

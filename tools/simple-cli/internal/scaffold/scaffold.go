@@ -168,6 +168,15 @@ func CreateAppStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath, app
 	return nil
 }
 
+// Action languages, spelled the way the platform's logic record spells them.
+// The value travels straight into the `language` field of 10_actions.scl, so
+// these strings are the platform's vocabulary rather than the CLI's: the --lang
+// flag's shorthand ("ts") is translated at the command boundary, not here.
+const (
+	LanguageTypeScript = "typescript"
+	LanguageRust       = "rust"
+)
+
 // ActionConfig holds the configuration for creating a new action.
 type ActionConfig struct {
 	AppID        string
@@ -176,6 +185,11 @@ type ActionConfig struct {
 	Description  string
 	Scope        string
 	ExecutionEnv string
+
+	// Language selects which set of source files is written and what the SCL
+	// record advertises. An empty value means TypeScript, which is what every
+	// caller meant before there was a second language to choose.
+	Language string
 }
 
 // TriggerConfig holds usage configuration for creating a new trigger.
@@ -344,16 +358,34 @@ func appendTriggerRecord(fsys fsx.FileSystem, tplFS fsx.TemplateFS, templatePath
 
 // CreateActionStructure scaffolds a new action inside an app's actions/ directory.
 //
-// It creates:
+// For a TypeScript action it creates:
 //   - apps/<appID>/actions/<actionName>/
 //   - apps/<appID>/actions/<actionName>/package.json
-//   - apps/<appID>/actions/<actionName>/index.ts
+//   - apps/<appID>/actions/<actionName>/src/index.ts
 //   - apps/<appID>/actions/<actionName>/tsconfig.json
 //   - apps/<appID>/actions/<actionName>/vitest.config.ts
 //   - apps/<appID>/actions/<actionName>/tests/helpers.ts
 //   - apps/<appID>/actions/<actionName>/tests/index.test.ts
+//
+// For a Rust action it creates:
+//   - apps/<appID>/actions/<actionName>/
+//   - apps/<appID>/actions/<actionName>/Cargo.toml
+//   - apps/<appID>/actions/<actionName>/src/main.rs
+//   - apps/<appID>/actions/<actionName>/.gitignore
+//
+// and in both cases:
 //   - apps/<appID>/records/10_actions.scl (appended or created)
 func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string, cfg ActionConfig) error {
+	// Resolve the language before anything is written, so an action in a
+	// language this CLI cannot scaffold is refused with nothing left behind.
+	language := cfg.Language
+	if language == "" {
+		language = LanguageTypeScript
+	}
+	if language != LanguageTypeScript && language != LanguageRust {
+		return fmt.Errorf("unsupported action language: %s", language)
+	}
+
 	appPath := filepath.Join(rootPath, "apps", cfg.AppID)
 
 	// Validate: app must exist
@@ -382,19 +414,25 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		return fmt.Errorf("action already exists: %s", cfg.ActionName)
 	}
 
-	// Create action directory and tests subdirectory
+	// Create action directory
 	if err := fsys.MkdirAll(actionPath, fsx.DirPerm); err != nil {
 		return fmt.Errorf("failed to create action directory: %w", err)
 	}
 
-	testsPath := filepath.Join(actionPath, "tests")
-	if err := fsys.MkdirAll(testsPath, fsx.DirPerm); err != nil {
-		return fmt.Errorf("failed to create tests directory: %w", err)
-	}
-
+	// Both languages keep their source under src/. Only TypeScript keeps its
+	// tests in a directory of their own: a Rust action's tests live in the
+	// `#[cfg(test)] mod tests` inside its source, and cargo reads tests/ as
+	// integration-test targets, so an empty one there would mean something else.
 	srcPath := filepath.Join(actionPath, "src")
 	if err := fsys.MkdirAll(srcPath, fsx.DirPerm); err != nil {
 		return fmt.Errorf("failed to create src directory: %w", err)
+	}
+
+	testsPath := filepath.Join(actionPath, "tests")
+	if language == LanguageTypeScript {
+		if err := fsys.MkdirAll(testsPath, fsx.DirPerm); err != nil {
+			return fmt.Errorf("failed to create tests directory: %w", err)
+		}
 	}
 
 	// Template data
@@ -406,30 +444,47 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		"Description":   cfg.Description,
 		"Scope":         cfg.Scope,
 		"ExecutionEnv":  cfg.ExecutionEnv,
+		"Language":      language,
 	}
 
 	// Render action files
-	actionFiles := []struct {
+	type actionFile struct {
 		src string
 		dst string
-	}{
-		{"templates/action/package.json", filepath.Join(actionPath, "package.json")},
-		{"templates/action/index.ts", filepath.Join(actionPath, "src", "index.ts")},
-		{"templates/action/tsconfig.json", filepath.Join(actionPath, "tsconfig.json")},
-		// A TSDoc reader walks up from the source file and STOPS at the first
-		// folder holding a package.json or a tsconfig.json — which is this one, for
-		// every action. So the space's vocabulary has to be reachable from here or
-		// it is not reachable at all: a file kept only at the space root is never
-		// found, and `@tool` reads as an undefined tag in every action under it.
-		//
-		// This one inherits rather than restates, so the vocabulary still has a
-		// single home. A path that stops resolving fails loudly — the reader
-		// reports the missing base file — rather than quietly falling back to a
-		// configuration that knows none of these tags.
-		{"templates/action/tsdoc.json", filepath.Join(actionPath, "tsdoc.json")},
-		{"templates/action/vitest.config.ts", filepath.Join(actionPath, "vitest.config.ts")},
-		{"templates/action/tests/helpers.ts", filepath.Join(testsPath, "helpers.ts")},
-		{"templates/action/tests/index.test.ts", filepath.Join(testsPath, "index.test.ts")},
+	}
+
+	var actionFiles []actionFile
+
+	switch language {
+	case LanguageRust:
+		actionFiles = []actionFile{
+			{"templates/action-rust/Cargo.toml", filepath.Join(actionPath, "Cargo.toml")},
+			{"templates/action-rust/main.rs", filepath.Join(srcPath, "main.rs")},
+			// Named "gitignore" in the templates because //go:embed leaves out
+			// anything beginning with a dot; it lands as .gitignore here, which
+			// is where cargo's target/ has to be ignored from.
+			{"templates/action-rust/gitignore", filepath.Join(actionPath, ".gitignore")},
+		}
+	default: // TypeScript, which is also what an unset language means.
+		actionFiles = []actionFile{
+			{"templates/action/package.json", filepath.Join(actionPath, "package.json")},
+			{"templates/action/index.ts", filepath.Join(actionPath, "src", "index.ts")},
+			{"templates/action/tsconfig.json", filepath.Join(actionPath, "tsconfig.json")},
+			// A TSDoc reader walks up from the source file and STOPS at the first
+			// folder holding a package.json or a tsconfig.json — which is this one, for
+			// every action. So the space's vocabulary has to be reachable from here or
+			// it is not reachable at all: a file kept only at the space root is never
+			// found, and `@tool` reads as an undefined tag in every action under it.
+			//
+			// This one inherits rather than restates, so the vocabulary still has a
+			// single home. A path that stops resolving fails loudly — the reader
+			// reports the missing base file — rather than quietly falling back to a
+			// configuration that knows none of these tags.
+			{"templates/action/tsdoc.json", filepath.Join(actionPath, "tsdoc.json")},
+			{"templates/action/vitest.config.ts", filepath.Join(actionPath, "vitest.config.ts")},
+			{"templates/action/tests/helpers.ts", filepath.Join(testsPath, "helpers.ts")},
+			{"templates/action/tests/index.test.ts", filepath.Join(testsPath, "index.test.ts")},
+		}
 	}
 
 	for _, f := range actionFiles {

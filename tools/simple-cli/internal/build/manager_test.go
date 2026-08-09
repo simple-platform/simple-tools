@@ -81,7 +81,7 @@ func TestBuildActions_Concurrency(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -90,7 +90,7 @@ func TestBuildActions_Concurrency(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
@@ -100,7 +100,7 @@ func TestBuildActions_Concurrency(t *testing.T) {
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(BuildOptions{Concurrency: 2})
@@ -144,7 +144,7 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -153,7 +153,7 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
@@ -173,7 +173,7 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(DefaultBuildOptions())
@@ -229,7 +229,7 @@ func TestBuildAction_MetadataExtractionFailureStopsTheBuild(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -238,7 +238,7 @@ func TestBuildAction_MetadataExtractionFailureStopsTheBuild(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
@@ -269,7 +269,7 @@ func TestBuildAction_MetadataExtractionFailureStopsTheBuild(t *testing.T) {
 		optimizeCount++
 		return nil
 	}
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(DefaultBuildOptions())
@@ -337,7 +337,7 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -346,7 +346,7 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
@@ -356,7 +356,7 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(DefaultBuildOptions())
@@ -449,7 +449,7 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 			origAsync := BundleAsyncFunc
 			origCompile := CompileToWasmFunc
 			origOpt := OptimizeWasmFunc
-			origValidate := ValidateLanguageFunc
+			origDetect := DetectActionLanguageFunc
 			origParseEnv := ParseExecutionEnvironmentFunc
 			defer func() {
 				EnsureDependenciesFunc = origDeps
@@ -458,7 +458,7 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 				BundleAsyncFunc = origAsync
 				CompileToWasmFunc = origCompile
 				OptimizeWasmFunc = origOpt
-				ValidateLanguageFunc = origValidate
+				DetectActionLanguageFunc = origDetect
 				ParseExecutionEnvironmentFunc = origParseEnv
 			}()
 
@@ -477,7 +477,7 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 			BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 			CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 			OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-			ValidateLanguageFunc = func(dir string) error { return nil }
+			DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 			ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 			m := NewBuildManager(DefaultBuildOptions())
@@ -534,5 +534,81 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBuildAction_UnrecognisedExecutionEnvironment pins the one failure a
+// developer cannot see for themselves.
+//
+// Every step of every language's pipeline is guarded by needsSync or needsAsync,
+// so an execution_environment that is neither server, client nor both used to
+// walk the whole build doing nothing and report success over an empty build/
+// directory — exit 0, no artifact, and nothing said until a deploy went looking
+// for a module that was never written. Measured before the guard existed: a
+// single mistyped word in the SCL produced `"status": "complete", "failed": 0`.
+//
+// The language is varied because the guard sits above the language branch: the
+// same typo has to be refused whatever the action is written in, and neither
+// compiler may be reached.
+func TestBuildAction_UnrecognisedExecutionEnvironment(t *testing.T) {
+	for _, lang := range []struct {
+		name   string
+		source string
+		body   string
+	}{
+		{"typescript", filepath.Join("src", "index.ts"), "export default {}\n"},
+		{"rust", filepath.Join("src", "main.rs"), "fn main() {}\n"},
+	} {
+		for _, execEnv := range []string{"Server", "serverr", "", "sever"} {
+			t.Run(lang.name+"/"+execEnv, func(t *testing.T) {
+				origParseEnv := ParseExecutionEnvironmentFunc
+				origDeps := EnsureDependenciesFunc
+				origCargo := EnsureCargoFunc
+				t.Cleanup(func() {
+					ParseExecutionEnvironmentFunc = origParseEnv
+					EnsureDependenciesFunc = origDeps
+					EnsureCargoFunc = origCargo
+				})
+				ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) {
+					return execEnv, nil
+				}
+				// Neither toolchain may be asked for anything: the refusal is
+				// about the record, and nothing on disk needs consulting.
+				EnsureDependenciesFunc = func(dir string) error {
+					t.Error("npm install ran for an action with no artifact to build")
+					return nil
+				}
+				EnsureCargoFunc = func() (string, error) {
+					t.Error("the Rust toolchain was consulted for an action with no artifact to build")
+					return "", nil
+				}
+
+				actionDir := filepath.Join(t.TempDir(), "greet-user")
+				if err := os.MkdirAll(filepath.Join(actionDir, "src"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(actionDir, lang.source), []byte(lang.body), 0644); err != nil {
+					t.Fatal(err)
+				}
+
+				m := NewBuildManager(DefaultBuildOptions())
+				result := m.BuildAction(context.Background(), actionDir, nil)
+
+				if result.Error == nil {
+					t.Fatalf("BuildAction() reported success for execution_environment %q", execEnv)
+				}
+				if !strings.Contains(result.Error.Error(), "execution_environment") {
+					t.Errorf("the refusal should name the field, got: %v", result.Error)
+				}
+				for _, want := range []string{"server", "client", "both"} {
+					if !strings.Contains(result.Error.Error(), want) {
+						t.Errorf("the refusal should name %q as a valid value, got: %v", want, result.Error)
+					}
+				}
+				if fileExists(filepath.Join(actionDir, "build")) {
+					t.Error("an empty build directory was left behind by a refused build")
+				}
+			})
+		}
 	}
 }

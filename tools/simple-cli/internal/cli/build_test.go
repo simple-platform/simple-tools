@@ -52,20 +52,22 @@ func TestRunBuild(t *testing.T) {
 	// build is one. Left unmocked, the fixture action here has no source and
 	// fails on the first step — which used to read as success because a failed
 	// build reported as JSON returned no error at all.
-	origValidate := build.ValidateLanguageFunc
+	origDetect := build.DetectActionLanguageFunc
 	origParseEnv := build.ParseExecutionEnvironmentFunc
 	origExtract := build.ExtractMetadataFunc
 	defer func() {
-		build.ValidateLanguageFunc = origValidate
+		build.DetectActionLanguageFunc = origDetect
 		build.ParseExecutionEnvironmentFunc = origParseEnv
 		build.ExtractMetadataFunc = origExtract
 	}()
-	build.ValidateLanguageFunc = func(dir string) error { return nil }
+	build.DetectActionLanguageFunc = func(dir string) (build.ActionLanguage, error) {
+		return build.LanguageTypeScript, nil
+	}
 	build.ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 	build.ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
 		if strings.HasSuffix(actionDir, "refused") {
 			return &build.AnnotationRefusal{
-				Refusal: `refused: @effects names an unknown effect "sideways"`,
+				Refusal: `refused: @shortdesc is written with nothing after it`,
 			}
 		}
 
@@ -143,11 +145,18 @@ func TestRunBuild(t *testing.T) {
 			_ = os.Chdir(tmpDir)
 			defer func() { _ = os.Chdir(oldWd) }()
 
-			// Create dummy targets so the builder finds them
+			// Create dummy targets so the builder finds them.
+			//
+			// A "success" case has to be an action the builder can reach the
+			// end of, which means a source file in a language it compiles:
+			// language detection is deliberately not mocked, so an action
+			// directory with nothing in it fails, and a case named "success"
+			// that builds nothing would prove nothing.
 			switch tt.name {
 			case "build target success":
-				_ = os.MkdirAll("myapp/action", 0755)
+				_ = os.MkdirAll("myapp/action/src", 0755)
 				_ = os.WriteFile("myapp/action/action.scl", []byte{}, 0644)
+				_ = os.WriteFile("myapp/action/src/index.ts", []byte("export {}\n"), 0644)
 			case "build all success":
 				_ = os.MkdirAll("apps/myapp/action", 0755)
 				_ = os.WriteFile("apps/myapp/action/action.scl", []byte{}, 0644)

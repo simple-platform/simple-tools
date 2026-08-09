@@ -22,8 +22,11 @@ var (
 	BundleAsyncFunc               = BundleAsync
 	CompileToWasmFunc             = CompileToWasm
 	OptimizeWasmFunc              = OptimizeWasm
-	ValidateLanguageFunc          = ValidateLanguage
+	DetectActionLanguageFunc      = DetectActionLanguage
 	ParseExecutionEnvironmentFunc = ParseExecutionEnvironment
+	EnsureCargoFunc               = EnsureCargo
+	EnsureRustWasmTargetFunc      = EnsureRustWasmTarget
+	CargoBuildWasmFunc            = CargoBuildWasm
 )
 
 type ProgressReporter func(item, status string, done bool, err error)
@@ -183,17 +186,61 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		}
 	}
 
-	// Validate language (TS only)
-	if err := ValidateLanguageFunc(actionDir); err != nil {
+	lang, err := DetectActionLanguageFunc(actionDir)
+	if err != nil {
 		report("Failed")
 		return ActionBuildResult{ActionName: actionName, Error: err}
 	}
 
-	// Parse execution environment from SCL
+	// Parse execution environment from SCL.
+	//
+	// This is read before the language branch and passed into it, because it is
+	// the same decision for every language: `server` needs the sync artifact,
+	// `client` the async one, `both` needs two. Only how those artifacts are
+	// produced differs below.
 	execEnv, _ := ParseExecutionEnvironmentFunc(m.tools.SCLParser, actionDir)
 	needsSync := execEnv == "server" || execEnv == "both"
 	needsAsync := execEnv == "client" || execEnv == "both"
 
+	// An environment that names neither artifact is refused here, before any
+	// compiler is asked for one.
+	//
+	// The three values are matched exactly, so anything else — a typo, a
+	// capital letter, a value some later version of the platform understands
+	// and this CLI does not — leaves both flags false. Every step below is
+	// guarded by one of those flags, so the build would otherwise walk the
+	// whole pipeline doing nothing and report success over an empty build/
+	// directory. That is the one failure a developer cannot see: the command
+	// said it worked, and the artifact that never appeared is only missed at
+	// deploy time. The value read is quoted back because the fix is a single
+	// word in the SCL and naming it is what points at that word.
+	if !needsSync && !needsAsync {
+		report("Failed")
+		return ActionBuildResult{
+			ActionName: actionName,
+			Error: fmt.Errorf("execution_environment is %q, which names no artifact to build: it has to be exactly server, client, or both",
+				execEnv),
+		}
+	}
+
+	switch lang {
+	case LanguageTypeScript:
+		return m.buildTypeScriptAction(actionDir, actionName, needsSync, needsAsync, report)
+	case LanguageRust:
+		return m.buildRustAction(actionDir, actionName, needsSync, needsAsync, report)
+	default:
+		// A Go action is compiled by the platform, not here. Saying so is the
+		// whole job: reporting success without writing a module would leave a
+		// developer waiting for an artifact that was never going to appear.
+		report("Failed")
+		return ActionBuildResult{
+			ActionName: actionName,
+			Error:      fmt.Errorf("this action is written in Go, which this CLI does not compile: the platform builds a Go action when the app is deployed"),
+		}
+	}
+}
+
+func (m *BuildManager) buildTypeScriptAction(actionDir, actionName string, needsSync, needsAsync bool, report func(string)) ActionBuildResult {
 	// Install dependencies
 	report("Installing dependencies...")
 	if err := EnsureDependenciesFunc(actionDir); err != nil {
