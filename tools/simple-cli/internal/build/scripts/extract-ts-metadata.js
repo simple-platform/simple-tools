@@ -101,6 +101,66 @@ const RETRY_VALUES = ['safe', 'keyed', 'verify-first', 'never']
 const DISCLOSES_VALUES = ['tenant_record', 'settings_field', 'credential_field', 'secret_field']
 const DEFAULT_DISCLOSES = 'tenant_record'
 
+// THE VOCABULARY A RUST ACTION IS AUTHORED IN.
+//
+// Three tags on the action and nothing else. `@tool` is the same modifier tag
+// the vocabulary above claims — bare, presence-only, and refused if a value
+// follows it. The other two are written for the MODEL rather than for the host:
+// `@short_desc` is the one line a tool listing shows, and `@when_use` is
+// repeatable and says when to reach for it. The doc comment's own prose is not
+// in this list and is not touched: it is the full contract, and it arrives when
+// the tool is selected rather than in the listing.
+//
+// `@Payload` is claimed too, though it states nothing about exposure: it names
+// the struct the schema is read from, so an author may point at a type not
+// called `Payload`. It is claimed for the same reason the three are — this
+// generator READS it, and a directive to this generator that stayed in the
+// prose would be shipped to a model as a sentence about what the action does.
+// Claiming it also puts `@Payloud` in front of the misspelling rule below,
+// where the alternative is a silent fall back to a struct of the other name and
+// a schema describing the wrong type.
+//
+// WHAT CALLING A TOOL DOES IS NOT IN THIS VOCABULARY. `@effects`, `@retry` and
+// `@discloses` — and the older `@ai_`-prefixed spelling of the same idea — are
+// facts the host states in its own table, about a tool it already knows. A Rust
+// action must not be able to declare them, so they are refused where they are
+// written rather than left in the description, which would ship a line that
+// reads as a declaration, does nothing, and reaches the model as prose.
+const SHORT_DESC_TAG = 'short_desc'
+const WHEN_USE_TAG = 'when_use'
+const PAYLOAD_TAG = 'Payload'
+
+const RUST_TAGS = [TOOL_TAG, SHORT_DESC_TAG, WHEN_USE_TAG, PAYLOAD_TAG]
+
+// The tags that qualify `@tool` in Rust. Either one written without it is a
+// statement about nothing, the same way the three above are.
+const RUST_QUALIFYING_TAGS = [SHORT_DESC_TAG, WHEN_USE_TAG]
+
+const RUST_RETIRED_TAGS = [
+  EFFECTS_TAG,
+  RETRY_TAG,
+  DISCLOSES_TAG,
+  'ai_tool',
+  'ai_effects',
+  'ai_retry_safety',
+  'ai_disclosure_origin',
+]
+
+// A LISTING HAS TO STAY SMALL, SO WHAT DOES NOT FIT IS REFUSED, NEVER DROPPED.
+//
+// Every `@short_desc` and `@when_use` an action writes is carried into the
+// listing an agent chooses from, and that listing is read in full on every turn.
+// Keeping the first few and discarding the rest would be a cap nobody was told
+// about: the author reads the line in the source, the model never sees it, and
+// the build that decided so exited zero.
+//
+// The widths are the ruled ones. A tool costs a few thousand bytes once it is
+// chosen; what these bound is the entry that is carried whether it is chosen or
+// not, which is the number that multiplies by the size of the catalogue.
+const WHEN_USE_LIMIT = 10
+const SHORT_DESC_CHARS = 300
+const WHEN_USE_CHARS = 100
+
 // The status a refused exposure statement exits with, told apart from every
 // other way this generator can fail. A caller reading only "non-zero" cannot
 // distinguish a source the vocabulary refuses from a toolchain that is not
@@ -294,6 +354,156 @@ function buildAiMetadata(action, tags, misspellings) {
   /* eslint-enable perfectionist/sort-objects */
 }
 
+// The exposure statement a RUST action makes about itself, or nothing at all.
+//
+// THE VOCABULARY IS STATED HERE AND NOWHERE ELSE, for the same reason the
+// TypeScript one is: this generator writes action.json, and a rule about what
+// may appear in that file that lives in a second program is a rule two
+// languages get to disagree about. The Go extractor already holds a second copy
+// of the vocabulary above, in Go, and keeping those two agreeing is work that
+// buys nothing. The Rust companion parses Rust — comments, types, serde
+// attributes — and states no opinion about which tags are claimed, what they
+// mean, or when a source is refused.
+//
+// Shaped after `buildAiMetadata` and refusing in the same order for the same
+// reasons: a mistyped name first, because it explains a missing tag; then a
+// qualifier without `@tool`; then a value on the modifier tag. The wording is
+// repeated rather than shared, because sharing it would have meant editing the
+// function the other two languages are already refused by.
+function buildRustAiMetadata(action, tags, refusals) {
+  const accepted = RUST_TAGS.map(tag => `@${tag}`)
+  const [refusal] = refusals
+
+  if (refusal) {
+    if (refusal.kind === 'retired') {
+      throw annotationError(
+        action,
+        `writes @${refusal.written}, which a Rust action does not declare. `
+        + 'What calling a tool does, whether it is safe to call again and what it may disclose '
+        + 'are stated by the host about a tool it already has, not by the action about itself',
+        accepted,
+      )
+    }
+
+    throw annotationError(
+      action,
+      `writes @${refusal.written}, which nothing claims and which is one edit from @${refusal.meant}`,
+      accepted,
+    )
+  }
+
+  // `@Payload` says which type the schema was read from, which the companion
+  // has already acted on. It is not part of the statement about exposure, and
+  // an action that writes it and nothing else is not making one.
+  const stated = tags.filter(tag => tag.name !== PAYLOAD_TAG)
+
+  if (stated.length === 0) {
+    return undefined
+  }
+
+  const present = new Set(stated.map(tag => tag.name))
+  const whenUse = stated.filter(tag => tag.name === WHEN_USE_TAG).map(tag => tag.value)
+  const declared = new Map()
+
+  // `@when_use` is the one repeatable name, so it is collected above rather
+  // than refused here. Everything else may be written once: a second
+  // `@short_desc` is two answers to one question, and picking either is
+  // deciding on the author's behalf which sentence they meant.
+  for (const tag of stated) {
+    if (tag.name === WHEN_USE_TAG) {
+      continue
+    }
+
+    if (declared.has(tag.name)) {
+      throw annotationError(action, `@${tag.name} is declared more than once`)
+    }
+
+    declared.set(tag.name, tag.value)
+  }
+
+  if (!declared.has(TOOL_TAG)) {
+    // Named in vocabulary order rather than in the order they were declared, so
+    // the same source is refused with the same sentence every time.
+    const written = RUST_QUALIFYING_TAGS.filter(tag => present.has(tag)).map(tag => `@${tag}`)
+
+    throw annotationError(
+      action,
+      `declares ${written.join(', ')} without @${TOOL_TAG}, so it is not a tool and the rest says nothing`,
+    )
+  }
+
+  // A modifier tag is its own statement. A value written after one is an author
+  // saying something the vocabulary has no way to hear — most likely the boolean
+  // this tag used to take, whose `false` no longer says anything.
+  const value = declared.get(TOOL_TAG)
+
+  if (value !== '') {
+    throw annotationError(
+      action,
+      `@${TOOL_TAG} is a modifier tag and takes no value, and this one carries "${value}". `
+      + 'Leave it bare to expose the action, or delete it to leave the action unexposed',
+    )
+  }
+
+  // Required, and with no default to fall back to. The listing an agent chooses
+  // from carries this line and the prose arrives only after it has chosen, so a
+  // tool without one is offered as a name and nothing else — and a default
+  // written here would be this generator describing an action it has not read.
+  if (!declared.has(SHORT_DESC_TAG)) {
+    throw annotationError(action, `is a tool and must declare @${SHORT_DESC_TAG}`)
+  }
+
+  const shortDesc = declared.get(SHORT_DESC_TAG)
+
+  if (shortDesc === '') {
+    throw annotationError(action, `@${SHORT_DESC_TAG} is written with nothing after it`)
+  }
+
+  if (whenUse.includes('')) {
+    throw annotationError(action, `@${WHEN_USE_TAG} is written with nothing after it`)
+  }
+
+  if (shortDesc.length > SHORT_DESC_CHARS) {
+    throw annotationError(
+      action,
+      `writes a @${SHORT_DESC_TAG} of ${shortDesc.length} characters and a listing carries at `
+      + `most ${SHORT_DESC_CHARS}. Say the rest in the prose, which is read once the tool is `
+      + 'chosen',
+    )
+  }
+
+  if (whenUse.length > WHEN_USE_LIMIT) {
+    throw annotationError(
+      action,
+      `declares ${whenUse.length} @${WHEN_USE_TAG} lines and a listing carries at most `
+      + `${WHEN_USE_LIMIT}. Say the rest in the prose, which is read once the tool is chosen`,
+    )
+  }
+
+  const overlong = whenUse.find(line => line.length > WHEN_USE_CHARS)
+
+  if (overlong !== undefined) {
+    throw annotationError(
+      action,
+      `writes a @${WHEN_USE_TAG} of ${overlong.length} characters and each carries at most `
+      + `${WHEN_USE_CHARS}. A trigger is one line; the prose holds what it does`,
+    )
+  }
+
+  // The member order below is the file format rather than a style choice.
+  /* eslint-disable perfectionist/sort-objects */
+  const ai = { tool: true, short_desc: shortDesc }
+  /* eslint-enable perfectionist/sort-objects */
+
+  // Absent rather than empty when the author wrote none, so a reader is never
+  // handed an empty list to tell apart from an unstated one.
+  if (whenUse.length > 0) {
+    ai.when_use = whenUse
+  }
+
+  return ai
+}
+
 // Every comment in a source file, with the syntax that makes it a comment taken
 // off and nothing else touched.
 //
@@ -483,6 +693,140 @@ function refuse(actionDir) {
   process.exit(ANNOTATION_REFUSAL_EXIT_CODE)
 }
 
+// What the Rust companion read out of an action's source, in four members and
+// no fifth: `description`, the doc comment that describes the action exactly as
+// its author wrote it; `schema`, read off the payload type; `comments`, every
+// comment in the file, which is where the exposure statement is read from; and
+// `gaps`, the things the schema had no way to state.
+//
+// THE COMPANION IS BUILT AND THEN RUN, RATHER THAN RUN THROUGH `cargo run`, for
+// the reason written against the Go branch below: `cargo run` is a launcher,
+// and a launcher's status describes the launcher. A refusal that arrives as an
+// ordinary failure is a refusal this process cannot act on, and the action.json
+// generated from an earlier source then survives the edit that was refused —
+// well-formed, current-looking, and describing an action that no longer exists.
+//
+// It does NOT build into a throwaway directory the way the Go branch does. `go
+// build` keeps its own cache elsewhere, so discarding the output directory
+// costs a link; cargo keeps everything in the one it is given, so a fresh
+// directory per action rebuilds every dependency for every action in the tree.
+// The companion's own directory is named instead — the one its `.gitignore`
+// already excludes — so the cache is the same one next time and the same one
+// anybody running `cargo` in that crate has already warmed. Two builds racing
+// it is cargo's own lock, not a correctness question.
+//
+// Named rather than left to cargo's default, which is the same directory until
+// something in the environment redirects it. The binary is then read from a
+// path this file chose rather than one it assumed, so a redirected build cannot
+// present as a build that produced nothing.
+//
+// The companion parses Rust and answers with what it found. It states nothing
+// about the vocabulary: the tags are claimed, validated and refused in this
+// file, so `ai` arriving from it is not a value to merge but a sign that the
+// rule now has two homes, and it fails the run saying so.
+function rustCompanionOutput(actionDir, rustPath) {
+  const cratePath = path.join(__dirname, 'extract_rustdoc')
+  const manifestPath = path.join(cratePath, 'Cargo.toml')
+  const buildDir = path.join(cratePath, 'target')
+  // NEITHER OF THESE IS AN AUTHOR'S MISTAKE, so neither discards the file on
+  // disk: a companion that could not be built, and one that answered with
+  // something this generator cannot read, have both said nothing about whether
+  // the action's own source is well-formed. They are named apart from each
+  // other because the fix is in a different place — a toolchain in one case and
+  // the companion's own output in the other — and a heading naming the build
+  // sends a reader to look at a build that succeeded.
+  const buildFailure = (message, detail) => {
+    console.error(`Failed to build the Rust metadata extractor for ${actionDir}: ${message}`)
+
+    if (detail) {
+      console.error(detail)
+    }
+
+    process.exit(1)
+  }
+
+  const answerFailure = (message) => {
+    console.error(`The Rust metadata extractor answered ${actionDir} with ${message}`)
+    process.exit(1)
+  }
+
+  if (!fs.existsSync(manifestPath)) {
+    buildFailure(`no manifest at ${manifestPath}`)
+  }
+
+  try {
+    execFileSync('cargo', ['build', '--quiet', '--manifest-path', manifestPath, '--target-dir', buildDir])
+  }
+  catch (err) {
+    buildFailure(err.message, err.stderr && err.stderr.toString())
+  }
+
+  // Built without `--release`: this reads one source file per action and the
+  // time that matters is the compile, not the run.
+  const extractorPath = path.join(buildDir, 'debug', 'extract_rustdoc')
+
+  if (!fs.existsSync(extractorPath)) {
+    buildFailure(`the build produced no binary at ${extractorPath}`)
+  }
+
+  let data
+  try {
+    data = JSON.parse(execFileSync(extractorPath, ['--', rustPath]).toString())
+  }
+  catch (err) {
+    // A Rust action that cannot be described must fail the run, not leave the
+    // stale action.json in place while the process exits cleanly. A refusal
+    // reads the same to this generator's caller whichever language the action
+    // is written in, and only a refusal discards the stale file. The
+    // companion's own message has already reached this process's stderr, so it
+    // is not restated under a heading that would make an author's mistake read
+    // as a broken toolchain.
+    if (err.status === ANNOTATION_REFUSAL_EXIT_CODE) {
+      refuse(actionDir)
+    }
+
+    console.error(`Failed to extract the Rust doc comments for ${actionDir}:`, err.message)
+    if (err.stdout)
+      console.error(err.stdout.toString())
+    if (err.stderr)
+      console.error(err.stderr.toString())
+    process.exit(1)
+  }
+
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    answerFailure('something that is not an object')
+  }
+
+  // WITHOUT THE COMMENTS THERE IS NO STATEMENT TO READ, and an action whose
+  // author wrote `@tool` would regenerate as an action that is not a tool —
+  // from a run that exited zero. That is the failure this annotation exists to
+  // make impossible, so an answer missing them fails the run rather than being
+  // read as a file with nothing in it.
+  if (!Array.isArray(data.comments)) {
+    answerFailure(
+      'no `comments` array, which is where the exposure statement is read from',
+    )
+  }
+
+  if (data.ai !== undefined) {
+    answerFailure(
+      'an `ai` object. The tag vocabulary is claimed, validated and refused in this file, '
+      + 'and a second copy of it is how two languages drift apart',
+    )
+  }
+
+  // A member this generator has no vocabulary to describe — the constraints a
+  // TypeScript action writes in a doc comment and a Go action in a struct tag,
+  // which Rust has neither of. Reported where the author can see it, and not
+  // guessed at: an invented spelling would be a rule nobody ruled on, advertised
+  // to every action written after it.
+  for (const gap of Array.isArray(data.gaps) ? data.gaps : []) {
+    console.error(`${path.basename(actionDir)}: ${gap}`)
+  }
+
+  return data
+}
+
 // The description a comment states, and the exposure annotations written inside
 // it.
 //
@@ -541,6 +885,96 @@ function splitDoc(text) {
   }
 
   return { description: descriptionLines.join('\n').trim(), misspellings, tags }
+}
+
+// The same line-wise reading, for the vocabulary a Rust action is written in.
+//
+// The claimed names are lifted out and everything else is left exactly where
+// the author put it, so a comment may state its tags and keep writing. One
+// difference from the reading above, and it is the whole reason this is a
+// separate function rather than a parameter: THE SCHEMA GENERATOR'S TAGS ARE
+// NOT REMOVED. `@minimum` and `@pattern` leave a TypeScript doc comment because
+// a generator has already turned them into constraints beside the description,
+// and a constraint stated twice is a member documented by whichever copy the
+// reader believes. Nothing does that for Rust — there is no constraint
+// vocabulary for a Rust member and none has been ruled on — so removing those
+// lines here would delete the author's sentence and put nothing in its place.
+//
+// A retired name is recorded rather than lifted, and the line stays in the
+// description, because it is refused before any description ships.
+function splitRustDoc(text) {
+  const descriptionLines = []
+  const refusals = []
+  const tags = []
+
+  for (const line of String(text).split('\n')) {
+    const trimmed = line.trim()
+    const name = trimmed.startsWith('@') ? trimmed.slice(1).split(/\s+/)[0] : ''
+
+    if (RUST_TAGS.includes(name)) {
+      tags.push({ name, value: trimmed.slice(name.length + 1).trim() })
+      continue
+    }
+
+    if (name) {
+      // A retired name is looked for first and matched loosely, so `@efects`
+      // is answered with the sentence that says the host states this, rather
+      // than with a spelling correction toward a tag that no longer exists.
+      const retired = RUST_RETIRED_TAGS.find(gone => withinOneEdit(name, gone))
+      const meant = RUST_TAGS.find(claimed => withinOneEdit(name, claimed))
+
+      if (retired) {
+        refusals.push({ kind: 'retired', written: name })
+      }
+      else if (meant) {
+        refusals.push({ kind: 'misspelling', meant, written: name })
+      }
+    }
+
+    descriptionLines.push(line)
+  }
+
+  return { description: descriptionLines.join('\n').trim(), refusals, tags }
+}
+
+// EVERY DESCRIPTION A RUST ACTION'S SCHEMA CARRIES, SPLIT BY THE ONE READER
+// THAT OWNS THE VOCABULARY.
+//
+// The companion answers with what each author wrote and nothing lifted out,
+// because the tags are claimed here. That is one rule with one home, and a rule
+// with one home has to be applied everywhere a description reaches the
+// artifact — not only to the action's own. A payload member documented with a
+// claimed name would otherwise ship that line to a model as a sentence about
+// what the member means, from a run that exited zero, while the action's own
+// description beside it had the same line taken out. Two descriptions of one
+// action that disagree leave no reader able to tell which one its author wrote.
+//
+// A description is stated or absent. An empty string is a third thing, and it
+// reads as a statement to every consumer that checks whether the key is there,
+// so a description that was nothing but claimed lines loses the key rather than
+// keeping an empty one.
+function stripRustAnnotations(node) {
+  if (!node || typeof node !== 'object') {
+    return
+  }
+
+  if (Array.isArray(node)) {
+    node.forEach(stripRustAnnotations)
+    return
+  }
+
+  if (typeof node.description === 'string') {
+    const { description } = splitRustDoc(node.description)
+
+    if (description) {
+      node.description = description
+    }
+    else {
+      delete node.description
+    }
+  }
+
+  Object.values(node).forEach(stripRustAnnotations)
 }
 
 // Whether one name reaches the other by inserting, deleting or replacing a
@@ -608,6 +1042,24 @@ const tsPath = [
   path.join(actionDir, 'src', 'index.ts'),
 ].find(candidate => fs.existsSync(candidate))
 const goPath = path.join(actionDir, 'main.go')
+
+// A RUST ACTION IS A CRATE, AND ITS MAIN FILE IS WHERE CARGO LOOKS FOR ONE.
+//
+// `src/main.rs` first, because that is the layout cargo builds without being
+// told anything: a crate whose manifest names no path has its binary there, and
+// every action generated from a template will have it there. `main.rs` beside
+// the manifest is accepted after it, for the hand-written crate that sets
+// `path` — the same shape the TypeScript branch accepts `index.ts` in, and
+// cheaper to honour than to explain.
+//
+// The branch is reached only after Go, so no action that builds today changes
+// language: a directory holding both a `main.go` and a `main.rs` is the Go
+// action it was yesterday, and nothing already in the tree can be re-read by
+// the new path.
+const rustPath = [
+  path.join(actionDir, 'src', 'main.rs'),
+  path.join(actionDir, 'main.rs'),
+].find(candidate => fs.existsSync(candidate))
 
 if (tsPath) {
   const project = new Project()
@@ -759,6 +1211,58 @@ else if (fs.existsSync(goPath)) {
   discardExtractor()
   fs.writeFileSync(path.join(actionDir, 'action.json'), `${JSON.stringify(outData, null, 2)}\n`)
   console.log(`Generated action.json for ${actionDir} (Go)`)
+}
+else if (rustPath) {
+  const rustData = rustCompanionOutput(actionDir, rustPath)
+
+  // EVERY comment in the file is read for the exposure statement, not only the
+  // one that supplied the description — the same rule the two branches above
+  // hold to, and for the same reason. Which comment describes the action is
+  // decided by where the payload is declared; where an author writes `@tool`
+  // must not be decided by that as a side effect, because a dropped `@tool` is
+  // an action that quietly stops being callable.
+  //
+  // The description is one of those comments, so its tags are counted once,
+  // from the comments. It arrives RAW — the companion lifts nothing out of it,
+  // because the names to lift are claimed here — and it is read a second time
+  // below purely to take those lines out of the prose. Once, here, and nowhere
+  // else: a companion that also lifted them would leave the rule with two homes
+  // and the day the two disagreed, the description would either keep a `@tool` a
+  // model reads as prose or lose a sentence its author wrote.
+  const comments = rustData.comments.map(comment => splitRustDoc(comment))
+
+  let ai
+  try {
+    ai = buildRustAiMetadata(
+      path.basename(actionDir),
+      comments.flatMap(comment => comment.tags),
+      comments.flatMap(comment => comment.refusals),
+    )
+  }
+  catch (err) {
+    console.error(err.message)
+    refuse(actionDir)
+  }
+
+  const schema = rustData.schema
+    && typeof rustData.schema === 'object'
+    && !Array.isArray(rustData.schema)
+    ? rustData.schema
+    : noInputSchema()
+
+  stripRustAnnotations(schema)
+
+  const out = {
+    description: splitRustDoc(rustData.description ?? '').description,
+    schema,
+  }
+
+  if (ai) {
+    out.ai = ai
+  }
+
+  fs.writeFileSync(path.join(actionDir, 'action.json'), `${JSON.stringify(out, null, 2)}\n`)
+  console.log(`Generated action.json for ${actionDir} (Rust)`)
 }
 else {
   fs.writeFileSync(
