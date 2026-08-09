@@ -25,15 +25,23 @@ import (
 // read a payload field's annotations where the other did not — and an author
 // building through this tool got a different file from the same source.
 //
-// Nothing here could reach that code. The build refuses an action without
-// `src/index.ts` before extraction runs, and a third party authors in
-// TypeScript, so what it produced was a second contract that could never be
-// exercised or contradicted.
+// Nothing here could reach that code either: at the time, extraction ran only
+// for an action with `src/index.ts` beside it, so what those seven hundred lines
+// produced was a second contract that could never be exercised or contradicted.
 //
 // The language is still detected, because THAT question this tool must answer:
 // an action with both sources or neither has a problem the generator would
 // describe as a missing root type, and an empty action.json is worse than a
 // refusal.
+//
+// IT IS DETECTED BY THE ONE DETECTOR THE BUILD USES. There were two, and they
+// did not know the same languages: this path recognised TypeScript and Go, and
+// the compiler's path recognised Rust as well. So a Rust action was compiled by
+// a tool that knew what it was and described by one that did not — the module
+// was built, and the file beside it saying what the action is and whether an
+// agent may call it was never written, from a build that reported success with
+// a warning. Two answers to "what language is this" is two answers, and the
+// build has to act on both of them.
 //
 // When the failure is a refusal — the source says something the exposure
 // vocabulary does not admit — the action.json already on disk is discarded
@@ -41,11 +49,12 @@ import (
 // rejected edit still ships, because every later reader sees a well-formed file
 // and nothing that says which source it came from.
 func ExtractMetadata(fs fsx.FileSystem, actionDir string) error {
-	if _, err := detectLanguage(fs, actionDir); err != nil {
+	lang, err := detectActionLanguage(fs, actionDir)
+	if err != nil {
 		return fmt.Errorf("failed to detect action language: %w", err)
 	}
 
-	if err := describeActionFromSource(fs, actionDir); err != nil {
+	if err := describeActionFromSource(fs, actionDir, lang); err != nil {
 		return discardStaleActionJSON(fs, actionDir, err)
 	}
 
@@ -74,41 +83,5 @@ func discardStaleActionJSON(fs fsx.FileSystem, actionDir string, cause error) er
 }
 
 // describeActionFromSource is implemented in metadata_generator.go
-
-// detectLanguage determines if action is TypeScript or Go based on source file presence.
-// Returns "typescript" if index.ts or src/index.ts exists, "go" if main.go exists.
-// Returns error if both files exist (ambiguous) or neither exists (missing source).
-func detectLanguage(fs fsx.FileSystem, actionDir string) (string, error) {
-	rootTSPath := filepath.Join(actionDir, "index.ts")
-	srcTSPath := filepath.Join(actionDir, "src", "index.ts")
-	goPath := filepath.Join(actionDir, "main.go")
-
-	// Check for TypeScript source
-	_, rootTSErr := fs.Stat(rootTSPath)
-	rootTSExists := rootTSErr == nil
-
-	_, srcTSErr := fs.Stat(srcTSPath)
-	srcTSExists := srcTSErr == nil
-
-	tsExists := rootTSExists || srcTSExists
-
-	// Check for Go source
-	_, goErr := fs.Stat(goPath)
-	goExists := goErr == nil
-
-	// Handle ambiguous case (both files present)
-	if tsExists && goExists {
-		return "", fmt.Errorf("ambiguous action language: TypeScript source (index.ts or src/index.ts) and main.go found")
-	}
-
-	// Handle missing source case (neither file present)
-	if !tsExists && !goExists {
-		return "", fmt.Errorf("no action source file found (expected index.ts, src/index.ts, or main.go)")
-	}
-
-	// Return detected language
-	if tsExists {
-		return "typescript", nil
-	}
-	return "go", nil
-}
+// detectActionLanguage is implemented in env.go, and is the same reading the
+// compiler's path makes.

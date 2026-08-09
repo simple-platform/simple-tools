@@ -646,8 +646,9 @@ func TestScaffoldedSpaceDeclaresTheExposureVocabulary(t *testing.T) {
 	var config struct {
 		Schema         string `json:"$schema"`
 		TagDefinitions []struct {
-			TagName    string `json:"tagName"`
-			SyntaxKind string `json:"syntaxKind"`
+			TagName       string `json:"tagName"`
+			SyntaxKind    string `json:"syntaxKind"`
+			AllowMultiple bool   `json:"allowMultiple"`
 		} `json:"tagDefinitions"`
 	}
 
@@ -659,38 +660,54 @@ func TestScaffoldedSpaceDeclaresTheExposureVocabulary(t *testing.T) {
 		t.Fatalf("tsdoc.json names no TSDoc schema, got %q", config.Schema)
 	}
 
-	declared := map[string]string{}
+	type declaration struct {
+		kind     string
+		multiple bool
+	}
+
+	declared := map[string]declaration{}
 	for _, definition := range config.TagDefinitions {
-		declared[definition.TagName] = definition.SyntaxKind
+		declared[definition.TagName] = declaration{kind: definition.SyntaxKind, multiple: definition.AllowMultiple}
 	}
 
 	if len(declared) != len(config.TagDefinitions) {
 		t.Fatalf("tsdoc.json declares a tag twice: %#v", config.TagDefinitions)
 	}
 
-	for _, name := range build.ExposureTagNames() {
-		// `@tool` carries no value, so it is a modifier tag; the three that
-		// qualify it carry one, so they are block tags. Declaring a modifier as a
-		// block tag makes TSDoc read the next line as its content.
+	for _, name := range build.ActionTagNames() {
+		// `@tool` carries no value, so it is a modifier tag; every other name in
+		// the vocabulary carries one, so they are block tags. Declaring a
+		// modifier as a block tag makes TSDoc read the next line as its content.
 		want := "block"
 		if name == "tool" {
 			want = "modifier"
 		}
 
-		kind, known := declared["@"+name]
+		// `@usewhen` is the one name an author may write more than once — a tool
+		// is reached for in more than one situation, and the vocabulary carries
+		// up to ten of them. A block tag TSDoc has not been told is repeatable is
+		// reported as a duplicate from the second line on, which underlines a
+		// statement the build accepts.
+		wantMultiple := name == "usewhen"
+
+		definition, known := declared["@"+name]
 		if !known {
-			t.Fatalf("the build enforces @%s and tsdoc.json does not declare it", name)
+			t.Fatalf("the build claims @%s and tsdoc.json does not declare it", name)
 		}
 
-		if kind != want {
-			t.Fatalf("@%s is declared as a %s tag and is a %s tag", name, kind, want)
+		if definition.kind != want {
+			t.Fatalf("@%s is declared as a %s tag and is a %s tag", name, definition.kind, want)
+		}
+
+		if definition.multiple != wantMultiple {
+			t.Fatalf("@%s is declared repeatable=%t and is repeatable=%t", name, definition.multiple, wantMultiple)
 		}
 
 		delete(declared, "@"+name)
 	}
 
 	if len(declared) != 0 {
-		t.Fatalf("tsdoc.json declares tags the build does not enforce: %#v", declared)
+		t.Fatalf("tsdoc.json declares tags the build does not claim: %#v", declared)
 	}
 }
 
@@ -744,5 +761,52 @@ func TestAnActionInheritsTheVocabularyFromItsSpace(t *testing.T) {
 	if filepath.Clean(inherited) != spaceConfig {
 		t.Fatalf("an action inherits from %q, and its space declares the vocabulary at %q",
 			filepath.Clean(inherited), spaceConfig)
+	}
+}
+
+// THE SCAFFOLDED RUST ACTION DECLARES ITS PAYLOAD UNDER THE NAME THE GENERATOR
+// LOOKS FOR.
+//
+// A Rust action's input schema is read off a struct found BY NAME. A struct
+// called anything else is not found, and nothing is reported when it is not: an
+// action that genuinely takes no input is ordinary, so the generator answers
+// with the no-input schema and exits zero.
+//
+// That makes this the quiet failure. The template shipped a payload called
+// `Input` with a required field on it, and every action scaffolded from it
+// advertised an empty schema beside a handler that refuses an empty call — a
+// model reading the contract is told there is nothing to send, sends nothing,
+// and is refused for a reason the contract does not contain. The build said
+// Done and the action.json was well-formed.
+//
+// The name is read from the generator rather than written here, so the day it
+// changes upstream this fails instead of quietly scaffolding actions that
+// advertise no input.
+func TestTheScaffoldedRustActionDeclaresThePayloadTheGeneratorLooksFor(t *testing.T) {
+	source, err := TemplatesFS.ReadFile("templates/action-rust/main.rs")
+	if err != nil {
+		t.Fatalf("a scaffolded Rust action carries no main.rs: %v", err)
+	}
+
+	wanted := build.PayloadStructName()
+	if wanted == "" {
+		t.Fatal("the generator's payload struct name could not be read, so this check is not checking anything")
+	}
+
+	declaration := "struct " + wanted + " {"
+	if !strings.Contains(string(source), declaration) {
+		t.Fatalf("a scaffolded Rust action declares no %q, so its schema is read off nothing and it advertises no input", declaration)
+	}
+
+	// The handler has to deserialize the same type, or the schema describes one
+	// struct while the action reads another.
+	if !strings.Contains(string(source), "Request<"+wanted+">") {
+		t.Fatalf("a scaffolded Rust action declares %q but its handler does not take Request<%s>", declaration, wanted)
+	}
+
+	// A payload with no members would satisfy the two checks above and still
+	// advertise nothing, which is the failure they exist to catch.
+	if !strings.Contains(string(source), "name: String,") {
+		t.Fatal("a scaffolded Rust action's payload declares no member, so it advertises no input whatever it is called")
 	}
 }

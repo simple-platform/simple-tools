@@ -47,11 +47,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
 const TOOL_TAG = 'tool'
-const EFFECTS_TAG = 'effects'
-const RETRY_TAG = 'retry'
-const DISCLOSES_TAG = 'discloses'
-
-const EXPOSURE_TAGS = [TOOL_TAG, EFFECTS_TAG, RETRY_TAG, DISCLOSES_TAG]
 
 // THE TAGS THE SCHEMA GENERATOR TURNS INTO A CONSTRAINT, ASKED OF IT RATHER
 // THAN LISTED HERE.
@@ -92,15 +87,6 @@ const SCHEMA_TAGS = new Set([
 // exited zero.
 SCHEMA_TAGS.delete('description')
 
-// The tags that say what CALLING a tool does. Each one qualifies `@tool`, so any
-// of them written without it is a statement about nothing.
-const QUALIFYING_TAGS = [EFFECTS_TAG, RETRY_TAG, DISCLOSES_TAG]
-
-const EFFECT_VALUES = ['read', 'orchestration', 'write', 'destructive', 'external', 'credential']
-const RETRY_VALUES = ['safe', 'keyed', 'verify-first', 'never']
-const DISCLOSES_VALUES = ['tenant_record', 'settings_field', 'credential_field', 'secret_field']
-const DEFAULT_DISCLOSES = 'tenant_record'
-
 // THE VOCABULARY A RUST ACTION IS AUTHORED IN.
 //
 // Three tags on the action and nothing else. `@tool` is the same modifier tag
@@ -121,30 +107,18 @@ const DEFAULT_DISCLOSES = 'tenant_record'
 // a schema describing the wrong type.
 //
 // WHAT CALLING A TOOL DOES IS NOT IN THIS VOCABULARY. `@effects`, `@retry` and
-// `@discloses` — and the older `@ai_`-prefixed spelling of the same idea — are
-// facts the host states in its own table, about a tool it already knows. A Rust
-// action must not be able to declare them, so they are refused where they are
-// written rather than left in the description, which would ship a line that
-// reads as a declaration, does nothing, and reaches the model as prose.
-const SHORT_DESC_TAG = 'short_desc'
-const WHEN_USE_TAG = 'when_use'
+// `@discloses` are facts the host states in its own table, about a tool it
+// already knows. They are simply not claimed here, so a line writing one is
+// prose like any other unclaimed `@name`.
+const SHORTDESC_TAG = 'shortdesc'
+const USEWHEN_TAG = 'usewhen'
 const PAYLOAD_TAG = 'Payload'
 
-const RUST_TAGS = [TOOL_TAG, SHORT_DESC_TAG, WHEN_USE_TAG, PAYLOAD_TAG]
+const ACTION_TAGS = [TOOL_TAG, SHORTDESC_TAG, USEWHEN_TAG, PAYLOAD_TAG]
 
 // The tags that qualify `@tool` in Rust. Either one written without it is a
 // statement about nothing, the same way the three above are.
-const RUST_QUALIFYING_TAGS = [SHORT_DESC_TAG, WHEN_USE_TAG]
-
-const RUST_RETIRED_TAGS = [
-  EFFECTS_TAG,
-  RETRY_TAG,
-  DISCLOSES_TAG,
-  'ai_tool',
-  'ai_effects',
-  'ai_retry_safety',
-  'ai_disclosure_origin',
-]
+const QUALIFYING_TAGS = [SHORTDESC_TAG, USEWHEN_TAG]
 
 // A LISTING HAS TO STAY SMALL, SO WHAT DOES NOT FIT IS REFUSED, NEVER DROPPED.
 //
@@ -157,9 +131,9 @@ const RUST_RETIRED_TAGS = [
 // The widths are the ruled ones. A tool costs a few thousand bytes once it is
 // chosen; what these bound is the entry that is carried whether it is chosen or
 // not, which is the number that multiplies by the size of the catalogue.
-const WHEN_USE_LIMIT = 10
-const SHORT_DESC_CHARS = 300
-const WHEN_USE_CHARS = 100
+const USEWHEN_LIMIT = 10
+const SHORTDESC_CHARS = 300
+const USEWHEN_CHARS = 100
 
 // The status a refused exposure statement exits with, told apart from every
 // other way this generator can fail. A caller reading only "non-zero" cannot
@@ -251,109 +225,6 @@ function applySourceDescriptions(schema, description, type) {
   }
 }
 
-// The exposure statement an action makes about itself, or nothing at all.
-//
-// An action that writes no exposure tag gets no `ai` object, which is how every
-// action that is not a tool regenerates unchanged. Anything short of a complete,
-// well-formed statement refuses instead of degrading, because a half-read
-// annotation is how an action ends up advertised as something it is not.
-function buildAiMetadata(action, tags, misspellings) {
-  // A MISTYPED NAME IS REFUSED BEFORE ANYTHING ELSE IS READ.
-  //
-  // It is checked ahead of the tags because it explains them: an action missing
-  // the tag it looks like it declares is missing it BECAUSE of this line, and a
-  // refusal naming the incomplete statement would send its author to add a tag
-  // they have already written.
-  //
-  // Refused even where the action declares nothing else, which is the case that
-  // shipped. A lone mistyped `@discloses` left the action carrying the loosest
-  // class by default and the line itself in the description, and nothing
-  // anywhere said so.
-  // The first one written, so fixing it and running again surfaces the next
-  // rather than a list an author has to work through in one pass.
-  const [near] = misspellings
-
-  if (near) {
-    throw annotationError(
-      action,
-      `writes @${near.written}, which nothing claims and which is one edit from @${near.meant}`,
-      EXPOSURE_TAGS.map(tag => `@${tag}`),
-    )
-  }
-
-  if (tags.length === 0) {
-    return undefined
-  }
-
-  const declared = new Map()
-
-  for (const tag of tags) {
-    if (declared.has(tag.name)) {
-      throw annotationError(action, `@${tag.name} is declared more than once`)
-    }
-
-    declared.set(tag.name, tag.value)
-  }
-
-  if (!declared.has(TOOL_TAG)) {
-    // Named in vocabulary order rather than in the order they were declared, so
-    // the same source is refused with the same sentence every time.
-    const written = QUALIFYING_TAGS.filter(tag => declared.has(tag)).map(tag => `@${tag}`)
-
-    throw annotationError(
-      action,
-      `declares ${written.join(', ')} without @${TOOL_TAG}, so it is not a tool and the rest says nothing`,
-    )
-  }
-
-  // A modifier tag is its own statement. A value written after one is an author
-  // saying something the vocabulary has no way to hear — most likely the boolean
-  // this tag used to take, whose `false` no longer says anything.
-  const value = declared.get(TOOL_TAG)
-
-  if (value !== '') {
-    throw annotationError(
-      action,
-      `@${TOOL_TAG} is a modifier tag and takes no value, and this one carries "${value}". `
-      + 'Leave it bare to expose the action, or delete it to leave the action unexposed',
-    )
-  }
-
-  if (!declared.has(EFFECTS_TAG)) {
-    throw annotationError(action, `is a tool and must declare @${EFFECTS_TAG}`, EFFECT_VALUES)
-  }
-
-  if (!declared.has(RETRY_TAG)) {
-    throw annotationError(action, `is a tool and must declare @${RETRY_TAG}`, RETRY_VALUES)
-  }
-
-  const retry = declared.get(RETRY_TAG)
-
-  if (!RETRY_VALUES.includes(retry)) {
-    throw annotationError(action, `@${RETRY_TAG} takes "${retry}"`, RETRY_VALUES)
-  }
-
-  const discloses = declared.has(DISCLOSES_TAG)
-    ? declared.get(DISCLOSES_TAG)
-    : DEFAULT_DISCLOSES
-
-  if (!DISCLOSES_VALUES.includes(discloses)) {
-    throw annotationError(action, `@${DISCLOSES_TAG} takes "${discloses}"`, DISCLOSES_VALUES)
-  }
-
-  // The member order below is the file format rather than a style choice: every
-  // generated action.json states these four in this order, and the other
-  // generator is held to the same order.
-  /* eslint-disable perfectionist/sort-objects */
-  return {
-    tool: true,
-    effects: parseEffects(action, declared.get(EFFECTS_TAG)),
-    retry,
-    discloses,
-  }
-  /* eslint-enable perfectionist/sort-objects */
-}
-
 // The exposure statement a RUST action makes about itself, or nothing at all.
 //
 // THE VOCABULARY IS STATED HERE AND NOWHERE ELSE, for the same reason the
@@ -370,21 +241,11 @@ function buildAiMetadata(action, tags, misspellings) {
 // qualifier without `@tool`; then a value on the modifier tag. The wording is
 // repeated rather than shared, because sharing it would have meant editing the
 // function the other two languages are already refused by.
-function buildRustAiMetadata(action, tags, refusals) {
-  const accepted = RUST_TAGS.map(tag => `@${tag}`)
-  const [refusal] = refusals
+function buildAiMetadata(action, tags, misspellings) {
+  const accepted = ACTION_TAGS.map(tag => `@${tag}`)
+  const [refusal] = misspellings
 
   if (refusal) {
-    if (refusal.kind === 'retired') {
-      throw annotationError(
-        action,
-        `writes @${refusal.written}, which a Rust action does not declare. `
-        + 'What calling a tool does, whether it is safe to call again and what it may disclose '
-        + 'are stated by the host about a tool it already has, not by the action about itself',
-        accepted,
-      )
-    }
-
     throw annotationError(
       action,
       `writes @${refusal.written}, which nothing claims and which is one edit from @${refusal.meant}`,
@@ -402,7 +263,7 @@ function buildRustAiMetadata(action, tags, refusals) {
   }
 
   const present = new Set(stated.map(tag => tag.name))
-  const whenUse = stated.filter(tag => tag.name === WHEN_USE_TAG).map(tag => tag.value)
+  const whenUse = stated.filter(tag => tag.name === USEWHEN_TAG).map(tag => tag.value)
   const declared = new Map()
 
   // `@when_use` is the one repeatable name, so it is collected above rather
@@ -410,7 +271,7 @@ function buildRustAiMetadata(action, tags, refusals) {
   // `@short_desc` is two answers to one question, and picking either is
   // deciding on the author's behalf which sentence they meant.
   for (const tag of stated) {
-    if (tag.name === WHEN_USE_TAG) {
+    if (tag.name === USEWHEN_TAG) {
       continue
     }
 
@@ -424,7 +285,7 @@ function buildRustAiMetadata(action, tags, refusals) {
   if (!declared.has(TOOL_TAG)) {
     // Named in vocabulary order rather than in the order they were declared, so
     // the same source is refused with the same sentence every time.
-    const written = RUST_QUALIFYING_TAGS.filter(tag => present.has(tag)).map(tag => `@${tag}`)
+    const written = QUALIFYING_TAGS.filter(tag => present.has(tag)).map(tag => `@${tag}`)
 
     throw annotationError(
       action,
@@ -449,56 +310,56 @@ function buildRustAiMetadata(action, tags, refusals) {
   // from carries this line and the prose arrives only after it has chosen, so a
   // tool without one is offered as a name and nothing else — and a default
   // written here would be this generator describing an action it has not read.
-  if (!declared.has(SHORT_DESC_TAG)) {
-    throw annotationError(action, `is a tool and must declare @${SHORT_DESC_TAG}`)
+  if (!declared.has(SHORTDESC_TAG)) {
+    throw annotationError(action, `is a tool and must declare @${SHORTDESC_TAG}`)
   }
 
-  const shortDesc = declared.get(SHORT_DESC_TAG)
+  const shortDesc = declared.get(SHORTDESC_TAG)
 
   if (shortDesc === '') {
-    throw annotationError(action, `@${SHORT_DESC_TAG} is written with nothing after it`)
+    throw annotationError(action, `@${SHORTDESC_TAG} is written with nothing after it`)
   }
 
   if (whenUse.includes('')) {
-    throw annotationError(action, `@${WHEN_USE_TAG} is written with nothing after it`)
+    throw annotationError(action, `@${USEWHEN_TAG} is written with nothing after it`)
   }
 
-  if (shortDesc.length > SHORT_DESC_CHARS) {
+  if (shortDesc.length > SHORTDESC_CHARS) {
     throw annotationError(
       action,
-      `writes a @${SHORT_DESC_TAG} of ${shortDesc.length} characters and a listing carries at `
-      + `most ${SHORT_DESC_CHARS}. Say the rest in the prose, which is read once the tool is `
+      `writes a @${SHORTDESC_TAG} of ${shortDesc.length} characters and a listing carries at `
+      + `most ${SHORTDESC_CHARS}. Say the rest in the prose, which is read once the tool is `
       + 'chosen',
     )
   }
 
-  if (whenUse.length > WHEN_USE_LIMIT) {
+  if (whenUse.length > USEWHEN_LIMIT) {
     throw annotationError(
       action,
-      `declares ${whenUse.length} @${WHEN_USE_TAG} lines and a listing carries at most `
-      + `${WHEN_USE_LIMIT}. Say the rest in the prose, which is read once the tool is chosen`,
+      `declares ${whenUse.length} @${USEWHEN_TAG} lines and a listing carries at most `
+      + `${USEWHEN_LIMIT}. Say the rest in the prose, which is read once the tool is chosen`,
     )
   }
 
-  const overlong = whenUse.find(line => line.length > WHEN_USE_CHARS)
+  const overlong = whenUse.find(line => line.length > USEWHEN_CHARS)
 
   if (overlong !== undefined) {
     throw annotationError(
       action,
-      `writes a @${WHEN_USE_TAG} of ${overlong.length} characters and each carries at most `
-      + `${WHEN_USE_CHARS}. A trigger is one line; the prose holds what it does`,
+      `writes a @${USEWHEN_TAG} of ${overlong.length} characters and each carries at most `
+      + `${USEWHEN_CHARS}. A trigger is one line; the prose holds what it does`,
     )
   }
 
   // The member order below is the file format rather than a style choice.
   /* eslint-disable perfectionist/sort-objects */
-  const ai = { tool: true, short_desc: shortDesc }
+  const ai = { tool: true, shortdesc: shortDesc }
   /* eslint-enable perfectionist/sort-objects */
 
   // Absent rather than empty when the author wrote none, so a reader is never
   // handed an empty list to tell apart from an unstated one.
   if (whenUse.length > 0) {
-    ai.when_use = whenUse
+    ai.usewhen = whenUse
   }
 
   return ai
@@ -650,31 +511,6 @@ function normalizeOpenDictionarySchemas(node) {
 
   Object.values(node).forEach(normalizeOpenDictionarySchemas)
 }
-
-function parseEffects(action, raw) {
-  const effects = raw.split(/[\s,]+/).filter(Boolean)
-
-  if (effects.length === 0) {
-    throw annotationError(action, `@${EFFECTS_TAG} names no effect`, EFFECT_VALUES)
-  }
-
-  const seen = new Set()
-
-  for (const effect of effects) {
-    if (!EFFECT_VALUES.includes(effect)) {
-      throw annotationError(action, `@${EFFECTS_TAG} names an unknown effect "${effect}"`, EFFECT_VALUES)
-    }
-
-    if (seen.has(effect)) {
-      throw annotationError(action, `@${EFFECTS_TAG} names "${effect}" twice`, EFFECT_VALUES)
-    }
-
-    seen.add(effect)
-  }
-
-  return effects
-}
-
 // A REFUSED SOURCE TAKES ITS STALE OUTPUT WITH IT.
 //
 // action.json is generated wholesale from the source beside it. When the source
@@ -864,7 +700,7 @@ function splitDoc(text) {
     const trimmed = line.trim()
     const name = trimmed.startsWith('@') ? trimmed.slice(1).split(/\s+/)[0] : ''
 
-    if (EXPOSURE_TAGS.includes(name)) {
+    if (ACTION_TAGS.includes(name)) {
       tags.push({ name, value: trimmed.slice(name.length + 1).trim() })
       continue
     }
@@ -875,7 +711,7 @@ function splitDoc(text) {
 
     // A near miss is left in the description rather than lifted out of it,
     // because it is refused before any description ships.
-    const meant = name && EXPOSURE_TAGS.find(claimed => withinOneEdit(name, claimed))
+    const meant = name && ACTION_TAGS.find(claimed => withinOneEdit(name, claimed))
 
     if (meant) {
       misspellings.push({ meant, written: name })
@@ -904,37 +740,30 @@ function splitDoc(text) {
 // description, because it is refused before any description ships.
 function splitRustDoc(text) {
   const descriptionLines = []
-  const refusals = []
+  const misspellings = []
   const tags = []
 
   for (const line of String(text).split('\n')) {
     const trimmed = line.trim()
     const name = trimmed.startsWith('@') ? trimmed.slice(1).split(/\s+/)[0] : ''
 
-    if (RUST_TAGS.includes(name)) {
+    if (ACTION_TAGS.includes(name)) {
       tags.push({ name, value: trimmed.slice(name.length + 1).trim() })
       continue
     }
 
     if (name) {
-      // A retired name is looked for first and matched loosely, so `@efects`
-      // is answered with the sentence that says the host states this, rather
-      // than with a spelling correction toward a tag that no longer exists.
-      const retired = RUST_RETIRED_TAGS.find(gone => withinOneEdit(name, gone))
-      const meant = RUST_TAGS.find(claimed => withinOneEdit(name, claimed))
+      const meant = ACTION_TAGS.find(claimed => withinOneEdit(name, claimed))
 
-      if (retired) {
-        refusals.push({ kind: 'retired', written: name })
-      }
-      else if (meant) {
-        refusals.push({ kind: 'misspelling', meant, written: name })
+      if (meant) {
+        misspellings.push({ meant, written: name })
       }
     }
 
     descriptionLines.push(line)
   }
 
-  return { description: descriptionLines.join('\n').trim(), refusals, tags }
+  return { description: descriptionLines.join('\n').trim(), misspellings, tags }
 }
 
 // EVERY DESCRIPTION A RUST ACTION'S SCHEMA CARRIES, SPLIT BY THE ONE READER
@@ -1233,10 +1062,10 @@ else if (rustPath) {
 
   let ai
   try {
-    ai = buildRustAiMetadata(
+    ai = buildAiMetadata(
       path.basename(actionDir),
       comments.flatMap(comment => comment.tags),
-      comments.flatMap(comment => comment.refusals),
+      comments.flatMap(comment => comment.misspellings),
     )
   }
   catch (err) {

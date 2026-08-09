@@ -158,7 +158,7 @@ export async function handler(req: any): Promise<{ success: boolean }> {
 
 	// Extract metadata
 	fs := fsx.OSFileSystem{}
-	if err := describeActionFromSource(fs, actionDir); err != nil {
+	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("describeActionFromSource failed: %v", err)
 	}
 
@@ -236,7 +236,7 @@ export async function handler(): Promise<{ success: boolean }> {
 	}
 
 	fs := fsx.OSFileSystem{}
-	if err := describeActionFromSource(fs, actionDir); err != nil {
+	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("describeActionFromSource failed: %v", err)
 	}
 
@@ -293,7 +293,7 @@ export async function handler(): Promise<{ ok: boolean }> {
 	}
 
 	fs := fsx.OSFileSystem{}
-	if err := describeActionFromSource(fs, actionDir); err != nil {
+	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("a member typed as a union stopped the extraction: %v", err)
 	}
 
@@ -314,7 +314,7 @@ export async function handler(): Promise<{ ok: boolean }> {
 
 	// Running the extractor again over the same source must not change a byte.
 	// A rewrite that reorders keys or drops what it cannot hold shows up here.
-	if err := describeActionFromSource(fs, actionDir); err != nil {
+	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("second extraction failed: %v", err)
 	}
 
@@ -353,8 +353,8 @@ func TestExtractTypeScriptMetadataKeepsWhatIsWrittenAroundTheAnnotations(t *test
  * The things module.
  *
  * @tool
- * @effects read
- * @retry safe
+ * @shortdesc Reads things by name.
+ * @usewhen A caller names one thing and wants the row behind it.
  */
 
 import simple from '@simple/sdk'
@@ -376,7 +376,7 @@ simple.Handle(() => ({ ok: true }))
 		t.Fatalf("Failed to write test TypeScript file: %v", err)
 	}
 
-	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir); err != nil {
+	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("expected the action to be described, got %v", err)
 	}
 
@@ -426,8 +426,8 @@ func TestExtractTypeScriptMetadataStatesOneDescription(t *testing.T) {
  * Reads things.
  *
  * @tool
- * @effects read
- * @retry safe
+ * @shortdesc Reads things by name.
+ * @usewhen A caller names one thing and wants the row behind it.
  *
  * A name matching no row is REFUSED rather than answered with an empty
  * result, so an empty answer is never false good news.
@@ -443,7 +443,7 @@ simple.Handle(() => ({ ok: true }))
 		t.Fatalf("Failed to write test TypeScript file: %v", err)
 	}
 
-	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir); err != nil {
+	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("expected the action to be described, got %v", err)
 	}
 

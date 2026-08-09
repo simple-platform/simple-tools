@@ -69,7 +69,7 @@ func TestConcurrentExtractionsDoNotShareAScript(t *testing.T) {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			if err := describeActionFromSource(fsx.OSFileSystem{}, dir); err != nil {
+			if err := describeActionFromSource(fsx.OSFileSystem{}, dir, LanguageTypeScript); err != nil {
 				mu.Lock()
 				failures = append(failures, fmt.Sprintf("%s: %v", filepath.Base(dir), err))
 				mu.Unlock()
