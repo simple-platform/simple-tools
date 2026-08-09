@@ -47,6 +47,24 @@ or a secret has to say so, in the same edit that makes it do so.
 A tool's revision is **not** in this vocabulary. The host pins it, so there is
 nothing here for an author to get wrong about it.
 
+### A second vocabulary is in the generator and is not reachable from here
+
+The generator this CLI embeds is carried over from the platform verbatim, and it
+also describes a **Rust** vocabulary — `@tool`, `@short_desc`, `@when_use` — that
+does not apply to anything this CLI builds. `simple build` detects TypeScript or
+Go and nothing else.
+
+So `@short_desc` written in a TypeScript or Go action is not an exposure tag
+here, and it does not fail the build either: like any other unclaimed `@name`, it
+stays where the author put it and ships as part of the description. Only a **near
+miss** of a tag in the table above — one edit away from `@effects`, say — is
+refused, on the grounds that it was plainly meant to be one.
+
+It is carried anyway rather than trimmed, because half a sync is the dangerous
+shape: a generator edited on the way in is one nobody can diff against the
+original, and the two copies have already drifted once. Reading the whole file
+and using the part that applies keeps the copy checkable.
+
 ## Why `@tool` is a modifier tag
 
 TSDoc separates _modifier_ tags, whose presence is the whole statement, from
@@ -191,6 +209,8 @@ half-read annotation is how an action ends up advertised as something it is not:
 - `@effects`, `@retry` or `@discloses` written without `@tool`
 - a value outside the lists above, or an effect named twice
 - the same tag declared twice
+- a name one edit away from a tag above — `@effect`, `@disclose` — which no
+  reader would ever hear, and which the author plainly wrote to be heard
 
 A refusal names the action, the tag, and what would have been accepted. It also
 **discards the `action.json` already on disk** — that file was generated from an
