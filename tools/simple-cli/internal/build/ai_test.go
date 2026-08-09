@@ -30,9 +30,51 @@ func TestTheDeclaredVocabularyIsTheGeneratorsOwn(t *testing.T) {
 	}
 }
 
-// goExtractorTagPattern finds the vocabulary as the embedded Go extractor
-// declares it.
-var goExtractorTagPattern = regexp.MustCompile(`(?m)^\t(\w+)Tag\s+= "([a-z]+)"$`)
+// THE GO EXTRACTOR NAMES ITS VOCABULARY TOO, AND IS READ THE SAME WAY.
+//
+// Symmetry with the script side is the point, not tidiness. This used to match
+// every `xTag = "..."` const in the file and call the result the vocabulary,
+// which is true only while the file declares exactly one — and it holds today by
+// luck rather than by construction: the value pattern was `[a-z]+`, so a tag
+// spelled with an underscore was invisible to it, and the script side had
+// already gained two of those without this check noticing. Reading the declared
+// array means a second vocabulary appearing here is read as a second
+// vocabulary rather than folded into this one.
+var (
+	goExtractorVocabularyPattern = regexp.MustCompile(`(?m)^\texposureTags = \[\]string\{([^}]*)\}`)
+	goExtractorTagValuePattern   = regexp.MustCompile(`(?m)^\t(\w+Tag)\s+= "([a-z_]+)"$`)
+)
+
+// goExtractorExposureTags is the vocabulary as the embedded Go extractor
+// declares it, in the order it lists it.
+func goExtractorExposureTags() []string {
+	vocabulary := goExtractorVocabularyPattern.FindStringSubmatch(extractGoDocContent)
+	if vocabulary == nil {
+		return nil
+	}
+
+	values := make(map[string]string)
+	for _, declaration := range goExtractorTagValuePattern.FindAllStringSubmatch(extractGoDocContent, -1) {
+		values[declaration[1]] = declaration[2]
+	}
+
+	names := make([]string, 0, 4)
+
+	for _, member := range strings.Split(vocabulary[1], ",") {
+		member = strings.TrimSpace(member)
+		if member == "" {
+			continue
+		}
+
+		if value, ok := values[member]; ok {
+			names = append(names, value)
+		} else {
+			names = append(names, member)
+		}
+	}
+
+	return names
+}
 
 // BOTH HALVES OF THE EMBEDDED GENERATOR CLAIM THE SAME VOCABULARY.
 //
@@ -43,12 +85,7 @@ var goExtractorTagPattern = regexp.MustCompile(`(?m)^\t(\w+)Tag\s+= "([a-z]+)"$`
 // shape: it does not fail to build, it makes the language an action is written
 // in decide which tags exist.
 func TestBothHalvesOfTheGeneratorClaimTheSameVocabulary(t *testing.T) {
-	matches := goExtractorTagPattern.FindAllStringSubmatch(extractGoDocContent, -1)
-
-	claimed := make([]string, 0, len(matches))
-	for _, match := range matches {
-		claimed = append(claimed, match[2])
-	}
+	claimed := goExtractorExposureTags()
 
 	if len(claimed) == 0 {
 		t.Fatal("no tag declarations were found in the embedded Go extractor, so this check proves nothing")

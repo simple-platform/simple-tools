@@ -1,6 +1,9 @@
 package build
 
-import "regexp"
+import (
+	"regexp"
+	"strings"
+)
 
 // THE AUTHOR-FACING EXPOSURE VOCABULARY, AS THIS TOOL NEEDS TO KNOW IT.
 //
@@ -34,18 +37,58 @@ func ExposureTagNames() []string {
 	return append([]string(nil), exposureTags...)
 }
 
-// generatorTagPattern finds the tag names the embedded generator claims, one per
-// declaration, so the list above can be checked against the file that enforces
-// it rather than against a memory of it.
-var generatorTagPattern = regexp.MustCompile(`(?m)^const [A-Z_]+_TAG = '([a-z]+)'$`)
+// THE GENERATOR NAMES ITS VOCABULARY, SO THIS READS THE NAME RATHER THAN
+// COUNTING DECLARATIONS.
+//
+// It used to match every `const X_TAG = '...'` in the file and treat the result
+// as the vocabulary. That held while the generator described one language. It
+// stopped the moment it described two: the script now declares a Rust vocabulary
+// beside this one, and a tag belonging to that vocabulary would have been read
+// as belonging to this one.
+//
+// It failed in the other direction too, and silently. The value pattern was
+// `[a-z]+`, which cannot match an underscore, so `short_desc` and `when_use`
+// were invisible to it — the check went on passing while the file it checks had
+// gained two tags it could not see. A staleness gate that cannot see the change
+// is the shape of bug this pair of checks exists to catch, so it is worth
+// naming: it was blind to its own input.
+//
+// Reading the declared array fixes both. The array says which names are THIS
+// vocabulary, and the constants say what those names are worth.
+var (
+	generatorVocabularyPattern = regexp.MustCompile(`(?m)^const EXPOSURE_TAGS = \[([^\]]*)\]`)
+	generatorTagValuePattern   = regexp.MustCompile(`(?m)^const ([A-Z_]+_TAG) = '([a-z_]+)'$`)
+)
 
-// generatorExposureTags is the vocabulary as the embedded generator declares it.
+// generatorExposureTags is the vocabulary as the embedded generator declares it,
+// in the order the generator lists it.
 func generatorExposureTags() []string {
-	matches := generatorTagPattern.FindAllStringSubmatch(extractScriptContent, -1)
+	vocabulary := generatorVocabularyPattern.FindStringSubmatch(extractScriptContent)
+	if vocabulary == nil {
+		return nil
+	}
 
-	names := make([]string, 0, len(matches))
-	for _, match := range matches {
-		names = append(names, match[1])
+	values := make(map[string]string)
+	for _, declaration := range generatorTagValuePattern.FindAllStringSubmatch(extractScriptContent, -1) {
+		values[declaration[1]] = declaration[2]
+	}
+
+	names := make([]string, 0, 4)
+
+	for _, member := range strings.Split(vocabulary[1], ",") {
+		member = strings.TrimSpace(member)
+		if member == "" {
+			continue
+		}
+
+		// A member the constants do not define is carried through as its own
+		// name rather than dropped. Dropping it would shrink the vocabulary
+		// quietly, which is the failure above wearing a different hat.
+		if value, ok := values[member]; ok {
+			names = append(names, value)
+		} else {
+			names = append(names, member)
+		}
 	}
 
 	return names
