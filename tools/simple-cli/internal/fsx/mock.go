@@ -15,6 +15,7 @@ type MockFileSystem struct {
 	MkdirAllErr  error
 	WriteFileErr error
 	ReadFileErr  error
+	RemoveErr    error
 	Files        map[string][]byte
 }
 
@@ -69,6 +70,19 @@ func (m *MockFileSystem) ReadFile(name string) ([]byte, error) {
 
 func (m *MockFileSystem) ReadDir(name string) ([]os.DirEntry, error) {
 	return []os.DirEntry{}, nil
+}
+
+func (m *MockFileSystem) Remove(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.RemoveErr != nil {
+		return m.RemoveErr
+	}
+
+	delete(m.Files, name)
+
+	return nil
 }
 
 // mockFileInfo implements fs.FileInfo

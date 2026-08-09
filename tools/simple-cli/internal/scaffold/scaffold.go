@@ -73,6 +73,20 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		return err
 	}
 
+	// The exposure vocabulary, declared to every TypeScript tool that reads doc
+	// comments. Written at the space root rather than beside each action because
+	// that is where a TSDoc reader looks: it walks up from the source file to the
+	// first tsdoc.json it finds, so one file covers every action ever added
+	// below it, and an author who adds a new one inherits the vocabulary without
+	// doing anything.
+	//
+	// Without it, `@tool` is an undefined tag: the editor underlines it and ESLint
+	// reports it, which teaches an author that the annotation is a mistake right
+	// as they write the one thing that makes their action reachable.
+	if err := copyTemplate(fsys, tplFS, "templates/tsdoc.json", filepath.Join(rootPath, "tsdoc.json")); err != nil {
+		return err
+	}
+
 	// Generate simple.scl with tenant configuration
 	simpleSCL := generateSimpleSCL(cfg.TenantName)
 	if err := fsys.WriteFile(filepath.Join(rootPath, "simple.scl"), []byte(simpleSCL), fsx.FilePerm); err != nil {
@@ -402,6 +416,17 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		{"templates/action/package.json", filepath.Join(actionPath, "package.json")},
 		{"templates/action/index.ts", filepath.Join(actionPath, "src", "index.ts")},
 		{"templates/action/tsconfig.json", filepath.Join(actionPath, "tsconfig.json")},
+		// A TSDoc reader walks up from the source file and STOPS at the first
+		// folder holding a package.json or a tsconfig.json — which is this one, for
+		// every action. So the space's vocabulary has to be reachable from here or
+		// it is not reachable at all: a file kept only at the space root is never
+		// found, and `@tool` reads as an undefined tag in every action under it.
+		//
+		// This one inherits rather than restates, so the vocabulary still has a
+		// single home. A path that stops resolving fails loudly — the reader
+		// reports the missing base file — rather than quietly falling back to a
+		// configuration that knows none of these tags.
+		{"templates/action/tsdoc.json", filepath.Join(actionPath, "tsdoc.json")},
 		{"templates/action/vitest.config.ts", filepath.Join(actionPath, "vitest.config.ts")},
 		{"templates/action/tests/helpers.ts", filepath.Join(testsPath, "helpers.ts")},
 		{"templates/action/tests/index.test.ts", filepath.Join(testsPath, "index.test.ts")},

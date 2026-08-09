@@ -67,13 +67,13 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 
 		// Skip if too large (10MB limit is a safety guard to prevent memory exhaustion)
 		if info.Size() > 10*1024*1024 {
-			sb.WriteString(fmt.Sprintf("===== %s (Skipped: Too large) =====\n\n", relPath))
+			fmt.Fprintf(&sb, "===== %s (Skipped: Too large) =====\n\n", relPath)
 			return nil
 		}
 
 		content, isBinary, err := readFile(path)
 		if err != nil {
-			sb.WriteString(fmt.Sprintf("===== %s (Error reading file) =====\n\n", relPath))
+			fmt.Fprintf(&sb, "===== %s (Error reading file) =====\n\n", relPath)
 			return nil
 		}
 		if isBinary {
@@ -82,7 +82,7 @@ func (p *Processor) ProcessDirectory(dirPath string) (string, error) {
 		}
 
 		// Append formatted content with header
-		sb.WriteString(fmt.Sprintf("===== %s =====\n%s\n\n", relPath, content))
+		fmt.Fprintf(&sb, "===== %s =====\n%s\n\n", relPath, content)
 
 		return nil
 	})

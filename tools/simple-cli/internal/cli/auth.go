@@ -176,7 +176,7 @@ func runAuthLogout(_ *cobra.Command, _ []string) error {
 
 	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, authEnv)
 	auth := deploy.NewAuthenticator()
-	
+
 	if err := auth.ClearCache(tenantEnvKey); err != nil {
 		return fmt.Errorf("failed to clear session token: %w", err)
 	}

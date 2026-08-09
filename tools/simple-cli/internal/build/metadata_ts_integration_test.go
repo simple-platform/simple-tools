@@ -1,12 +1,84 @@
 package build
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"simple-cli/internal/fsx"
 )
+
+// generatedActionMetadata is what the generator left on disk, read back by the
+// test rather than by the extractor.
+//
+// Decoded as JSON rather than into structs this package declares, because it no
+// longer declares any. Structs that modelled a SUBSET of JSON Schema are what
+// silently flattened shapes the generator can hold, and a test that reads
+// through a narrower model proves the file only within that model — the shape it
+// cannot hold is exactly the one worth asserting about.
+type generatedMetadata map[string]any
+
+func generatedActionMetadata(t *testing.T, actionDir string) generatedMetadata {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("Failed to read action.json: %v", err)
+	}
+
+	if len(data) == 0 || data[len(data)-1] != '\n' {
+		t.Error("action.json should end with a newline")
+	}
+
+	var metadata generatedMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		t.Fatalf("Failed to decode action.json: %v", err)
+	}
+
+	return metadata
+}
+
+// description is what the action says about itself.
+func (m generatedMetadata) description() string {
+	described, _ := m["description"].(string)
+	return described
+}
+
+// object is the JSON object at a path through the artifact, or nil where the
+// path does not reach one.
+func (m generatedMetadata) object(path ...string) map[string]any {
+	var node any = map[string]any(m)
+
+	for _, key := range path {
+		object, isObject := node.(map[string]any)
+		if !isObject {
+			return nil
+		}
+
+		node = object[key]
+	}
+
+	object, _ := node.(map[string]any)
+
+	return object
+}
+
+// value is whatever the artifact carries at a path, including the false and the
+// absent an `object` cannot tell apart.
+func (m generatedMetadata) value(path ...string) any {
+	if len(path) == 0 {
+		return map[string]any(m)
+	}
+
+	parent := m.object(path[:len(path)-1]...)
+	if parent == nil {
+		return nil
+	}
+
+	return parent[path[len(path)-1]]
+}
 
 // TestExtractTypeScriptMetadata_Integration tests the Node.js-based extraction
 // This test requires Node.js to be installed and will install npm packages if needed
@@ -86,68 +158,54 @@ export async function handler(req: any): Promise<{ success: boolean }> {
 
 	// Extract metadata
 	fs := fsx.OSFileSystem{}
-	metadata, err := extractTypeScriptMetadata(fs, actionDir)
-	if err != nil {
-		t.Fatalf("extractTypeScriptMetadata failed: %v", err)
+	if err := describeActionFromSource(fs, actionDir); err != nil {
+		t.Fatalf("describeActionFromSource failed: %v", err)
 	}
 
-	// Verify action.json was created with trailing newline
-	actionJSONPath := filepath.Join(actionDir, "action.json")
-	data, err := os.ReadFile(actionJSONPath)
-	if err != nil {
-		t.Fatalf("Failed to read action.json: %v", err)
-	}
-
-	if len(data) == 0 || data[len(data)-1] != '\n' {
-		t.Error("action.json should end with a newline")
-	}
-
-	t.Logf("Generated action.json:\n%s", string(data))
+	metadata := generatedActionMetadata(t, actionDir)
 
 	// Verify the metadata
-	if metadata.Description == "" {
+	if metadata.description() == "" {
 		t.Error("Description should not be empty")
 	}
 
-	if metadata.Schema.Ref != "" || len(metadata.Schema.Definitions) > 0 {
-		t.Fatalf("schema should be root-inlined, got ref=%q definitions=%d", metadata.Schema.Ref, len(metadata.Schema.Definitions))
+	if metadata.value("schema", "$ref") != nil || metadata.object("schema", "definitions") != nil {
+		t.Fatalf("schema should be root-inlined, got %#v", metadata.value("schema"))
 	}
 
-	if metadata.Schema.Type != "object" {
-		t.Fatalf("schema type = %s, want object", metadata.Schema.Type)
+	if metadata.value("schema", "type") != "object" {
+		t.Fatalf("schema type = %v, want object", metadata.value("schema", "type"))
 	}
 
 	// Check that preferences is properly nested
-	preferences, ok := metadata.Schema.Properties["preferences"]
-	if !ok {
+	preferences := metadata.object("schema", "properties", "preferences")
+	if preferences == nil {
 		t.Fatal("preferences property not found")
 	}
 
-	if preferences.Type != "object" {
-		t.Errorf("preferences type = %s, want object", preferences.Type)
+	if preferences["type"] != "object" {
+		t.Errorf("preferences type = %v, want object", preferences["type"])
 	}
 
 	// Check nested properties
-	if len(preferences.Properties) == 0 {
+	if nested := metadata.object("schema", "properties", "preferences", "properties"); len(nested) == 0 {
 		t.Error("preferences should have nested properties")
 	}
 
-	message, ok := metadata.Schema.Properties["message"]
-	if !ok {
+	if metadata.object("schema", "properties", "message") == nil {
 		t.Fatal("message property not found")
 	}
 
-	if message.MaxLength == nil || *message.MaxLength != 280 {
-		t.Fatalf("message maxLength = %v, want 280", message.MaxLength)
+	if maxLength := metadata.value("schema", "properties", "message", "maxLength"); maxLength != float64(280) {
+		t.Fatalf("message maxLength = %v, want 280", maxLength)
 	}
 
-	openMetadata, ok := metadata.Schema.Properties["metadata"]
-	if !ok {
+	if metadata.object("schema", "properties", "metadata") == nil {
 		t.Fatal("metadata property not found")
 	}
 
-	if openMetadata.AdditionalProperties != true {
-		t.Fatalf("metadata additionalProperties = %#v, want true", openMetadata.AdditionalProperties)
+	if open := metadata.value("schema", "properties", "metadata", "additionalProperties"); open != true {
+		t.Fatalf("metadata additionalProperties = %#v, want true", open)
 	}
 }
 
@@ -178,20 +236,225 @@ export async function handler(): Promise<{ success: boolean }> {
 	}
 
 	fs := fsx.OSFileSystem{}
-	metadata, err := extractTypeScriptMetadata(fs, actionDir)
+	if err := describeActionFromSource(fs, actionDir); err != nil {
+		t.Fatalf("describeActionFromSource failed: %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if metadata.value("schema", "type") != "object" {
+		t.Fatalf("schema type = %v, want object", metadata.value("schema", "type"))
+	}
+
+	if properties := metadata.object("schema", "properties"); properties == nil || len(properties) != 0 {
+		t.Fatalf("schema properties = %#v, want empty object", properties)
+	}
+
+	if open := metadata.value("schema", "additionalProperties"); open != false {
+		t.Fatalf("schema additionalProperties = %#v, want false", open)
+	}
+}
+
+// A SHAPE THIS PACKAGE CANNOT MODEL IS STILL THE ACTION'S CONTRACT.
+//
+// A member typed as a union renders `"type": ["string", "null"]`. The structs
+// in this package hold a type as one string, so re-rendering the generator's
+// output through them stopped the build dead on a source the platform's own
+// generator describes without complaint — two tools disagreeing about whether
+// the same action builds at all.
+//
+// So the generator's bytes are left alone, and this holds them to it: what the
+// CLI leaves on disk is what the generator wrote, byte for byte.
+func TestExtractTypeScriptMetadataLeavesTheGeneratorsBytesAlone(t *testing.T) {
+	if err := checkNodeJS(); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	actionDir := filepath.Join(t.TempDir(), "test-action")
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("Failed to create test action directory: %v", err)
+	}
+
+	tsContent := `/**
+ * Reads a register.
+ */
+export interface Payload {
+  /** One site, or null when scoping by company. */
+  site_id: string | null;
+}
+
+export async function handler(): Promise<{ ok: boolean }> {
+  return { ok: true };
+}
+`
+
+	if err := os.WriteFile(filepath.Join(actionDir, "index.ts"), []byte(tsContent), 0644); err != nil {
+		t.Fatalf("Failed to write test TypeScript file: %v", err)
+	}
+
+	fs := fsx.OSFileSystem{}
+	if err := describeActionFromSource(fs, actionDir); err != nil {
+		t.Fatalf("a member typed as a union stopped the extraction: %v", err)
+	}
+
+	written, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
 	if err != nil {
-		t.Fatalf("extractTypeScriptMetadata failed: %v", err)
+		t.Fatalf("Failed to read action.json: %v", err)
 	}
 
-	if metadata.Schema.Type != "object" {
-		t.Fatalf("schema type = %s, want object", metadata.Schema.Type)
+	var decoded map[string]any
+	if err := json.Unmarshal(written, &decoded); err != nil {
+		t.Fatalf("Failed to decode action.json: %v", err)
 	}
 
-	if metadata.Schema.Properties == nil || len(metadata.Schema.Properties) != 0 {
-		t.Fatalf("schema properties = %#v, want empty object", metadata.Schema.Properties)
+	siteID := decoded["schema"].(map[string]any)["properties"].(map[string]any)["site_id"].(map[string]any)
+	if _, union := siteID["type"].([]any); !union {
+		t.Fatalf("the union type did not survive: %#v", siteID["type"])
 	}
 
-	if metadata.Schema.AdditionalProperties != false {
-		t.Fatalf("schema additionalProperties = %#v, want false", metadata.Schema.AdditionalProperties)
+	// Running the extractor again over the same source must not change a byte.
+	// A rewrite that reorders keys or drops what it cannot hold shows up here.
+	if err := describeActionFromSource(fs, actionDir); err != nil {
+		t.Fatalf("second extraction failed: %v", err)
+	}
+
+	again, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("Failed to read action.json: %v", err)
+	}
+
+	if string(again) != string(written) {
+		t.Fatalf("the generated contract is not stable across runs:\n%s\n---\n%s", written, again)
+	}
+}
+
+// THE SAME TWO PROPERTIES FOR THE TYPESCRIPT PATH, WHICH IS A DIFFERENT
+// GENERATOR IN A CHILD PROCESS.
+//
+// The two describe one authoring vocabulary, so they have to agree about one
+// doc block. They did not: the TypeScript one read the description as the text
+// before the first tag, which a TypeScript parser hands back with everything
+// after that tag folded into the tag's own comment — so a paragraph written
+// after the annotations was deleted from the text a model reads, silently, on a
+// build that exited zero. And it read annotations only from the block that
+// supplied the description, so a statement written anywhere else in the file
+// left the action quietly not a tool.
+func TestExtractTypeScriptMetadataKeepsWhatIsWrittenAroundTheAnnotations(t *testing.T) {
+	if err := checkNodeJS(); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	actionDir := filepath.Join(t.TempDir(), "query-things")
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("Failed to create test action directory: %v", err)
+	}
+
+	tsContent := `/**
+ * The things module.
+ *
+ * @tool
+ * @effects read
+ * @retry safe
+ */
+
+import simple from '@simple/sdk'
+
+/**
+ * Reads things.
+ *
+ * A name matching no row is REFUSED rather than answered with an empty
+ * result, so an empty answer is never false good news.
+ */
+export interface Payload {
+  name: string;
+}
+
+simple.Handle(() => ({ ok: true }))
+`
+
+	if err := os.WriteFile(filepath.Join(actionDir, "index.ts"), []byte(tsContent), 0644); err != nil {
+		t.Fatalf("Failed to write test TypeScript file: %v", err)
+	}
+
+	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if metadata.value("ai", "tool") != true {
+		t.Fatalf("an exposure statement written outside the describing block was dropped: %#v", metadata.object("ai"))
+	}
+
+	if !strings.Contains(metadata.description(), "REFUSED rather than answered") {
+		t.Fatalf("the description lost the rule written in it, got %q", metadata.description())
+	}
+
+	if strings.Contains(metadata.description(), "@") {
+		t.Fatalf("expected every annotation to be lifted out of the description, got %q", metadata.description())
+	}
+}
+
+// THE SCHEMA STATES THE SAME DESCRIPTION THE ACTION DOES.
+//
+// A SECOND parser reads the source on the way to the input schema, and it ends a
+// doc comment at the first tag. An author who writes anything after the
+// annotations left the artifact carrying two descriptions: the action's, whole,
+// and the schema's, cut short — from one run, at exit 0, with no warning and no
+// way for a reader of the file to tell which of the two the author wrote.
+//
+// This is the path a THIRD PARTY builds through, and it is the only one they
+// have. It is also the only place the cut can be caught: nothing later in this
+// tool re-reads the source, so a description that arrives here already severed
+// arrives severed everywhere.
+//
+// Held as EQUALITY rather than as "mentions the rule somewhere". A cut lands
+// mid-sentence, and a half-sentence is not a weaker version of a rule — it is a
+// different and confident claim, which is what makes it worse than a description
+// that was never written.
+func TestExtractTypeScriptMetadataStatesOneDescription(t *testing.T) {
+	if err := checkNodeJS(); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	actionDir := filepath.Join(t.TempDir(), "query-things")
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("Failed to create test action directory: %v", err)
+	}
+
+	tsContent := `/**
+ * Reads things.
+ *
+ * @tool
+ * @effects read
+ * @retry safe
+ *
+ * A name matching no row is REFUSED rather than answered with an empty
+ * result, so an empty answer is never false good news.
+ */
+export interface Payload {
+  name: string;
+}
+
+simple.Handle(() => ({ ok: true }))
+`
+
+	if err := os.WriteFile(filepath.Join(actionDir, "index.ts"), []byte(tsContent), 0644); err != nil {
+		t.Fatalf("Failed to write test TypeScript file: %v", err)
+	}
+
+	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if !strings.Contains(metadata.description(), "REFUSED rather than answered") {
+		t.Fatalf("the description lost the rule written in it, got %q", metadata.description())
+	}
+
+	if described := metadata.value("schema", "description"); described != metadata.description() {
+		t.Fatalf("the schema describes the action differently from the action:\n%q\n---\n%q",
+			described, metadata.description())
 	}
 }
