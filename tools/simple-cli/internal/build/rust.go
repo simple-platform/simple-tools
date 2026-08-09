@@ -87,14 +87,37 @@ func (m *BuildManager) buildRustAction(actionDir, actionName string, needsSync, 
 		return fail(fmt.Errorf("this action has src/main.rs but no Cargo.toml: a Rust action is a crate, and cargo has nothing to build without its manifest"))
 	}
 
-	// Metadata extraction is shared with every other language and is not fatal
-	// for any of them: a build that produced a module is worth keeping even
-	// when the description beside it could not be regenerated. The Rust branch
-	// of the extractor lands separately, so today this reports a warning and
-	// the module is still built.
+	// AN ACTION THAT CANNOT BE DESCRIBED FROM ITS OWN SOURCE DOES NOT BUILD,
+	// WHICH IS THE SAME SENTENCE THE TYPESCRIPT PATH ALREADY ENFORCES.
+	//
+	// This reported the failure into a progress row and carried on, because
+	// there was no Rust branch in the generator yet: nothing here could produce
+	// a description, and failing a build over a step that was not going to run
+	// was a worse trade than saying so and compiling the module. That branch has
+	// since landed, so the reason is gone and what is left is one CLI answering
+	// a single malformed exposure statement two different ways depending on the
+	// language the action happens to be written in.
+	//
+	// Measured through the built binary, on an action whose only defect was
+	// `@tool true`: the row naming the refusal was overwritten by "Compiling
+	// (Sync)..." milliseconds later, the build printed Done and exited 0, and
+	// `--json` reported `"failed": 0`. The same defect in TypeScript came back
+	// as `"failed": 1` carrying the generator's sentence — the same generator,
+	// the same sentence, delivered to nobody.
+	//
+	// Swallowing it costs more here than the equivalent ever cost there, because
+	// a refusal DISCARDS the action.json generated from the earlier source. A
+	// TypeScript action that swallowed its refusal at least shipped a stale
+	// description; a Rust one ships a module with no description, no input
+	// schema and no statement about whether an agent may call it at all, from a
+	// build that reported success.
+	//
+	// The failure is carried out whole rather than summarised: a refusal is the
+	// exact sentence its author has to read to fix their source, and every other
+	// failure this step raises already names what could not be done.
 	report("Extracting metadata...")
 	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
-		report(fmt.Sprintf("Metadata extraction warning: %v", err))
+		return fail(err)
 	}
 
 	buildDir := filepath.Join(actionDir, "build")

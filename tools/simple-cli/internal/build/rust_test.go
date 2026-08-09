@@ -406,44 +406,66 @@ func TestBuildAction_Rust_MissingManifest(t *testing.T) {
 	}
 }
 
-// TestBuildAction_Rust_MetadataFailureIsNotFatal pins that Rust keeps the rule
-// every other language already follows: a module that built is worth keeping
-// even when the description beside it could not be regenerated.
-func TestBuildAction_Rust_MetadataFailureIsNotFatal(t *testing.T) {
-	withRustBuildHarness(t, nil)
+// A RUST ACTION THAT CANNOT BE DESCRIBED DOES NOT BUILD, WHICH IS WHAT THE
+// TYPESCRIPT PATH ALREADY DID.
+//
+// This pinned the opposite, from when the generator had no Rust branch and the
+// step could not produce a description for a Rust action at all. The branch has
+// landed, and TestBuildAction_MetadataExtractionFailureStopsTheBuild holds the
+// TypeScript path to returning the failure — so what the old expectation was
+// preserving was one CLI answering a single malformed exposure statement two
+// ways depending on what the action was written in.
+//
+// Measured through the built binary, on a Rust action whose only defect was
+// `@tool true`: the progress row naming the refusal was overwritten by the next
+// step, the build printed Done and exited 0, `--json` reported `"failed": 0`,
+// and the refusal reached the developer nowhere. The same source in TypeScript
+// came back as `"failed": 1` carrying the generator's sentence.
+//
+// The refusal had also DISCARDED the action.json generated from the earlier
+// source, so what shipped was a module with no description, no input schema and
+// no statement about whether an agent may call it — from a build that reported
+// success. That is what makes swallowing it worse here than it ever was on the
+// TypeScript path.
+//
+// The two halves are asserted together: the failure comes back whole, AND the
+// compile after it was never reached, because a build that fails at the end has
+// still done the work of a build that succeeded.
+func TestBuildAction_Rust_MetadataFailureStopsTheBuild(t *testing.T) {
+	h := withRustBuildHarness(t, nil)
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
-		return errors.New("no action source file found")
+
+	refusal := &AnnotationRefusal{
+		Refusal: `greet-user: @tool is a modifier tag and takes no value, and this one carries "true"`,
 	}
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error { return refusal }
 
 	actionDir := rustAction(t, t.TempDir())
 	m := NewBuildManager(DefaultBuildOptions())
 	m.tools.WasmOpt = "wasm-opt"
 
-	var reports []string
-	var mu sync.Mutex
-	result := m.BuildAction(context.Background(), actionDir, func(item, status string, done bool, err error) {
-		mu.Lock()
-		defer mu.Unlock()
-		reports = append(reports, status)
-	})
+	result := m.BuildAction(context.Background(), actionDir, nil)
 
-	if result.Error != nil {
-		t.Fatalf("BuildAction() error = %v, want nil (the module still built)", result.Error)
-	}
-	if !fileExists(filepath.Join(actionDir, "build", "release.wasm")) {
-		t.Error("build/release.wasm was not written")
+	if result.Error == nil {
+		t.Fatal("BuildAction() error = nil, want the refusal (a malformed annotation must fail the build)")
 	}
 
-	warned := false
-	for _, status := range reports {
-		if strings.Contains(status, "Metadata extraction warning") {
-			warned = true
-			break
-		}
+	// The refusal reaches the caller as the sentence its author has to act on,
+	// not as a category the caller then has to go looking for the detail of.
+	if !errors.Is(result.Error, error(refusal)) {
+		t.Errorf("BuildAction() error = %v, want it to carry the refusal", result.Error)
 	}
-	if !warned {
-		t.Errorf("Expected a metadata warning in the progress reports, got: %v", reports)
+
+	if !strings.Contains(result.Error.Error(), "modifier tag and takes no value") {
+		t.Errorf("BuildAction() error = %q, want the refusal text an author can act on", result.Error)
+	}
+
+	// Nothing after the failed gate ran.
+	if len(h.cargo) != 0 {
+		t.Errorf("cargo ran %d times past the refusal", len(h.cargo))
+	}
+	if fileExists(filepath.Join(actionDir, "build", "release.wasm")) {
+		t.Error("a module was written for an action the build could not describe")
 	}
 }
 

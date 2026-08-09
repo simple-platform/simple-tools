@@ -24,8 +24,11 @@ import (
 // is always the shortest one to write. Asserted here, the shortest fix stops
 // compiling.
 //
-// Both languages, because they are two different extractors: one shells out to
-// a Node generator, the other parses in this process.
+// Every language, because each is read by a different parser: TypeScript by
+// ts-morph, Go by an extractor built from a file carried beside the generator,
+// Rust by a crate carried the same way. A parser that rewrote what it read would
+// do it in whichever language it was written for, and the author whose file
+// changed is the one who would find out.
 func TestExtractMetadataLeavesEverySourceFileAlone(t *testing.T) {
 	if err := checkNodeJS(); err != nil {
 		t.Skip("Node.js not available, skipping integration test")
@@ -37,8 +40,8 @@ func TestExtractMetadataLeavesEverySourceFileAlone(t *testing.T) {
  * Reads things.
  *
  * @tool
- * @effects read
- * @retry safe
+ * @shortdesc Reads things by name.
+ * @usewhen A caller names one thing and wants the row behind it.
  *
  * A name matching no row is REFUSED rather than answered with an empty
  * result, so an empty answer is never false good news.
@@ -66,9 +69,35 @@ export interface Payload {
 			"}\n",
 	})
 
+	actions := []string{tsAction, goAction}
+
+	// The Rust action is described only where there is a toolchain to compile
+	// the companion with, which is the same requirement building one has. The
+	// other two are still asserted rather than the whole test skipping.
+	if _, err := EnsureCargo(); err == nil {
+		actions = append(actions, writeRustAction(t, "greet-user", `use simpleplatform_sdk::prelude::*;
+
+/// What the caller sends this action.
+#[derive(Deserialize, Schema)]
+struct Input {
+    /// Who to greet.
+    name: String,
+}
+
+/// Greets whoever the caller names.
+///
+/// @tool
+/// @shortdesc Greet whoever the caller names, and answer with the greeting.
+/// @Payload Input
+fn handler(request: Request<Input>) -> Result<Output, Error> {
+    Ok(Output {})
+}
+`))
+	}
+
 	fs := fsx.OSFileSystem{}
 
-	for _, actionDir := range []string{tsAction, goAction} {
+	for _, actionDir := range actions {
 		before := sourceHashes(t, actionDir)
 
 		if len(before) == 0 {
@@ -125,7 +154,7 @@ func sourceHashes(t *testing.T, actionDir string) map[string]string {
 		}
 
 		switch filepath.Ext(path) {
-		case ".ts", ".go", ".js", ".mjs":
+		case ".ts", ".go", ".js", ".mjs", ".rs", ".toml":
 		default:
 			return nil
 		}

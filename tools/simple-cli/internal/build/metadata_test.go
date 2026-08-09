@@ -5,12 +5,19 @@ import (
 	"testing"
 )
 
-func TestDetectLanguage(t *testing.T) {
+// THE METADATA PATH READS THE LANGUAGE THROUGH THE FILESYSTEM IT WAS HANDED.
+//
+// The cases below are the ones this package used to answer with a detector of
+// its own that knew TypeScript and Go. They are asked of the detector the
+// compiler's path uses, because there is now one of it — a Rust action reached
+// the build and did not reach the description, and the reason was that the two
+// readers had different lists.
+func TestDetectActionLanguageThroughAFileSystem(t *testing.T) {
 	tests := []struct {
 		name        string
 		files       map[string]string
 		actionDir   string
-		want        string
+		want        ActionLanguage
 		wantErr     bool
 		errContains string
 	}{
@@ -20,8 +27,7 @@ func TestDetectLanguage(t *testing.T) {
 				"/action/src/index.ts": "export function handler() {}",
 			},
 			actionDir: "/action",
-			want:      "typescript",
-			wantErr:   false,
+			want:      LanguageTypeScript,
 		},
 		{
 			name: "root TypeScript action detected",
@@ -29,8 +35,7 @@ func TestDetectLanguage(t *testing.T) {
 				"/action/index.ts": "export function handler() {}",
 			},
 			actionDir: "/action",
-			want:      "typescript",
-			wantErr:   false,
+			want:      LanguageTypeScript,
 		},
 		{
 			name: "Go action detected",
@@ -38,8 +43,27 @@ func TestDetectLanguage(t *testing.T) {
 				"/action/main.go": "package main\n\nfunc main() {}",
 			},
 			actionDir: "/action",
-			want:      "go",
-			wantErr:   false,
+			want:      LanguageGo,
+		},
+		{
+			name: "Rust action detected",
+			files: map[string]string{
+				"/action/src/main.rs": "fn main() {}",
+				"/action/Cargo.toml":  "[package]\nname = \"greet-user\"\n",
+			},
+			actionDir: "/action",
+			want:      LanguageRust,
+		},
+		{
+			// Both spellings of the TypeScript source are one answer, not two
+			// languages, so this is not an ambiguity.
+			name: "both TypeScript spellings are one language",
+			files: map[string]string{
+				"/action/index.ts":     "export function handler() {}",
+				"/action/src/index.ts": "export function handler() {}",
+			},
+			actionDir: "/action",
+			want:      LanguageTypeScript,
 		},
 		{
 			name: "ambiguous language - both files present",
@@ -49,14 +73,24 @@ func TestDetectLanguage(t *testing.T) {
 			},
 			actionDir:   "/action",
 			wantErr:     true,
-			errContains: "ambiguous action language: TypeScript source (index.ts or src/index.ts) and main.go found",
+			errContains: "cannot tell which language action is written in",
+		},
+		{
+			name: "ambiguous language - Rust beside TypeScript",
+			files: map[string]string{
+				"/action/src/index.ts": "export function handler() {}",
+				"/action/src/main.rs":  "fn main() {}",
+			},
+			actionDir:   "/action",
+			wantErr:     true,
+			errContains: "src/main.rs (Rust)",
 		},
 		{
 			name:        "missing source file - neither file present",
 			files:       map[string]string{},
 			actionDir:   "/action",
 			wantErr:     true,
-			errContains: "no action source file found (expected index.ts, src/index.ts, or main.go)",
+			errContains: "no action source found in action",
 		},
 		{
 			name: "missing source file - other files present",
@@ -66,7 +100,7 @@ func TestDetectLanguage(t *testing.T) {
 			},
 			actionDir:   "/action",
 			wantErr:     true,
-			errContains: "no action source file found (expected index.ts, src/index.ts, or main.go)",
+			errContains: "expected src/index.ts or index.ts (TypeScript), src/main.rs (Rust), or main.go (Go)",
 		},
 		{
 			name: "TypeScript action with nested directory structure",
@@ -75,8 +109,7 @@ func TestDetectLanguage(t *testing.T) {
 				"/complex/action/package.json": `{"name": "test"}`,
 			},
 			actionDir: "/complex/action",
-			want:      "typescript",
-			wantErr:   false,
+			want:      LanguageTypeScript,
 		},
 		{
 			name: "Go action with nested directory structure",
@@ -86,40 +119,34 @@ func TestDetectLanguage(t *testing.T) {
 				"/complex/action/README.md": "# Test Action",
 			},
 			actionDir: "/complex/action",
-			want:      "go",
-			wantErr:   false,
+			want:      LanguageGo,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create mock filesystem with test files
 			fs := &MockFileSystem{files: tt.files}
 
-			// Call detectLanguage
-			got, err := detectLanguage(fs, tt.actionDir)
+			got, err := detectActionLanguage(fs, tt.actionDir)
 
-			// Check error expectation
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("detectLanguage() expected error containing '%s', got nil", tt.errContains)
+					t.Errorf("detectActionLanguage() expected error containing '%s', got nil", tt.errContains)
 					return
 				}
 				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("detectLanguage() error = %v, want error containing '%s'", err, tt.errContains)
+					t.Errorf("detectActionLanguage() error = %v, want error containing '%s'", err, tt.errContains)
 				}
 				return
 			}
 
-			// Check for unexpected error
 			if err != nil {
-				t.Errorf("detectLanguage() unexpected error = %v", err)
+				t.Errorf("detectActionLanguage() unexpected error = %v", err)
 				return
 			}
 
-			// Validate result
 			if got != tt.want {
-				t.Errorf("detectLanguage() = %v, want %v", got, tt.want)
+				t.Errorf("detectActionLanguage() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"simple-cli/internal/fsx"
 )
 
 // SCL-parser outputs JSON AST in this format:
@@ -130,9 +132,14 @@ func hasActionSource(actionDir string) bool {
 // The answer is read off the source file that is actually in the directory,
 // never off a manifest. A Cargo.toml or a package.json says which dependencies
 // a directory pulls in and can be dropped there by a tool that wrote none of
-// the action; the file the compiler is pointed at is the action. The metadata
-// path reads the same three files for the same reason, so an action cannot be
-// Rust to one half of the build and TypeScript to the other.
+// the action; the file the compiler is pointed at is the action.
+//
+// THIS IS THE ONLY ANSWER. The metadata path asked the same question of a
+// second reader that knew two of the three languages, so a Rust action was a
+// Rust action to the compiler and a directory with no source to the thing that
+// describes it — built, and then left with no action.json, on a build that
+// reported success. One reading means the two halves cannot disagree about what
+// they are looking at.
 //
 // Two of them present is refused rather than settled by precedence. Whichever
 // one won, the other would be compiled by nothing at all and the developer
@@ -140,11 +147,22 @@ func hasActionSource(actionDir string) bool {
 // they were not editing. None present is refused for the reason it would fail
 // anyway, only sooner, and naming what was looked for.
 func DetectActionLanguage(actionDir string) (ActionLanguage, error) {
+	return detectActionLanguage(fsx.OSFileSystem{}, actionDir)
+}
+
+// detectActionLanguage is the reading itself, over whichever filesystem the
+// caller is working through.
+//
+// The exported form above is what the build calls, and it supplies the real
+// one. The parameter exists because the metadata path is written against an
+// injectable filesystem end to end, and a detector that reached past it would
+// answer from a directory its caller was not describing.
+func detectActionLanguage(fsys fsx.FileSystem, actionDir string) (ActionLanguage, error) {
 	var found []ActionLanguage
 	var names []string
 
 	for _, src := range actionSources {
-		if !fileExists(filepath.Join(actionDir, filepath.FromSlash(src.rel))) {
+		if _, err := fsys.Stat(filepath.Join(actionDir, filepath.FromSlash(src.rel))); err != nil {
 			continue
 		}
 		// index.ts and src/index.ts are two spellings of one answer, not two
