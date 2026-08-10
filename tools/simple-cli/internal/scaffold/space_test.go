@@ -29,7 +29,6 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 			"templates/space/vitest.config.ts":     []byte(`// vitest config`),
 			"templates/space/tsconfig.json":        []byte(`// ts config`),
 			"templates/space/index.html":           []byte(`<title>{{.DisplayName}}</title>`),
-			"templates/space/src/lib/simple.ts":    []byte(`// simple sdk`),
 			"templates/space/src/styles/theme.css": []byte(`/* theme */`),
 			"templates/space/src/main.tsx":         []byte(`// main`),
 			"templates/space/src/App.tsx":          []byte(`<h1>{{.DisplayName}}</h1>`),
@@ -65,6 +64,47 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 	spacesScl := written["/root/apps/com.acme.app/records/10_spaces.scl"]
 	if !strings.Contains(string(spacesScl), "my_space") {
 		t.Errorf("10_spaces.scl doesn't contain space name, got: %s", string(spacesScl))
+	}
+}
+
+func TestSpaceTemplatesUseUnifiedSDK(t *testing.T) {
+	packageJSON, err := TemplatesFS.ReadFile("templates/space/package.json")
+	if err != nil {
+		t.Fatalf("read package template: %v", err)
+	}
+	if !strings.Contains(string(packageJSON), `"@simpleplatform/sdk"`) {
+		t.Error("space package template must depend on @simpleplatform/sdk")
+	}
+
+	appSource, err := TemplatesFS.ReadFile("templates/space/src/App.tsx")
+	if err != nil {
+		t.Fatalf("read app template: %v", err)
+	}
+	content := string(appSource)
+	if !strings.Contains(content, "@simpleplatform/sdk/space") {
+		t.Error("space app template must use the Space SDK entry point")
+	}
+	if strings.Contains(content, "GRAPHQL_REQUEST") {
+		t.Error("space app template must not copy the GraphQL MessagePort protocol")
+	}
+	if strings.Contains(content, "getSimple") {
+		t.Error("space app template must call connectSpace directly without a local SDK wrapper")
+	}
+
+	themeCSS, err := TemplatesFS.ReadFile("templates/space/src/styles/theme.css")
+	if err != nil {
+		t.Fatalf("read theme template: %v", err)
+	}
+	if strings.Contains(string(themeCSS), "loadTheme") {
+		t.Error("space theme template must not document an unavailable loadTheme API")
+	}
+
+	skill, err := TemplatesFS.ReadFile("templates/agent/skills/build-spaces/SKILL.md")
+	if err != nil {
+		t.Fatalf("read build-spaces skill template: %v", err)
+	}
+	if strings.Contains(string(skill), "case 'list'") {
+		t.Error("build-spaces skill template must not document unsupported list context")
 	}
 }
 
@@ -342,7 +382,6 @@ func TestCreateSpaceStructure_RecordsDirError(t *testing.T) {
 			"templates/space/vitest.config.ts":     []byte(`// vitest`),
 			"templates/space/tsconfig.json":        []byte(`{}`),
 			"templates/space/index.html":           []byte(`<html>`),
-			"templates/space/src/lib/simple.ts":    []byte(`// sdk`),
 			"templates/space/src/styles/theme.css": []byte(`/* theme */`),
 			"templates/space/src/main.tsx":         []byte(`// main`),
 			"templates/space/src/App.tsx":          []byte(`// app`),

@@ -106,6 +106,56 @@ func TestRunDeploy(t *testing.T) {
 	}
 }
 
+func TestPrepareVersionedFiles(t *testing.T) {
+	versionBumper := &fakeVersionBumper{version: "1.2.3-local.4"}
+	collector := &fakeDeploymentFileCollector{
+		collect: func() (map[string]deploy.FileInfo, error) {
+			if !versionBumper.called {
+				t.Fatal("file collection started before the app version was updated")
+			}
+			return map[string]deploy.FileInfo{
+				"app.scl": {Content: []byte("id example\nversion 1.2.3-local.4\n")},
+			}, nil
+		},
+	}
+
+	version, files, err := prepareVersionedFiles(
+		"apps/example",
+		"local",
+		"",
+		versionBumper,
+		collector,
+	)
+
+	if err != nil {
+		t.Fatalf("prepareVersionedFiles() error = %v", err)
+	}
+	if version != "1.2.3-local.4" {
+		t.Errorf("version = %q, want %q", version, "1.2.3-local.4")
+	}
+	if got := string(files["app.scl"].Content); !strings.Contains(got, "1.2.3-local.4") {
+		t.Errorf("uploaded app.scl = %q, want the bumped version", got)
+	}
+}
+
+type fakeVersionBumper struct {
+	called  bool
+	version string
+}
+
+func (b *fakeVersionBumper) BumpVersion(_ string, _ string, _ string) (string, error) {
+	b.called = true
+	return b.version, nil
+}
+
+type fakeDeploymentFileCollector struct {
+	collect func() (map[string]deploy.FileInfo, error)
+}
+
+func (c *fakeDeploymentFileCollector) CollectFiles(_ string) (map[string]deploy.FileInfo, error) {
+	return c.collect()
+}
+
 func TestRunDeploy_AuthRetry(t *testing.T) {
 	// Temporarily bypass cryptographic verification since we are returning mock JWTs
 	origVerify := deploy.VerifyEd25519
