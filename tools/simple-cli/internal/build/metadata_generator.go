@@ -144,76 +144,175 @@ func checkNodeJS() error {
 	return nil
 }
 
-// ensureNPMPackages checks if required packages are installed and installs them if needed
+// generatorPackages are the npm packages the generator imports. They are named
+// once because the same list decides both what is looked for and what is
+// installed, and a list that says one thing in the check and another in the
+// install would install something the check keeps asking for.
+var generatorPackages = []string{
+	"ts-json-schema-generator",
+	"ts-morph",
+}
+
+// ensureNPMPackages makes sure the generator's packages can be found before the
+// generator is asked to run, and installs them when they cannot.
+//
+// IT ASKS THE QUESTION NODE ASKS. Node finds a package by looking in a
+// `node_modules` beside the importing file, then beside each directory above it,
+// so one copy at the top of a repository serves every directory beneath it.
+// Asking instead whether one particular directory has its own `node_modules` is
+// a narrower question, and answering "missing" to it while Node answers "found"
+// buys an install the run cannot use. That is what happened for as long as the
+// workspace root came back as a directory partway up the tree: the packages were
+// there the whole time, one level higher, and every run paid to install them
+// again.
+//
+// The walk starts at the workspace root because that is where the generator is
+// written and run from. The directory it actually sits in is created empty under
+// that root, so it has no `node_modules` of its own to contribute.
 func ensureNPMPackages() error {
-	// Check if packages are already installed by trying to resolve them
-	// We check in the workspace root (where pnpm workspace is configured)
 	workspaceRoot, err := findWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find workspace root: %w", err)
 	}
 
-	// Check if packages exist in node_modules
-	packagesToCheck := []string{
-		"ts-json-schema-generator",
-		"ts-morph",
+	if generatorPackagesResolvable(workspaceRoot) {
+		return nil
 	}
 
-	allInstalled := true
-	for _, pkg := range packagesToCheck {
-		pkgPath := filepath.Join(workspaceRoot, "node_modules", pkg)
-		if _, err := os.Stat(pkgPath); os.IsNotExist(err) {
-			allInstalled = false
-			break
-		}
-	}
-
-	// If packages are not installed, install them.
 	// Output is captured rather than inherited: builds run under a progress UI
 	// that repaints in place, and a concurrent write from a child process
 	// corrupts the frame. The output is surfaced only if the install fails.
-	if !allInstalled {
-		cmd := exec.Command("pnpm", "add", "-w", "-D", "ts-json-schema-generator", "ts-morph")
-		cmd.Dir = workspaceRoot
+	cmd := exec.Command("pnpm", append([]string{"add", "-w", "-D"}, generatorPackages...)...)
+	cmd.Dir = workspaceRoot
 
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("failed to install packages: %w\nOutput: %s", err, out)
-		}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to install packages: %w\nOutput: %s", err, out)
 	}
 
 	return nil
 }
 
-// findWorkspaceRoot finds the pnpm workspace root by looking for pnpm-workspace.yaml
+// generatorPackagesResolvable reports whether every package the generator
+// imports can be found from a directory, and so whether a run starting there
+// would have anything to install.
+func generatorPackagesResolvable(dir string) bool {
+	for _, pkg := range generatorPackages {
+		if !nodeCanResolve(dir, pkg) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// nodeCanResolve reports whether a Node module living in dir would find the
+// named package when it imports it, by taking the same walk Node takes:
+// `node_modules/<name>` in dir, then in each directory above it, up to the root
+// of the filesystem.
+//
+// A directory named `node_modules` is not itself asked, because Node does not
+// ask it either — that would mean looking for `node_modules/node_modules/<name>`,
+// which is not where anything is installed.
+func nodeCanResolve(dir, pkg string) bool {
+	for {
+		if filepath.Base(dir) != "node_modules" {
+			if _, err := os.Stat(filepath.Join(dir, "node_modules", pkg)); err == nil {
+				return true
+			}
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false
+		}
+
+		dir = parent
+	}
+}
+
+// findWorkspaceRoot answers with the root of the workspace whose `node_modules`
+// the generator runs against, by walking up from the current directory.
+//
+// A WORKSPACE ROOT IS NOT SIMPLY THE FIRST package.json ABOVE US. Every member
+// of a workspace carries a package.json of its own, so a walk that stops at the
+// first one it meets stops inside a member and calls that the root. This tool's
+// own tests are where that showed: they run from a directory inside the CLI's
+// package, whose package.json is a member manifest, so the root came back as the
+// CLI's package — a directory with no `node_modules` in it, in a repository that
+// keeps its packages at the top. Nothing broke, because Node walks past it and
+// finds them anyway, but the check that stopped where this walk stopped
+// concluded on every run that they were missing.
+//
+// So a file that MARKS a workspace root beats a manifest that merely SITS in
+// one: pnpm-workspace.yaml marks a pnpm workspace, and a package.json carrying a
+// `workspaces` field marks an npm or yarn one. A plain manifest is remembered as
+// the answer for a project that belongs to no workspace at all, but the walk
+// carries on past it in case a workspace encloses it.
 func findWorkspaceRoot() (string, error) {
-	// Start from current directory and walk up
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 
+	// The nearest plain manifest, which is the answer only if the walk reaches
+	// the top without meeting a workspace.
+	standalone := ""
+
 	for {
-		// Check for pnpm-workspace.yaml
-		workspaceFile := filepath.Join(dir, "pnpm-workspace.yaml")
-		if _, err := os.Stat(workspaceFile); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, "pnpm-workspace.yaml")); err == nil {
 			return dir, nil
 		}
 
-		// Check for package.json with workspaces field (fallback)
 		packageJSON := filepath.Join(dir, "package.json")
 		if _, err := os.Stat(packageJSON); err == nil {
-			// This might be the root, return it
-			return dir, nil
+			if declaresWorkspaces(packageJSON) {
+				return dir, nil
+			}
+
+			if standalone == "" {
+				standalone = dir
+			}
 		}
 
-		// Move up one directory
 		parent := filepath.Dir(dir)
 		if parent == dir {
-			// Reached filesystem root
-			return "", fmt.Errorf("workspace root not found (no pnpm-workspace.yaml or package.json)")
+			break
 		}
+
 		dir = parent
 	}
+
+	if standalone != "" {
+		return standalone, nil
+	}
+
+	return "", fmt.Errorf("workspace root not found (no pnpm-workspace.yaml or package.json)")
+}
+
+// declaresWorkspaces reports whether a package.json names workspace members,
+// which is how npm and yarn mark the root of a workspace.
+//
+// Only that one field is read, because the rest of a manifest is somebody else's
+// business, and it is accepted in either shape it is written in: the array of
+// patterns npm documents, or the object holding one that yarn also accepts.
+// A manifest that cannot be read or parsed is simply not a workspace root as far
+// as this walk is concerned — the walk carries on, and whatever is really wrong
+// with the file will be said by the tool that has to use it.
+func declaresWorkspaces(packageJSON string) bool {
+	data, err := os.ReadFile(packageJSON)
+	if err != nil {
+		return false
+	}
+
+	var manifest struct {
+		Workspaces json.RawMessage `json:"workspaces"`
+	}
+
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return false
+	}
+
+	return len(manifest.Workspaces) > 0 && !bytes.Equal(manifest.Workspaces, []byte("null"))
 }
 
 // unpackGenerator writes the generator into a directory of this invocation's
