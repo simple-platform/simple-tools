@@ -206,28 +206,16 @@ func generatorPackagesResolvable(dir string) bool {
 }
 
 // nodeCanResolve reports whether a Node module living in dir would find the
-// named package when it imports it, by taking the same walk Node takes:
-// `node_modules/<name>` in dir, then in each directory above it, up to the root
-// of the filesystem.
+// named package when it imports it, by taking the same walk Node takes.
 //
-// A directory named `node_modules` is not itself asked, because Node does not
-// ask it either — that would mean looking for `node_modules/node_modules/<name>`,
-// which is not where anything is installed.
+// The walk itself lives in fsx because two commands need it and for different
+// things — this one asks for a package, the test runner also asks for an
+// executable a package installed. Written twice they answer the same question
+// in two places, and the pair drift.
 func nodeCanResolve(dir, pkg string) bool {
-	for {
-		if filepath.Base(dir) != "node_modules" {
-			if _, err := os.Stat(filepath.Join(dir, "node_modules", pkg)); err == nil {
-				return true
-			}
-		}
+	_, found := fsx.ResolveUpward(fsx.OSFileSystem{}, dir, "node_modules", pkg)
 
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return false
-		}
-
-		dir = parent
-	}
+	return found
 }
 
 // findWorkspaceRoot answers with the root of the workspace whose `node_modules`

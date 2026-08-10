@@ -276,9 +276,13 @@ func runTest(cmd *cobra.Command, args []string) error {
 				// This ensures package managers (npm/pnpm/yarn) naturally map their own
 				// workspace resolution graphs for hoisted dependencies like @simpleplatform/sdk.
 				//
-				// Only install dependencies if the node_modules directory is completely missing
-				hasNodeModules := scaffold.PathExists(fsys, filepath.Join(tDir, "node_modules"))
-				if !hasNodeModules {
+				// Install only when the packages are genuinely unreachable, which
+				// is the same question the comment above answers for the runner:
+				// a workspace member does not carry its own node_modules, and
+				// asking only for one is how a hoisted action gets a full
+				// install it does not need on every run.
+				_, resolvable := fsx.ResolveUpward(fsys, tDir, "node_modules")
+				if !resolvable {
 					if err := build.EnsureDependenciesFunc(tDir); err != nil {
 						mu.Lock()
 						if !jsonMode {
@@ -301,19 +305,15 @@ func runTest(cmd *cobra.Command, args []string) error {
 				}
 			} else {
 				// Fallback for record-behaviors or targets without a package.json test script
-				var vitestBin string
-				localBin := filepath.Join(tDir, "node_modules", ".bin", "vitest")
-				if _, err := os.Stat(localBin); err == nil {
-					vitestBin = localBin
-				} else {
-					cwd, _ := os.Getwd()
-					rootBin := filepath.Join(cwd, "node_modules", ".bin", "vitest")
-					if _, err := os.Stat(rootBin); err == nil {
-						vitestBin = rootBin
-					}
-				}
+				// The runner is looked for the way an import is resolved, rather
+				// than in the target's own directory and then in the one this
+				// process happens to have been started from. A workspace
+				// installs it at the root, which is usually neither: the walk
+				// finds it, two fixed guesses did not, and missing it fell
+				// through to `npx`, which resolves and may fetch on every run.
+				vitestBin, found := fsx.ResolveUpward(fsys, tDir, "node_modules", ".bin", "vitest")
 
-				if vitestBin != "" {
+				if found {
 					fullArgs = []string{vitestBin, "run", reporterFlag}
 				} else {
 					fullArgs = []string{"npx", "vitest", "run", reporterFlag}
