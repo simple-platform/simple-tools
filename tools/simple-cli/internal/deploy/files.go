@@ -109,7 +109,15 @@ func (c *FileCollector) CollectFiles(appPath string) (map[string]FileInfo, error
 }
 
 // collectPaths returns all file paths to be deployed.
-// Mirrors the allowlist in SimpleDevOps.Publisher.stream_files/1
+//
+// This is a HAND-COPIED MIRROR of the platform's own allowlist, which lives in
+// SimpleDevOps.Publisher.stream_files/1 and again in SimpleDevOps.CasBuilder --
+// three copies of one list, in two languages, across two repositories, with
+// nothing comparing them. The copies have already disagreed once: this one was
+// missing action.json while both of the others carried it, so an app deployed
+// through this command uploaded a file set the platform would have included and
+// then failed to install. A comment claiming a mirror is not a mirror. Anything
+// added on either side has to be added by hand on the other.
 func (c *FileCollector) collectPaths(appPath string) ([]string, error) {
 	var paths []string
 
@@ -136,7 +144,16 @@ func (c *FileCollector) collectPaths(appPath string) ([]string, error) {
 	// Knowledge directory - all files
 	paths = append(paths, c.globFiles(appPath, "knowledge")...)
 
-	// Actions - only WASM build outputs
+	// Actions - the built modules, and the metadata a record can read.
+	//
+	// action.json IS DEPLOYED, and leaving it out breaks the install rather than
+	// the upload. A record file may source a field from the generated artifact
+	// instead of restating it -- `$file('actions/<name>/action.json') | $json() |
+	// $jq('.description')` -- which is the arrangement that keeps a logic record's
+	// description and parameter schema from drifting away from the action they
+	// describe. That expression resolves against the deployed file set, so an app
+	// using it uploaded cleanly and then failed every such record with a
+	// file_not_found out of content storage.
 	actionsDir := filepath.Join(appPath, "actions")
 	entries, err := os.ReadDir(actionsDir)
 	if err != nil && !os.IsNotExist(err) {
@@ -154,6 +171,11 @@ func (c *FileCollector) collectPaths(appPath string) ([]string, error) {
 			asyncWasmPath := filepath.Join("actions", entry.Name(), "build", "release.async.wasm")
 			if _, err := c.FS.Stat(filepath.Join(appPath, asyncWasmPath)); err == nil {
 				paths = append(paths, asyncWasmPath)
+			}
+			// action.json
+			metadataPath := filepath.Join("actions", entry.Name(), "action.json")
+			if _, err := c.FS.Stat(filepath.Join(appPath, metadataPath)); err == nil {
+				paths = append(paths, metadataPath)
 			}
 		}
 	}

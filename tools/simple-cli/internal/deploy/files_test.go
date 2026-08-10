@@ -229,6 +229,50 @@ func TestFileCollector_CollectFiles_IgnoresNonWASM(t *testing.T) {
 	}
 }
 
+// A RECORD THAT SOURCES A FIELD FROM action.json NEEDS action.json DEPLOYED.
+//
+// An app may keep a logic record's description and parameter schema from
+// drifting by reading them out of the generated artifact rather than restating
+// them, and that expression is resolved against the deployed file set. This
+// collector used to gather only the built modules out of an action directory,
+// so such an app uploaded without complaint and then failed every one of those
+// records on install, with a file_not_found out of content storage naming a
+// file the author could plainly see on disk.
+//
+// The two files either side of it are here so the test cannot pass by
+// collecting the whole directory: the source stays out, the built module comes
+// along.
+func TestFileCollector_CollectFiles_IncludesActionMetadata(t *testing.T) {
+	dir := t.TempDir()
+
+	action := filepath.Join(dir, "actions", "read-site-readiness")
+	_ = os.MkdirAll(filepath.Join(action, "build"), 0755)
+	_ = os.MkdirAll(filepath.Join(action, "src"), 0755)
+	_ = os.WriteFile(filepath.Join(action, "action.json"), []byte(`{"description":"d","schema":{}}`), 0644)
+	_ = os.WriteFile(filepath.Join(action, "build", "release.wasm"), []byte("wasm"), 0644)
+	_ = os.WriteFile(filepath.Join(action, "src", "index.ts"), []byte("source"), 0644)
+
+	collector := NewFileCollector()
+
+	files, err := collector.CollectFiles(dir)
+	if err != nil {
+		t.Fatalf("CollectFiles() unexpected error = %v", err)
+	}
+
+	metadata := filepath.Join("actions", "read-site-readiness", "action.json")
+	if _, ok := files[metadata]; !ok {
+		t.Errorf("CollectFiles() left out %q, which a record's $file() expression resolves against", metadata)
+	}
+
+	if _, ok := files[filepath.Join("actions", "read-site-readiness", "build", "release.wasm")]; !ok {
+		t.Errorf("CollectFiles() missing release.wasm")
+	}
+
+	if _, ok := files[filepath.Join("actions", "read-site-readiness", "src", "index.ts")]; ok {
+		t.Errorf("CollectFiles() deployed an action's source, which is not deployed")
+	}
+}
+
 func TestFileCollector_Parallelization(t *testing.T) {
 	dir := t.TempDir()
 
