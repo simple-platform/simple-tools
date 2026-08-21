@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"simple-cli/internal/home"
 	"strings"
 	"sync"
 	"time"
@@ -37,11 +38,11 @@ type ToolDef struct {
 }
 
 func GetToolsDir() (string, error) {
-	home, err := os.UserHomeDir()
+	homeDir, err := home.Dir()
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(home, SimpleToolsDir), nil
+	return filepath.Join(homeDir, SimpleToolsDir), nil
 }
 
 func LoadManifest() (ToolManifest, error) {
