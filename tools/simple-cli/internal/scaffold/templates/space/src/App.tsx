@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { query } from './lib/simple'
+import { connectSpace, type SpaceContext } from '@simpleplatform/sdk/space'
 
 interface Application {
   id: string
@@ -17,13 +17,20 @@ query GetApplications {
 }
 `
 
+const spaceConnection = connectSpace({
+  targetOrigin: new URL(document.referrer).origin,
+})
+
 export default function App() {
   const [apps, setApps] = useState<Application[]>([])
+  const [context, setContext] = useState<SpaceContext | null>(null)
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
 
   useEffect(() => {
-    query<{ applications: Application[] }>(GET_APPLICATIONS)
-      .then((data) => {
+    void spaceConnection
+      .then(async (simple) => {
+        setContext(simple.context)
+        const data = await simple.data.query<{ applications: Application[] }>(GET_APPLICATIONS)
         setApps(data.applications ?? [])
         setStatus('ready')
       })
@@ -33,6 +40,12 @@ export default function App() {
   return (
     <div className="p-8 font-sans">
       <h1 className="text-2xl font-bold mb-4">{'{{.DisplayName}}'}</h1>
+
+      {context && (
+        <p className="text-sm text-muted-foreground mb-4">
+          {`Space context: ${context.kind}`}
+        </p>
+      )}
 
       {status === 'loading' && <p className="text-muted-foreground">Loading applications…</p>}
       {status === 'error' && <p className="text-destructive">Failed to load data.</p>}

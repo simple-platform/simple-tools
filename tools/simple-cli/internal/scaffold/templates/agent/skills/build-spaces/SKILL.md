@@ -23,8 +23,6 @@ apps/<app-id>/spaces/<space-name>/
 ├── tests/
 │   └── App.test.tsx  # Unit test for App component
 └── src/
-    ├── lib/
-    │   └── simple.ts # RPC SDK (auto-generated, do not modify)
     ├── styles/
     │   └── theme.css # Theme CSS variables
     ├── App.tsx       # Main React component
@@ -45,16 +43,45 @@ Example: `simple new space com.acme.crm customer-portal "Customer Portal"`
 
 Spaces operate in an isolated, secure iframe served from `assets.simple.dev` with a strict Content Security Policy (CSP) that blocks external requests by default. Spaces _do not_ possess the parent application's authentication cookies.
 
-Therefore, Space developers **MUST NOT** use raw `fetch()` to query the Simple Backend. Instead, they must use the generated MessageChannel RPC SDK (`src/lib/simple.ts`), which asks the secure parent frame to resolve the query on its behalf.
+Therefore, Space developers **MUST NOT** use raw `fetch()` to query the Simple Backend. Use the published `@simpleplatform/sdk` Space API instead. Its browser adapter establishes the secure MessageChannel with the parent frame and the host authorizes every request.
+
+The scaffold imports `connectSpace()` directly from the published SDK. Do not add a copied bridge or a local wrapper just to rename the connection.
+
+```tsx
+import { connectSpace } from '@simpleplatform/sdk/space'
+
+const spaceConnection = connectSpace({
+  targetOrigin: new URL(document.referrer).origin,
+})
+
+const simple = await spaceConnection
+```
+
+Create one connection promise per Space and reuse it. Calling `connectSpace()` again starts another handshake, which the host does not provide for the same iframe.
+
+### Host-provided context
+
+Every embedded Space receives explicit context from its host at connection time. Do not infer page, table, or record details from the URL or DOM.
+
+```ts
+switch (simple.context.kind) {
+  case 'standalone':
+    // A dashboard, tool, or another embedded page without record context.
+    break
+  case 'record':
+    console.log(simple.context.applicationId, simple.context.tableName, simple.context.recordId)
+    break
+}
+```
+
+`simple.context.kind` is currently either `standalone` or `record`. List context is not available yet. There is no inferred or unknown context state. A missing or malformed host context makes `connectSpace()` reject with a structured SDK error.
 
 ### Fetching Data via GraphQL
 
-Use the `query` and `mutate` functions provided by the local Simple SDK.
+Use `simple.data.query()` and `simple.data.mutate()` from the connected Space client.
 
 ```tsx
 import { useEffect, useState } from 'react'
-import { query } from './lib/simple'
-
 const GET_CUSTOMERS = `
   query GetCustomers {
     customer { id first_name last_name }
@@ -66,7 +93,8 @@ function CustomerList() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    query(GET_CUSTOMERS)
+    spaceConnection
+      .then(simple => simple.data.query(GET_CUSTOMERS))
       .then(result => setData(result?.customer || []))
       .catch(err => console.error('RPC Query Failed', err))
       .finally(() => setLoading(false))
@@ -91,11 +119,9 @@ function CustomerList() {
 
 ### Mutations (Insert, Update, Delete)
 
-Use the `mutate` function for standard GraphQL mutations:
+Use `simple.data.mutate()` for standard GraphQL mutations that do not update the current record form:
 
 ```tsx
-import { mutate } from './lib/simple'
-
 const INSERT_TASK = `
   mutation InsertTask($title: String!) {
     insert_my_app__task(object: { title: $title }) { id title }
@@ -103,10 +129,32 @@ const INSERT_TASK = `
 `
 
 async function createTask(title: string) {
-  const result = await mutate(INSERT_TASK, { title })
+  const simple = await spaceConnection
+  const result = await simple.data.mutate(INSERT_TASK, { title })
   return result?.insert_my_app__task
 }
 ```
+
+### Record Space workflow
+
+When `simple.context.kind === 'record'`, the platform has configured this Space as a record body and keeps the platform header and record workflow authoritative. Use `simple.records.current()` to work with that current route record:
+
+```ts
+const simple = await spaceConnection
+
+if (simple.context.kind === 'record') {
+  const record = await simple.records.current()
+  await record.update({ first_name: 'Ada' })
+  const result = await record.submit()
+
+  if (!result.ok) {
+    const snapshot = record.snapshot()
+    // Render snapshot.errors.form and each affected snapshot.fields[field].error.
+  }
+}
+```
+
+Do not use `simple.data.mutate()` to change the current record form. `record.update()` and `record.submit()` preserve Record Behaviors, validation, documents, permissions, and the shared state used by the platform Update button. In a standalone Space, `simple.records.current()` throws a structured unavailable error when called; `simple.data` remains available.
 
 > **Note:** Custom Logic (Actions) cannot be invoked from Spaces at this time. Only pure GraphQL queries and mutations (insert, update, delete) are supported.
 
@@ -150,4 +198,4 @@ All commands are run from the `client-bnv` repository root using the `simple` CL
 - **Error Handling:** Always handle loading and error states for queries and mutations to provide good UX.
 - **State Management:** For complex state, combine React Context or a state management library with the `query`/`mutate` SDK functions.
 - **Styling:** Consider a robust UI library (Material-UI, Chakra UI, Radix UI, etc.) for complex interfaces.
-- **SDK:** Never modify `src/lib/simple.ts` — it is auto-generated by the scaffold. Use only the exported `query` and `mutate` functions.
+- **SDK:** Call `connectSpace()` from `@simpleplatform/sdk/space`. Do not copy, fork, reimplement, or rename the MessageChannel connection protocol.
