@@ -1,51 +1,51 @@
 {
   "lockfile_version": "1",
   "packages": {
-    "act@0.2.86": {
-      "last_modified": "2026-03-28T12:40:58Z",
-      "resolved": "github:NixOS/nixpkgs/b63fe7f000adcfa269967eeff72c64cafecbbebe#act",
+    "act@0.2.89": {
+      "last_modified": "2026-07-08T21:13:06Z",
+      "resolved": "github:NixOS/nixpkgs/389ed85304b281ca7f306cf8a1eb4378651ca44e#act",
       "source": "devbox-search",
-      "version": "0.2.86",
+      "version": "0.2.89",
       "systems": {
         "aarch64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/6yz9qq67arhh4xw7xy0qbk1vani8k71r-act-0.2.86",
+              "path": "/nix/store/9w5281yikzhxja5gzbdfw7c2ifdji0li-act-0.2.89",
               "default": true
             }
           ],
-          "store_path": "/nix/store/6yz9qq67arhh4xw7xy0qbk1vani8k71r-act-0.2.86"
+          "store_path": "/nix/store/9w5281yikzhxja5gzbdfw7c2ifdji0li-act-0.2.89"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/n6vppmxldcg7cx5s6harzsp06f0xwnjd-act-0.2.86",
+              "path": "/nix/store/9fdhrs4305v170dfryjf25342k50syrq-act-0.2.89",
               "default": true
             }
           ],
-          "store_path": "/nix/store/n6vppmxldcg7cx5s6harzsp06f0xwnjd-act-0.2.86"
+          "store_path": "/nix/store/9fdhrs4305v170dfryjf25342k50syrq-act-0.2.89"
         },
         "x86_64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/zx97l1p596xpmkc45yf1xj08wpbs4m05-act-0.2.86",
+              "path": "/nix/store/8jl3zr56bwggpxwc4si162xd68kvcz9l-act-0.2.89",
               "default": true
             }
           ],
-          "store_path": "/nix/store/zx97l1p596xpmkc45yf1xj08wpbs4m05-act-0.2.86"
+          "store_path": "/nix/store/8jl3zr56bwggpxwc4si162xd68kvcz9l-act-0.2.89"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/ajm54wc9dg9s20cdb6sx622gx74ahd7c-act-0.2.86",
+              "path": "/nix/store/bwzi59ysisawm8ja0j92v2riykxr2gw0-act-0.2.89",
               "default": true
             }
           ],
-          "store_path": "/nix/store/ajm54wc9dg9s20cdb6sx622gx74ahd7c-act-0.2.86"
+          "store_path": "/nix/store/bwzi59ysisawm8ja0j92v2riykxr2gw0-act-0.2.89"
         }
       }
     },
@@ -344,7 +344,7 @@
     },
     "nodejs@25.9.0": {
       "last_modified": "2026-04-01T17:36:14Z",
-      "plugin_version": "0.0.2",
+      "plugin_version": "0.0.4",
       "resolved": "github:NixOS/nixpkgs/6ebfbc38bdc6b22822a6f991f2d922306f33cfbc#nodejs_25",
       "source": "devbox-search",
       "version": "25.9.0",
