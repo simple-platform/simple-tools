@@ -4,13 +4,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App'
 
 // Mock the simple SDK so tests don't need a real RPC connection
-vi.mock('../src/lib/simple', () => ({
-  mutate: vi.fn(),
-  query: vi.fn().mockResolvedValue({
-    applications: [
-      { display_name: 'Test App One', id: '1', version: '1.0.0' },
-      { display_name: 'Test App Two', id: '2', version: '2.3.1' },
-    ],
+vi.mock('@simpleplatform/sdk/space', () => ({
+  connectSpace: vi.fn().mockResolvedValue({
+    context: { kind: 'standalone' },
+    data: {
+      query: vi.fn().mockResolvedValue({
+        applications: [
+          { display_name: 'Test App One', id: '1', version: '1.0.0' },
+          { display_name: 'Test App Two', id: '2', version: '2.3.1' },
+        ],
+      }),
+    },
   }),
 }))
 
@@ -41,5 +45,10 @@ describe('app', () => {
       expect(screen.getByText('1.0.0')).toBeDefined()
       expect(screen.getByText('2.3.1')).toBeDefined()
     })
+  })
+
+  it('shows the host-provided Space context', async () => {
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('Space context: standalone')).toBeDefined())
   })
 })

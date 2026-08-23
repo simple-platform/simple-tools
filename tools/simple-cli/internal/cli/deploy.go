@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sync"
 	"time"
 
 	"simple-cli/internal/build"
@@ -105,33 +104,19 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		return fmt.Errorf("authentication failed: %w", authErr)
 	}
 
-	// === PHASE 2: Version & Files (parallel) ===
-	// Calculate new version and hash all files concurrently for speed.
-	var newVersion string
-	var files map[string]deploy.FileInfo
-	var versionErr, filesErr error
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	go func() {
-		defer wg.Done()
-		vm := deploy.NewVersionManager(parserPath)
-		newVersion, versionErr = vm.BumpVersion(appPath, deployEnv, deployBump)
-	}()
-
-	go func() {
-		defer wg.Done()
-		collector := deploy.NewFileCollector()
-		files, filesErr = collector.CollectFiles(appPath)
-	}()
-
-	wg.Wait()
-
-	if versionErr != nil {
-		return versionErr
-	}
-	if filesErr != nil {
-		return filesErr
+	// === PHASE 2: Version & Files ===
+	// app.scl is part of the upload manifest, so it must be collected only
+	// after its version has been updated. Parallel collection could otherwise
+	// upload an old app.scl under a new deployment version.
+	newVersion, files, err := prepareVersionedFiles(
+		appPath,
+		deployEnv,
+		deployBump,
+		deploy.NewVersionManager(parserPath),
+		deploy.NewFileCollector(),
+	)
+	if err != nil {
+		return err
 	}
 
 	if !jsonOutput {
@@ -265,6 +250,34 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 	}
 	fmt.Printf("%s in %s\n", msg, duration.Round(time.Millisecond))
 	return nil
+}
+
+type versionBumper interface {
+	BumpVersion(appPath, env, bumpType string) (string, error)
+}
+
+type deploymentFileCollector interface {
+	CollectFiles(appPath string) (map[string]deploy.FileInfo, error)
+}
+
+func prepareVersionedFiles(
+	appPath string,
+	env string,
+	bumpType string,
+	versionBumper versionBumper,
+	fileCollector deploymentFileCollector,
+) (string, map[string]deploy.FileInfo, error) {
+	newVersion, err := versionBumper.BumpVersion(appPath, env, bumpType)
+	if err != nil {
+		return "", nil, err
+	}
+
+	files, err := fileCollector.CollectFiles(appPath)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return newVersion, files, nil
 }
 
 // dryRunOutput prints the files that would be deployed without actually deploying.
