@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/home"
 	"strconv"
 	"strings"
 )
@@ -54,7 +55,7 @@ type SCLBlock struct {
 
 // Parse executes scl-parser CLI and returns the AST.
 func (p *DefaultSCLParser) Parse(path string) ([]SCLBlock, error) {
-	cmd := exec.Command(p.ParserPath, path)
+	cmd := home.ToolCommand(p.ParserPath, path)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"simple-cli/internal/home"
 )
 
 // ErrKeyAlreadyExists is returned natively when a cryptographic keypair tries to securely re-initialize itself concurrently.
@@ -27,8 +28,8 @@ type Keypair struct {
 
 // Dir returns ~/.simple/keys — the root directory for all keypairs.
 func Dir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".simple", "keys")
+	homeDir, _ := home.Dir()
+	return filepath.Join(homeDir, ".simple", "keys")
 }
 
 // keyDir returns the directory for a specific tenant, env, and id_suffix.

@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -91,7 +92,11 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 // runWithProgress runs a function while displaying a progress UI (Bubble Tea).
 func runWithProgress(keys []string, runFn func(build.ProgressReporter)) error {
 	model := ui.NewModel(keys)
-	p := tea.NewProgram(model)
+	programOptions := make([]tea.ProgramOption, 0, 1)
+	if !progressInputIsTerminal(os.Stdin) {
+		programOptions = append(programOptions, tea.WithInput(nil))
+	}
+	p := tea.NewProgram(model, programOptions...)
 
 	go func() {
 		reporter := func(item, status string, done bool, err error) {
@@ -108,6 +113,14 @@ func runWithProgress(keys []string, runFn func(build.ProgressReporter)) error {
 
 	_, err := p.Run()
 	return err
+}
+
+func progressInputIsTerminal(input *os.File) bool {
+	if input == nil {
+		return false
+	}
+	fd := input.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
 // buildAllApps traverses the 'apps' directory to find and build all actions and spaces in parallel.

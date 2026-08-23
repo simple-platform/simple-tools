@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"simple-cli/internal/fsx"
+	"simple-cli/internal/home"
 	internalRuntime "simple-cli/internal/runtime"
 	"sync"
 )
@@ -124,7 +125,7 @@ func (m *BuildManager) EnsureTools(onProgress ProgressReporter) error {
 		}
 
 		// Extract runtime plugin
-		homeDir, err := os.UserHomeDir()
+		homeDir, err := home.Dir()
 		if err != nil {
 			homeDir = "."
 		}

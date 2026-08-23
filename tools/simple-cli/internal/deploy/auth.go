@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"simple-cli/internal/home"
 	"simple-cli/internal/keystore"
 )
 
@@ -437,7 +438,7 @@ type FileTokenStore struct {
 func (s *FileTokenStore) tokenCachePath() string {
 	dir := s.ConfigDir
 	if dir == "" {
-		home, err := os.UserHomeDir()
+		home, err := home.Dir()
 		if err != nil {
 			// Fallback to current directory
 			home = "."

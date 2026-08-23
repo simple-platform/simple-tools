@@ -14,6 +14,7 @@ import (
 	"sync"
 
 	"simple-cli/internal/fsx"
+	"simple-cli/internal/home"
 )
 
 //go:embed scripts/extract-action-metadata.js
@@ -419,7 +420,7 @@ func rustCompanionCrateDir() (string, error) {
 }
 
 func writeRustCompanionCrate() (string, error) {
-	home, err := os.UserHomeDir()
+	home, err := home.Dir()
 	if err != nil {
 		return "", fmt.Errorf("failed to find the home directory to write the Rust extractor into: %w", err)
 	}

@@ -4,12 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/fsx"
+	"simple-cli/internal/home"
 	"slices"
 	"strings"
-
-	"simple-cli/internal/fsx"
 )
 
 // SCL-parser outputs JSON AST in this format:
@@ -37,7 +36,7 @@ func ParseExecutionEnvironment(sclParserPath, actionDir string) (string, error) 
 		return "server", nil // default
 	}
 
-	cmd := exec.Command(sclParserPath, sclPath)
+	cmd := home.ToolCommand(sclParserPath, sclPath)
 	output, err := cmd.Output()
 	if err != nil {
 		return "server", nil // fallback on parse error

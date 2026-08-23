@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"simple-cli/internal/build"
+	"simple-cli/internal/home"
 )
 
 // checkSCLEntityMatchType uses scl-parser CLI to check if a specific entity with a specific name/type exists in an SCL file.
@@ -17,7 +18,7 @@ var checkSCLEntityMatchType = func(filePath string, entityName string, entityTyp
 		return false, fmt.Errorf("failed to ensure scl-parser: %w", err)
 	}
 
-	cmd := exec.Command(parserPath, filePath)
+	cmd := home.ToolCommand(parserPath, filePath)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

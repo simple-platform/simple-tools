@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/home"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -67,7 +68,7 @@ type SCLBlock struct {
 // Parse executes the scl-parser CLI tool against the given file path.
 // It returns the AST as a slice of SCLBlocks.
 func (p *DefaultSCLParser) Parse(path string) ([]SCLBlock, error) {
-	cmd := exec.Command(p.ParserPath, path)
+	cmd := home.ToolCommand(p.ParserPath, path)
 	output, err := cmd.Output()
 	if err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {

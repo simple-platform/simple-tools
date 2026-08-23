@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestProgressInputIsTerminalRejectsPipe(t *testing.T) {
+	input, output, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	defer input.Close()
+	defer output.Close()
+
+	if progressInputIsTerminal(input) {
+		t.Fatal("pipe input was detected as an interactive terminal")
+	}
+}
+
 // TestRunBuild verifies the `simple build` command logic.
 // It uses extensive mocking of the `build` package functions to avoid invalidating
 // the test environment or taking excessive time with actual builds only to test CLI parsing.
