@@ -65,7 +65,6 @@ func CreateSpaceStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath st
 	dirs := []string{
 		spacePath,
 		filepath.Join(spacePath, "src"),
-		filepath.Join(spacePath, "src", "lib"),
 		filepath.Join(spacePath, "src", "styles"),
 		filepath.Join(spacePath, "tests"),
 	}
@@ -95,7 +94,6 @@ func CreateSpaceStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath st
 		{"templates/space/vitest.config.ts", filepath.Join(spacePath, "vitest.config.ts")},
 		{"templates/space/tsconfig.json", filepath.Join(spacePath, "tsconfig.json")},
 		{"templates/space/index.html", filepath.Join(spacePath, "index.html")},
-		{"templates/space/src/lib/simple.ts", filepath.Join(spacePath, "src", "lib", "simple.ts")},
 		{"templates/space/src/styles/theme.css", filepath.Join(spacePath, "src", "styles", "theme.css")},
 		{"templates/space/src/main.tsx", filepath.Join(spacePath, "src", "main.tsx")},
 		{"templates/space/src/App.tsx", filepath.Join(spacePath, "src", "App.tsx")},
