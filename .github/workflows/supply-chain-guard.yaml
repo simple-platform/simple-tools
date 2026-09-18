@@ -1,0 +1,96 @@
+name: Supply chain guard
+
+# Runs scripts/supply-chain-guard.sh --tree on GitHub's runners.
+#
+# This repo has no local hooks yet, so this is the only supply-chain gate on it.
+# It also runs somewhere the person pushing does not control, which a local hook
+# never does -- a hook sits on the attacker's side of the trust boundary.
+#
+# Triggered on push to every branch rather than on pull_request. A push event
+# fires for force-pushes and for commits that never open a pull request, which
+# is strictly broader than what a pull_request trigger sees. Both September
+# injections in the sibling repo arrived on branches with no pull request open.
+#
+# The job is named `guard` because the branch ruleset requires a status check
+# with exactly that context. Renaming the job silently makes every pull request
+# unmergeable: the required check never reports and the merge box waits forever.
+# There is deliberately no paths filter for the same reason -- a workflow that
+# declines to start produces no status at all, which a required check cannot
+# tell apart from one that has not finished yet.
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Collapses repeated pushes to the same branch. Safe because --tree reads the
+# current tree via `git ls-files`, not a commit range: a cancelled run's finding is
+# never lost, only superseded by a scan of whatever is actually on the branch now.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan for hidden code
+        id: scan
+        run: |
+          if bash scripts/supply-chain-guard.sh --tree; then
+            echo "clean=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "clean=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Raise an issue
+        if: steps.scan.outputs.clean == 'false'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const ref = context.ref.replace('refs/heads/', '');
+            const title = `Supply chain guard tripped on ${ref}`;
+            // One open issue per branch. A force-push loop would otherwise file a
+            // new issue every push and bury the first, which is the one with the
+            // useful timestamp.
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'security',
+            });
+            if (open.some(i => i.title === title)) return;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              body: [
+                `Commit \`${context.sha}\` on \`${ref}\` contains source matching the`,
+                `injected-loader shape: executable code hidden past a long whitespace`,
+                `run, or a known loader marker.`,
+                ``,
+                `Pushed by: @${context.actor}`,
+                ``,
+                `**Do not build, install, deploy or check out this ref.**`,
+                ``,
+                `Do NOT edit the payload out by hand — the file also carries a`,
+                `prepended \`createRequire\` shim, and a partial removal leaves a`,
+                `working loader. Restore the whole file from a known-clean blob.`,
+                ``,
+                `Reproduce locally:`,
+                '```',
+                `git fetch origin ${ref} && git checkout origin/${ref}`,
+                `bash scripts/supply-chain-guard.sh --tree`,
+                '```',
+                ``,
+                `Contact the incident owner before pushing anything else to this repo.`,
+              ].join('\n'),
+              labels: ['security'],
+            });
+
+      - name: Fail the run
+        if: steps.scan.outputs.clean == 'false'
+        run: exit 1
