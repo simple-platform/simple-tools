@@ -17,9 +17,18 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// setupTestProductionRoot builds a production root of test instances and
+// returns its canonical path. The bridge resolves the symlinks out of an
+// instance root before it reports that root or measures containment against
+// it, so the fixture names the same resolved directory. Some platforms hand
+// out a per-test temporary directory that is reached through a symlink, and
+// the unresolved alias names a path the bridge never uses.
 func setupTestProductionRoot(t *testing.T, instanceIDs ...string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve test production root: %v", err)
+	}
 	oldRoot := devStudioProductionRoot
 	devStudioProductionRoot = dir
 	t.Cleanup(func() { devStudioProductionRoot = oldRoot })
