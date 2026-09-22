@@ -12,7 +12,7 @@ publish = false
 # `serde_json` are direct dependencies because `#[derive(Deserialize)]` expands
 # to code that names `serde` by crate, so the action depends on it even though
 # the prelude re-exports the derive.
-simpleplatform-sdk = "0.1"
+simpleplatform-sdk = "0.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
