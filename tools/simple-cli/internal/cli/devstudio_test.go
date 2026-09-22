@@ -93,7 +93,7 @@ func TestDevStudioBridgeStartsOnLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get health: %v", err)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("health status = %d, want %d", response.StatusCode, http.StatusOK)
@@ -124,7 +124,7 @@ func TestDevStudioServePrintsLocalEndpointsAndStopsWithContext(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get health: %v", err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 
 	cancel()
 	if err := <-done; err != nil {
@@ -274,7 +274,7 @@ func TestDevStudioInjectableResolver(t *testing.T) {
 
 		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + devStudioWebSocketPath
 		connection := dialDevStudio(t, wsURL)
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 
 		sendDevStudioMessage(t, connection, sessionConnectMessage("inst_custom"))
 		message := readDevStudioMessage(t, connection)
@@ -298,7 +298,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 
 		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + devStudioWebSocketPath
 		connection := dialDevStudio(t, wsURL)
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 
 		sendDevStudioMessage(t, connection, sessionConnectMessage("inst_nonexistent_candidate"))
 		message := readDevStudioMessage(t, connection)
@@ -320,7 +320,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 
 		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + devStudioWebSocketPath
 		connection := dialDevStudio(t, wsURL)
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 
 		connectMsg := map[string]any{
 			"type":            "session.connect",
@@ -355,7 +355,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 func TestDevStudioBridgeHandshake(t *testing.T) {
 	_, wsURL := startDevStudioBridge(t)
 	connection := dialDevStudio(t, wsURL)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_acme_dev"))
 
@@ -384,7 +384,7 @@ func TestDevStudioBridgeHandshake(t *testing.T) {
 func TestDevStudioBridgeRequiresDeployKey(t *testing.T) {
 	_, wsURL := startDevStudioBridge(t)
 	connection := dialDevStudio(t, wsURL)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	// Missing deployKey
 	sendDevStudioMessage(t, connection, map[string]any{
@@ -435,7 +435,7 @@ func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
 	}
 
 	// Close connection and verify key cleared
-	connection.Close()
+	_ = connection.Close()
 	time.Sleep(50 * time.Millisecond)
 
 	bridge.mu.Lock()
@@ -510,7 +510,7 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, wsURL := startDevStudioBridge(t)
 			connection := dialDevStudio(t, wsURL)
-			defer connection.Close()
+			defer func() { _ = connection.Close() }()
 
 			sendDevStudioMessage(t, connection, test.message)
 			message := readDevStudioMessage(t, connection)
@@ -543,7 +543,7 @@ func TestDevStudioBridgeRejectsMalformedMessages(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			_, wsURL := startDevStudioBridge(t)
 			connection := dialDevStudio(t, wsURL)
-			defer connection.Close()
+			defer func() { _ = connection.Close() }()
 
 			if err := connection.WriteMessage(websocket.TextMessage, []byte(test.payload)); err != nil {
 				t.Fatalf("write message: %v", err)
@@ -558,14 +558,14 @@ func TestDevStudioBridgeRejectsMalformedMessages(t *testing.T) {
 func TestDevStudioBridgeRejectsSecondActiveSession(t *testing.T) {
 	_, wsURL := startDevStudioBridge(t)
 	first := dialDevStudio(t, wsURL)
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	sendDevStudioMessage(t, first, sessionConnectMessage("inst_acme_dev"))
 	if message := readDevStudioMessage(t, first); message["type"] != "session.ready" {
 		t.Fatalf("first type = %q, want session.ready", message["type"])
 	}
 
 	second := dialDevStudio(t, wsURL)
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	sendDevStudioMessage(t, second, sessionConnectMessage("inst_acme_dev"))
 	if message := readDevStudioMessage(t, second); message["code"] != "session_already_active" {
 		t.Fatalf("second code = %q, want session_already_active", message["code"])
@@ -584,7 +584,7 @@ func TestDevStudioBridgeClearsSessionWhenBrowserDisconnects(t *testing.T) {
 	}
 
 	second := dialDevStudio(t, wsURL)
-	defer second.Close()
+	defer func() { _ = second.Close() }()
 	sendDevStudioMessage(t, second, sessionConnectMessage("inst_acme_dev"))
 	if message := readDevStudioMessage(t, second); message["type"] != "session.ready" {
 		t.Fatalf("second type = %q, want session.ready", message["type"])
@@ -601,7 +601,7 @@ func TestDevStudioBridgeDoesNotExposeOtherEndpoints(t *testing.T) {
 		if err != nil {
 			t.Fatalf("get %s: %v", path, err)
 		}
-		response.Body.Close()
+		_ = response.Body.Close()
 		if response.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s status = %d, want %d", path, response.StatusCode, http.StatusNotFound)
 		}
@@ -629,7 +629,7 @@ func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -653,10 +653,10 @@ func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
 	})
 
 	msg := readDevStudioMessage(t, conn)
-	conn.Close()
+	_ = conn.Close()
 
 	cancel()
-	_ = <-done
+	<-done
 
 	rawMsgBytes, _ := json.Marshal(msg)
 	if strings.Contains(string(rawMsgBytes), knownSecretKey) {
@@ -686,7 +686,7 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 
 	wsURL := "ws://" + listener.Addr().String() + devStudioWebSocketPath
 	conn := dialDevStudio(t, wsURL)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	secretKey := "shutdown_secret_key_888"
 	sendDevStudioMessage(t, conn, map[string]any{
@@ -889,7 +889,7 @@ func TestDevStudioWebSocketOriginEnforcement(t *testing.T) {
 			if msg["type"] != "session.ready" {
 				t.Fatalf("origin %q: expected session.ready, got %v", origin, msg)
 			}
-			conn.Close()
+			_ = conn.Close()
 			time.Sleep(20 * time.Millisecond)
 		}
 	})
@@ -898,7 +898,7 @@ func TestDevStudioWebSocketOriginEnforcement(t *testing.T) {
 		conn, resp, err := dialDevStudioRaw(wsURL, nil)
 		if err == nil {
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 			t.Fatal("expected dial without origin to fail, got nil error")
 		}
@@ -912,7 +912,7 @@ func TestDevStudioWebSocketOriginEnforcement(t *testing.T) {
 		conn, resp, err := dialDevStudioRaw(wsURL, header)
 		if err == nil {
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 			t.Fatal("expected dial with empty origin to fail, got nil error")
 		}
@@ -926,7 +926,7 @@ func TestDevStudioWebSocketOriginEnforcement(t *testing.T) {
 		conn, resp, err := dialDevStudioRaw(wsURL, header)
 		if err == nil {
 			if conn != nil {
-				conn.Close()
+				_ = conn.Close()
 			}
 			t.Fatal("expected dial with multiple origins to fail, got nil error")
 		}
@@ -958,7 +958,7 @@ func TestDevStudioWebSocketOriginEnforcement(t *testing.T) {
 			conn, resp, err := dialDevStudioRaw(wsURL, header)
 			if err == nil {
 				if conn != nil {
-					conn.Close()
+					_ = conn.Close()
 				}
 				t.Fatalf("expected dial with origin %q (%s) to fail, got nil error", tc.origin, tc.name)
 			}

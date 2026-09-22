@@ -464,7 +464,7 @@ func (adapter *devStudioCodexAdapter) notify(method string, params any) error {
 }
 
 func (adapter *devStudioCodexAdapter) readCodexOutput(output io.ReadCloser) {
-	defer output.Close()
+	defer func() { _ = output.Close() }()
 	decoder := json.NewDecoder(bufio.NewReader(output))
 	for {
 		var envelope devStudioJSONRPCEnvelope
