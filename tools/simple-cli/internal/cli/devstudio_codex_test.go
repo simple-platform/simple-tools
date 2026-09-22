@@ -224,7 +224,7 @@ func TestDevStudioCodexStartsOnlyForFirstTurnAndUsesVerifiedProtocol(t *testing.
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_codex"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -304,7 +304,7 @@ func TestDevStudioCodexMapsDeltasStatusesAndAppRelativeChanges(t *testing.T) {
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_events"))
 	_ = readDevStudioMessage(t, connection)
@@ -346,7 +346,7 @@ func TestDevStudioBridgeDoesNotOwnSimpleCLIExecution(t *testing.T) {
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_no_bridge_cli"))
 	_ = readDevStudioMessage(t, connection)
@@ -369,7 +369,7 @@ func TestDevStudioCodexRejectsSecondTurnAndInterruptsActiveTurn(t *testing.T) {
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_cancel"))
 	_ = readDevStudioMessage(t, connection)
@@ -403,7 +403,7 @@ func TestDevStudioSessionCreatesMissingSimpleSCLWithDeployKey(t *testing.T) {
 	bridge := newDevStudioBridgeWithCodexStarter(newFakeDevStudioCodexStarter(nil))
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_scl"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -430,7 +430,7 @@ func TestDevStudioSessionAddsDevStudioEnvironmentToExistingSimpleSCL(t *testing.
 	bridge := newDevStudioBridgeWithCodexStarter(newFakeDevStudioCodexStarter(nil))
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_existing_scl"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -457,7 +457,7 @@ func TestDevStudioSessionUpdatesExistingDevStudioEnvironment(t *testing.T) {
 	bridge := newDevStudioBridgeWithCodexStarter(newFakeDevStudioCodexStarter(nil))
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_existing_devstudio"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -821,7 +821,7 @@ func TestDevStudioCodexTurnRestoresProtectedFilesWhenParentDirectoryDeleted(t *t
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_turn_del_parent"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -855,7 +855,7 @@ func TestDevStudioCodexFailsPendingCallsImmediatelyOnUnexpectedExit(t *testing.T
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_exit_test"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -941,7 +941,7 @@ func TestDevStudioCodexProcessExitRestoresProtectedFilesAndRecoversOnLaterTurn(t
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_exit_recover"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -993,7 +993,7 @@ func TestDevStudioCodexInitializeFailureStopsProcessAndSubsequentTurnRetries(t *
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_init_fail"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -1034,7 +1034,7 @@ func TestDevStudioCodexThreadStartFailureStopsProcessAndSubsequentTurnRetries(t 
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_thread_fail"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -1075,7 +1075,7 @@ func TestDevStudioCodexThreadStartMalformedResponseStopsProcessAndSubsequentTurn
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_thread_malformed"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
@@ -1116,7 +1116,7 @@ func TestDevStudioCodexTurnStartMalformedResponseCleansUpStateForSubsequentTurn(
 	bridge := newDevStudioBridgeWithCodexStarter(starter)
 	server := startDevStudioBridgeServer(t, bridge)
 	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
-	defer connection.Close()
+	defer func() { _ = connection.Close() }()
 
 	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_turn_malformed"))
 	if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {

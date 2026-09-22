@@ -236,23 +236,6 @@ func ensureDevStudioInstanceRootAtPath(instanceID, targetPath string) (string, e
 	return resolvedPath, nil
 }
 
-// ensureDevStudioInstanceRoot creates the monorepo root structure using the platform's scaffold.
-func ensureDevStudioInstanceRoot(instanceID string) (bool, error) {
-	if !isValidDevStudioInstanceID(instanceID) {
-		return false, fmt.Errorf("invalid instance ID: %q", instanceID)
-	}
-	if foundPath, ok := findExistingDevStudioInstanceRoot(instanceID); ok {
-		_, err := ensureDevStudioInstanceRootAtPath(instanceID, foundPath)
-		return false, err
-	}
-	target := filepath.Join(devStudioProductionRoot, instanceID)
-	_, err := ensureDevStudioInstanceRootAtPath(instanceID, target)
-	if err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
 var devStudioCmd = &cobra.Command{
 	Use:   "devstudio",
 	Short: "Run the local DevStudio bridge",
@@ -300,10 +283,10 @@ func serveDevStudioWithBridge(ctx context.Context, listener net.Listener, output
 	server := &http.Server{Handler: bridge.handler()}
 	address := listener.Addr().String()
 
-	fmt.Fprintf(output, "Bound address: %s\n", address)
-	fmt.Fprintf(output, "Health: http://%s%s\n", address, devStudioHealthPath)
-	fmt.Fprintf(output, "WebSocket: ws://%s%s\n", address, devStudioWebSocketPath)
-	fmt.Fprintln(output, "Press Ctrl+C to stop.")
+	_, _ = fmt.Fprintf(output, "Bound address: %s\n", address)
+	_, _ = fmt.Fprintf(output, "Health: http://%s%s\n", address, devStudioHealthPath)
+	_, _ = fmt.Fprintf(output, "WebSocket: ws://%s%s\n", address, devStudioWebSocketPath)
+	_, _ = fmt.Fprintln(output, "Press Ctrl+C to stop.")
 
 	serveResult := make(chan error, 1)
 	go func() {

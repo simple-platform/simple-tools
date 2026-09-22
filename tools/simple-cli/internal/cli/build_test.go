@@ -13,8 +13,8 @@ func TestProgressInputIsTerminalRejectsPipe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create pipe: %v", err)
 	}
-	defer input.Close()
-	defer output.Close()
+	defer func() { _ = input.Close() }()
+	defer func() { _ = output.Close() }()
 
 	if progressInputIsTerminal(input) {
 		t.Fatal("pipe input was detected as an interactive terminal")
