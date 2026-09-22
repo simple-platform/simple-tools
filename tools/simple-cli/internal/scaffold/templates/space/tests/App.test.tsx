@@ -3,6 +3,13 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/App'
 
+// A Space is served in a frame, and it answers to the page that framed it:
+// App.tsx takes the host origin from document.referrer. The test environment
+// has no framing page, so one is named before App.tsx is evaluated.
+vi.hoisted(() => {
+  Object.defineProperty(document, 'referrer', { configurable: true, value: 'https://tenant.example/' })
+})
+
 // Mock the simple SDK so tests don't need a real RPC connection
 vi.mock('@simpleplatform/sdk/space', () => ({
   connectSpace: vi.fn().mockResolvedValue({
