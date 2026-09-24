@@ -2,13 +2,8 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
-
-	"simple-cli/internal/build"
-	"simple-cli/internal/config"
-	"simple-cli/internal/deploy"
 
 	"github.com/spf13/cobra"
 )
@@ -55,92 +50,27 @@ func runInstall(ctx context.Context, appID string) error {
 		return fmt.Errorf("--env flag is required (dev, staging, or prod)")
 	}
 
-	// Ensure scl-parser is available (for config loading)
-	// We need this to parse simple.scl to find the environment endpoints.
-	parserPath, err := build.EnsureSCLParser(nil)
-	if err != nil {
-		return fmt.Errorf("failed to ensure scl-parser: %w", err)
-	}
-
 	// === PHASE 1: Config & Auth ===
 	// Load configuration to determine where to connect (DevOps endpoint) and how to authenticate.
-	var cfg *config.SimpleSCL
-	var env *config.Environment
-	var cfgErr, authErr error
-	var jwt string
-
-	// Load simple.scl config from current directory
-	// Note: We need simple.scl for endpoints and API keys
-	loader := config.NewLoader(parserPath)
-	cfg, cfgErr = loader.LoadSimpleSCL(".")
-	if cfgErr != nil {
-		return fmt.Errorf("failed to load simple.scl: %w", cfgErr)
-	}
-
-	env, cfgErr = cfg.GetEnv(installEnv)
-	if cfgErr != nil {
-		return cfgErr
+	notices := connectNotices{quiet: jsonOutput}
+	target, err := loadDevopsTarget(defaultDevopsDeps(), installEnv, notices)
+	if err != nil {
+		return err
 	}
 
 	// Get JWT (cached for token lifetime)
 	// Authentication is required to allow the CLI into the DevOps channel.
-	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, installEnv)
-	auth := deploy.NewAuthenticator()
-	jwt, authErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
-	if authErr != nil {
-		return fmt.Errorf("authentication failed: %w", authErr)
+	if err := target.authenticate(ctx); err != nil {
+		return err
 	}
 
 	// === PHASE 2: Connect & Install ===
-	// Establish WebSocket connection to DevOps service.
-	client := deploy.NewClient(deploy.ClientConfig{
-		Endpoint: env.DevOpsEndpoint(),
-		JWT:      jwt,
-		Timeout:  15 * time.Minute,
-	})
-
-	if err := client.Connect(ctx); err != nil {
-		var authErr *deploy.AuthFailedError
-		if errors.As(err, &authErr) { // 401/403
-			if !jsonOutput {
-				fmt.Println("🔄 Auth token expired, refreshing...")
-			}
-
-			// 1. Clear token cache to force fresh prompt/login if needed
-			if err := auth.ClearCache(tenantEnvKey); err != nil {
-				return fmt.Errorf("failed to clear token cache: %w", err)
-			}
-
-			// 2. Get new JWT (force refresh)
-			var newJWTErr error
-			jwt, newJWTErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
-			if newJWTErr != nil {
-				return fmt.Errorf("re-authentication failed: %w", newJWTErr)
-			}
-
-			// 3. Re-create client with new JWT.
-			// Installs are synchronous server-side and routinely exceed 30s on
-			// record-heavy apps, so the reconnect path must carry the same
-			// timeout as the initial client above.
-			client = deploy.NewClient(deploy.ClientConfig{
-				Endpoint: env.DevOpsEndpoint(),
-				JWT:      jwt,
-				Timeout:  15 * time.Minute,
-			})
-
-			// 4. Retry connection once
-			if err := client.Connect(ctx); err != nil {
-				return fmt.Errorf("connection failed after token refresh: %w", err)
-			}
-		} else {
-			return err
-		}
-	}
-	defer client.Close()
-
-	if err := client.JoinChannel(ctx, appID); err != nil {
+	// Establish WebSocket connection to DevOps service and join the app's channel.
+	client, err := target.connect(ctx, appID, notices)
+	if err != nil {
 		return err
 	}
+	defer client.Close()
 
 	if !jsonOutput {
 		fmt.Printf("🚀 Installing %s to %s...\n", appID, installEnv)

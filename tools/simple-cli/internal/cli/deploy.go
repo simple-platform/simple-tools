@@ -2,13 +2,10 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"time"
 
-	"simple-cli/internal/build"
-	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
 
@@ -71,37 +68,17 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		return fmt.Errorf("app path '%s' not found", appPath)
 	}
 
-	// Ensure scl-parser is available (downloads if needed) for config parsing
-	parserPath, err := build.EnsureSCLParser(nil)
-	if err != nil {
-		return fmt.Errorf("failed to ensure scl-parser: %w", err)
-	}
-
 	// === PHASE 1: Config & Auth ===
 	// Load configuration to determine endpoints and credentials.
-	var cfg *config.SimpleSCL
-	var env *config.Environment
-	var cfgErr, authErr error
-	var jwt string
-
-	// Load simple.scl config
-	loader := config.NewLoader(parserPath)
-	cfg, cfgErr = loader.LoadSimpleSCL(".")
-	if cfgErr != nil {
-		return fmt.Errorf("failed to load simple.scl: %w", cfgErr)
-	}
-
-	env, cfgErr = cfg.GetEnv(deployEnv)
-	if cfgErr != nil {
-		return cfgErr
+	notices := connectNotices{quiet: jsonOutput}
+	target, err := loadDevopsTarget(defaultDevopsDeps(), deployEnv, notices)
+	if err != nil {
+		return err
 	}
 
 	// Get JWT (cached for token lifetime)
-	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, deployEnv)
-	auth := deploy.NewAuthenticator()
-	jwt, authErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
-	if authErr != nil {
-		return fmt.Errorf("authentication failed: %w", authErr)
+	if err := target.authenticate(ctx); err != nil {
+		return err
 	}
 
 	// === PHASE 2: Version & Files ===
@@ -112,7 +89,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		appPath,
 		deployEnv,
 		deployBump,
-		deploy.NewVersionManager(parserPath),
+		deploy.NewVersionManager(target.parserPath),
 		deploy.NewFileCollector(),
 	)
 	if err != nil {
@@ -129,60 +106,18 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 	}
 
 	// === PHASE 3: Connect & Deploy ===
-	// Establish connection to DevOps service.
-	client := deploy.NewClient(deploy.ClientConfig{
-		Endpoint: env.DevOpsEndpoint(),
-		JWT:      jwt,
-		Timeout:  15 * time.Minute,
-	})
-
-	if err := client.Connect(ctx); err != nil {
-		// Handle potential auth failure (expired token)
-		// If 401/403, we try to refresh the token and reconnect once.
-		var authErr *deploy.AuthFailedError
-		if errors.As(err, &authErr) { // 401/403
-			if !jsonOutput {
-				fmt.Println("🔄 Auth token expired, refreshing...")
-			}
-
-			// 1. Clear token cache to force fresh prompt/login if needed
-			if err := auth.ClearCache(tenantEnvKey); err != nil {
-				return fmt.Errorf("failed to clear token cache: %w", err)
-			}
-
-			// 2. Get new JWT (force refresh)
-			var newJWTErr error
-			jwt, newJWTErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
-			if newJWTErr != nil {
-				return fmt.Errorf("re-authentication failed: %w", newJWTErr)
-			}
-
-			// 3. Re-create client with new JWT
-			client = deploy.NewClient(deploy.ClientConfig{
-				Endpoint: env.DevOpsEndpoint(),
-				JWT:      jwt,
-				Timeout:  15 * time.Minute,
-			})
-
-			// 4. Retry connection
-			if err := client.Connect(ctx); err != nil {
-				return fmt.Errorf("connection failed after refresh: %w", err)
-			}
-		} else {
-			return err
-		}
-	}
-	defer client.Close()
-
 	// Get app ID from app.scl to verify we are deploying the correct app
-	appID, err := deploy.ExtractAppID(parserPath, appPath)
+	appID, err := deploy.ExtractAppID(target.parserPath, appPath)
 	if err != nil {
 		return err
 	}
 
-	if err := client.JoinChannel(ctx, appID); err != nil {
+	// Establish connection to DevOps service and join the app's channel.
+	client, err := target.connect(ctx, appID, notices)
+	if err != nil {
 		return err
 	}
+	defer client.Close()
 
 	// Send manifest to server to check which files are missing (delta upload)
 	neededFiles, err := client.SendManifest(ctx, files, newVersion)
@@ -327,7 +262,7 @@ var alreadyInstalledRe = regexp.MustCompile("Version `([^`]+)` of application `[
 //     always succeeded.
 //
 // Any other error is returned unchanged on the first attempt.
-func installDeployedVersion(ctx context.Context, client *deploy.Client, deployedVersion string, quiet bool) (*deploy.InstallResult, error) {
+func installDeployedVersion(ctx context.Context, client devopsClient, deployedVersion string, quiet bool) (*deploy.InstallResult, error) {
 	const attempts = 4
 
 	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
