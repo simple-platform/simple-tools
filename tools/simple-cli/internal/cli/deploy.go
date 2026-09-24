@@ -48,7 +48,7 @@ func init() {
 	RootCmd.AddCommand(deployCmd)
 	deployCmd.Flags().StringVar(&deployEnv, "env", "", "target environment (required: dev, staging, or prod)")
 	deployCmd.Flags().StringVar(&deployBump, "bump", "", "version bump type: patch|minor|major (required for first deploy after prod)")
-	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "show what would be deployed without deploying")
+	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "show what would be deployed; nothing is written or uploaded")
 	deployCmd.Flags().BoolVar(&deployNoInstall, "no-install", false, "skip automatic installation after deploy")
 	_ = deployCmd.MarkFlagRequired("env")
 }
@@ -112,6 +112,11 @@ func runDeployWith(ctx context.Context, out io.Writer, deps deployDeps, opts dep
 		return err
 	}
 
+	versioner := deps.newVersioner(target.parserPath)
+	if opts.dryRun {
+		return dryRunDeploy(out, deps, versioner, opts)
+	}
+
 	// Get JWT (cached for token lifetime)
 	if err := target.authenticate(ctx); err != nil {
 		return err
@@ -121,7 +126,6 @@ func runDeployWith(ctx context.Context, out io.Writer, deps deployDeps, opts dep
 	// app.scl is part of the upload manifest, so it must be collected only
 	// after its version has been updated. Parallel collection could otherwise
 	// upload an old app.scl under a new deployment version.
-	versioner := deps.newVersioner(target.parserPath)
 	newVersion, files, err := prepareVersionedFiles(
 		opts.appPath,
 		opts.env,
@@ -136,10 +140,6 @@ func runDeployWith(ctx context.Context, out io.Writer, deps deployDeps, opts dep
 	if !opts.json {
 		_, _ = fmt.Fprintf(out, "📦 Version: %s\n", newVersion)
 		_, _ = fmt.Fprintf(out, "📁 Files: %d\n", len(files))
-	}
-
-	if opts.dryRun {
-		return dryRunOutput(out, files, newVersion, opts.json)
 	}
 
 	// === PHASE 3: Connect & Deploy ===
@@ -269,6 +269,31 @@ func prepareVersionedFiles(
 	return newVersion, files, nil
 }
 
+// dryRunDeploy shows what a deploy would upload without changing anything:
+// it does not sign in, does not connect and does not write app.scl. The
+// version is the one a deploy would bump to, computed from app.scl as it is.
+func dryRunDeploy(out io.Writer, deps deployDeps, versioner appVersioner, opts deployOptions) error {
+	app, err := versioner.ParseAppSCL(opts.appPath)
+	if err != nil {
+		return err
+	}
+	newVersion, err := deploy.ComputeNewVersion(app.Version, opts.env, opts.bump)
+	if err != nil {
+		return err
+	}
+
+	files, err := deps.newCollector().CollectFiles(opts.appPath)
+	if err != nil {
+		return err
+	}
+
+	if !opts.json {
+		_, _ = fmt.Fprintf(out, "📦 Version: %s\n", newVersion)
+		_, _ = fmt.Fprintf(out, "📁 Files: %d\n", len(files))
+	}
+	return dryRunOutput(out, files, newVersion, opts.json)
+}
+
 // dryRunOutput prints the files that would be deployed without actually deploying.
 func dryRunOutput(out io.Writer, files map[string]deploy.FileInfo, version string, jsonMode bool) error {
 	if jsonMode {
@@ -292,6 +317,9 @@ func dryRunOutput(out io.Writer, files map[string]deploy.FileInfo, version strin
 		_, _ = fmt.Fprintf(out, "  %s (%d bytes, hash: %s...)\n", path, fi.Size, fi.Hash[:8])
 	}
 	_, _ = fmt.Fprintf(out, "\nTotal: %d files, version: %s\n", len(files), version)
+	// The listing's hashes are of the files on disk, and a dry run leaves
+	// app.scl alone, so its hash is not the one a deploy would upload.
+	_, _ = fmt.Fprintf(out, "app.scl is listed as it is on disk; a real deploy uploads it with version %s.\n", version)
 	return nil
 }
 

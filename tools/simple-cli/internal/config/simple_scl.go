@@ -131,29 +131,40 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 }
 
 // GetEnv retrieves the configuration for a named environment.
-// It resolves any environment variables references (starting with $) in values.
+// It resolves any environment variables references (starting with $) in values,
+// and fails when the API key resolves to nothing.
 func (s *SimpleSCL) GetEnv(name string) (*Environment, error) {
+	resolved, err := s.LookupEnv(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate API key availability after resolution
+	if resolved.APIKey == "" {
+		if raw := s.Environments[name].APIKey; strings.HasPrefix(raw, "$") {
+			return nil, fmt.Errorf("environment variable %s not set", strings.TrimPrefix(raw, "$"))
+		}
+		return nil, fmt.Errorf("API key not configured for environment '%s'", name)
+	}
+
+	return resolved, nil
+}
+
+// LookupEnv is GetEnv without the API key check, for work that never signs
+// in, such as a deploy dry run: the key may be unset, and then resolves to
+// an empty APIKey.
+func (s *SimpleSCL) LookupEnv(name string) (*Environment, error) {
 	env, ok := s.Environments[name]
 	if !ok {
 		return nil, fmt.Errorf("environment '%s' not defined in simple.scl", name)
 	}
 
 	// Create a copy to avoid modifying the original during resolution
-	resolved := &Environment{
+	return &Environment{
 		Name:     env.Name,
 		Endpoint: resolveEnvVar(env.Endpoint),
 		APIKey:   resolveEnvVar(env.APIKey),
-	}
-
-	// Validate API key availability after resolution
-	if resolved.APIKey == "" {
-		if strings.HasPrefix(env.APIKey, "$") {
-			return nil, fmt.Errorf("environment variable %s not set", strings.TrimPrefix(env.APIKey, "$"))
-		}
-		return nil, fmt.Errorf("API key not configured for environment '%s'", name)
-	}
-
-	return resolved, nil
+	}, nil
 }
 
 // resolveEnvVar checks if a value starts with '$' and substitutes it with the OS environment variable.

@@ -611,6 +611,36 @@ func TestDefaultSCLParser_Parse(t *testing.T) {
 	}
 }
 
+func TestSimpleSCL_LookupEnv(t *testing.T) {
+	cfg := &SimpleSCL{
+		Environments: map[string]*Environment{
+			"dev": {Name: "dev", Endpoint: "$LOOKUP_TEST_ENDPOINT", APIKey: "$LOOKUP_TEST_UNSET_KEY"},
+		},
+	}
+	t.Setenv("LOOKUP_TEST_ENDPOINT", "acme.simple.dev")
+	t.Setenv("LOOKUP_TEST_UNSET_KEY", "")
+
+	// An unset key is no error: the caller does not sign in.
+	env, err := cfg.LookupEnv("dev")
+	if err != nil {
+		t.Fatalf("LookupEnv() error = %v", err)
+	}
+	if env.Name != "dev" || env.Endpoint != "acme.simple.dev" || env.APIKey != "" {
+		t.Errorf("LookupEnv() = %+v", env)
+	}
+	if cfg.Environments["dev"].Endpoint != "$LOOKUP_TEST_ENDPOINT" {
+		t.Error("LookupEnv() resolved the stored environment in place")
+	}
+
+	if _, err := cfg.LookupEnv("prod"); err == nil || err.Error() != "environment 'prod' not defined in simple.scl" {
+		t.Errorf("LookupEnv(prod) error = %v", err)
+	}
+	// GetEnv still insists on the key.
+	if _, err := cfg.GetEnv("dev"); err == nil || err.Error() != "environment variable LOOKUP_TEST_UNSET_KEY not set" {
+		t.Errorf("GetEnv() error = %v", err)
+	}
+}
+
 func TestSimpleSCL_GetEnv_EmptyAPIKey(t *testing.T) {
 	// Test case where API key is empty string (not env var)
 	cfg := &SimpleSCL{

@@ -82,9 +82,10 @@ type devopsTarget struct {
 }
 
 // loadDevopsTarget finds the scl-parser (downloading it if needed), loads
-// simple.scl from the working directory and resolves envName in it. It
-// reports only details and notes on the config step: the caller owns the
-// step's start and end.
+// simple.scl from the working directory and resolves envName in it. The
+// API key is checked only when the target signs in: a deploy dry run loads
+// the target and never does. It reports only details and notes on the
+// config step: the caller owns the step's start and end.
 func loadDevopsTarget(deps devopsDeps, envName string, steps ui.StepReporter) (*devopsTarget, error) {
 	var downloading sync.Once
 	parserPath, err := deps.ensureParser(func(status string) {
@@ -102,7 +103,7 @@ func loadDevopsTarget(deps devopsDeps, envName string, steps ui.StepReporter) (*
 		return nil, fmt.Errorf("failed to load simple.scl: %w", err)
 	}
 
-	env, err := cfg.GetEnv(envName)
+	env, err := cfg.LookupEnv(envName)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +131,11 @@ func (t *devopsTarget) host() string {
 }
 
 // authenticate gets a JWT for the target, from the cache while it is valid.
+// It first checks that the environment's API key is set.
 func (t *devopsTarget) authenticate(ctx context.Context) error {
+	if _, err := t.cfg.GetEnv(t.envName); err != nil {
+		return err
+	}
 	jwt, err := t.auth.GetJWT(ctx, t.env.IdentityEndpoint(), t.env.APIKey, t.tenantEnvKey)
 	if err != nil {
 		return fmt.Errorf("authentication failed: %w", err)

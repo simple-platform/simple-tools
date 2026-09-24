@@ -126,13 +126,18 @@ func (c *fakeDevopsClient) Install(ctx context.Context) (*deploy.InstallResult, 
 
 func (c *fakeDevopsClient) Close() { c.closed.Add(1) }
 
-// testSCL is a simple.scl with one environment, dev, whose endpoint is
-// acme.simple.dev.
+// unsetKeyVar names the variable preview's API key comes from. Tests that
+// use preview clear it.
+const unsetKeyVar = "SIMPLE_CLI_TEST_UNSET_KEY"
+
+// testSCL is a simple.scl with two environments at acme.simple.dev: dev,
+// whose API key is set, and preview, whose key comes from unsetKeyVar.
 func testSCL() *config.SimpleSCL {
 	return &config.SimpleSCL{
 		Tenant: "acme",
 		Environments: map[string]*config.Environment{
-			"dev": {Name: "dev", Endpoint: "acme.simple.dev", APIKey: "si_key"},
+			"dev":     {Name: "dev", Endpoint: "acme.simple.dev", APIKey: "si_key"},
+			"preview": {Name: "preview", Endpoint: "acme.simple.dev", APIKey: "$" + unsetKeyVar},
 		},
 	}
 }
@@ -243,6 +248,29 @@ func TestLoadDevopsTarget(t *testing.T) {
 				t.Errorf("reports = %q, want %q", got, tt.wantCalls)
 			}
 		})
+	}
+}
+
+func TestDevopsTarget_APIKeyIsCheckedWhenSigningIn(t *testing.T) {
+	// A deploy dry run loads the target but never signs in, so a missing
+	// API key must not fail the load, only the sign-in.
+	t.Setenv(unsetKeyVar, "")
+	auth := &fakeAuthenticator{}
+	var dials []string
+	target, err := loadDevopsTarget(fakeDevopsDeps(auth, &dials, nil), "preview", ui.NopReporter{})
+	if err != nil {
+		t.Fatalf("loadDevopsTarget() error = %v; the key is not needed yet", err)
+	}
+	if target.host() != "devops.acme.simple.dev" || target.cfg.Tenant != "acme" {
+		t.Errorf("target = %+v", target)
+	}
+
+	err = target.authenticate(context.Background())
+	if want := "environment variable " + unsetKeyVar + " not set"; err == nil || err.Error() != want {
+		t.Fatalf("authenticate() error = %v, want %q", err, want)
+	}
+	if auth.calls != 0 {
+		t.Errorf("signed in %d times without a key", auth.calls)
 	}
 }
 

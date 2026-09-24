@@ -18,6 +18,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
 
@@ -561,6 +562,87 @@ func assertOneJSONDocument(t *testing.T, data []byte, want map[string]any) {
 	}
 }
 
+func TestRunDeployWith_DryRunIsSideEffectFree(t *testing.T) {
+	t.Setenv(unsetKeyVar, "")
+	tests := []struct {
+		name    string
+		opts    deployOptions
+		current string
+		wantErr string
+		wantOut []string
+	}{
+		{
+			name:    "text",
+			opts:    deployOptions{appPath: "apps/com.acme.crm", env: "dev", dryRun: true},
+			current: "1.4.3-dev.4",
+			wantOut: []string{
+				"📦 Version: 1.4.3-dev.5\n",
+				"Total: 3 files, version: 1.4.3-dev.5\napp.scl is listed as it is on disk; a real deploy uploads it with version 1.4.3-dev.5.\n",
+			},
+		},
+		{
+			name:    "json",
+			opts:    deployOptions{appPath: "apps/com.acme.crm", env: "staging", dryRun: true, json: true},
+			current: "1.4.3-dev.4",
+			wantOut: []string{`"dry_run": true`, `"version": "1.4.3-staging.1"`},
+		},
+		{
+			name:    "the version rules still apply",
+			opts:    deployOptions{appPath: "apps/com.acme.crm", env: "dev", dryRun: true},
+			current: "1.4.3",
+			wantErr: "--bump required for first deploy after prod release",
+		},
+		{
+			name:    "with --bump",
+			opts:    deployOptions{appPath: "apps/com.acme.crm", env: "dev", bump: "minor", dryRun: true},
+			current: "1.4.3",
+			wantOut: []string{"📦 Version: 1.5.0-dev.1\n"},
+		},
+		{
+			name:    "without an API key",
+			opts:    deployOptions{appPath: "apps/com.acme.crm", env: "preview", dryRun: true},
+			current: "1.4.3-dev.4",
+			wantOut: []string{"📦 Version: 1.4.3-preview.1\n"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newDeployFixture()
+			f.versioner.current = tt.current
+			deps := f.deps()
+			// staging exists only for this test.
+			deps.devops.loadConfig = func(string) (*config.SimpleSCL, error) {
+				cfg := testSCL()
+				cfg.Environments["staging"] = &config.Environment{Name: "staging", Endpoint: "acme-staging.simple.dev", APIKey: "si_key"}
+				return cfg, nil
+			}
+			var out bytes.Buffer
+			err := runDeployWith(context.Background(), &out, deps, tt.opts)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("runDeployWith() error = %v", err)
+			}
+			for _, want := range tt.wantOut {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("output lacks %q:\n%s", want, out.String())
+				}
+			}
+			if f.versioner.bumps != 0 {
+				t.Errorf("the dry run bumped app.scl %d times", f.versioner.bumps)
+			}
+			if f.auth.calls != 0 {
+				t.Errorf("the dry run signed in %d times", f.auth.calls)
+			}
+			if len(f.dials) != 0 {
+				t.Errorf("the dry run connected: %q", f.dials)
+			}
+		})
+	}
+}
+
 func TestInstallDeployedVersion(t *testing.T) {
 	stale := errors.New("Version `1.4.3-dev.4` of application `com.acme.crm` is already installed")
 	current := errors.New("Version `1.4.3-dev.5` of application `com.acme.crm` is already installed")
@@ -644,7 +726,8 @@ func TestDryRunOutput(t *testing.T) {
 	}{
 		{
 			name: "text",
-			want: "\n📋 Dry run - files to deploy:\n  app.scl (42 bytes, hash: 01234567...)\n\nTotal: 1 files, version: 1.0.1-dev.1\n",
+			want: "\n📋 Dry run - files to deploy:\n  app.scl (42 bytes, hash: 01234567...)\n\nTotal: 1 files, version: 1.0.1-dev.1\n" +
+				"app.scl is listed as it is on disk; a real deploy uploads it with version 1.0.1-dev.1.\n",
 		},
 		{
 			name: "json",
