@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -34,6 +35,15 @@ const (
 	phxReply     = 1 // Server reply
 	phxBroadcast = 2 // Server broadcast
 )
+
+// ErrReplyTimeout reports that the server did not answer a request in time.
+var ErrReplyTimeout = errors.New("reply timeout")
+
+// ChannelReply is the server's reply to one push.
+type ChannelReply struct {
+	Status   string // "ok" or "error"
+	Response any
+}
 
 // Buffer pool for reducing allocations
 var bufferPool = sync.Pool{
@@ -75,7 +85,7 @@ type PhoenixChannel struct {
 	socket   *PhoenixSocket
 	topic    string
 	joinRef  uint64
-	bindings sync.Map // map[uint64]func(any) - concurrent safe
+	bindings sync.Map // map[uint64]chan ChannelReply, each buffered 1
 }
 
 // phoenixMessage is the decoded Phoenix channel message.
@@ -481,40 +491,22 @@ func parseRefFast(raw json.RawMessage) uint64 {
 
 // Join sends a join message and waits for response.
 func (c *PhoenixChannel) Join(timeout time.Duration) error {
-	ref := c.socket.nextRef()
-	c.joinRef = ref
-
-	data := encodeJSONMessageFast(ref, ref, c.topic, "phx_join", nil)
-
-	done := make(chan error, 1)
-	c.bindings.Store(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- nil
-			return
-		}
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			done <- fmt.Errorf("join error: %v", resp["response"])
-			return
-		}
-		done <- nil
-	})
-
-	if err := c.socket.send(websocket.TextMessage, data); err != nil {
-		c.bindings.Delete(ref)
-		return err
+	reply, err := c.request(websocket.TextMessage, func(ref uint64) []byte {
+		// The join's ref becomes the channel's join ref, which every later
+		// push on this join carries.
+		c.joinRef = ref
+		return encodeJSONMessageFast(ref, ref, c.topic, "phx_join", nil)
+	}, timeout)
+	if err != nil {
+		return fmt.Errorf("join: %w", err)
 	}
-
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(timeout):
-		c.bindings.Delete(ref)
-		return fmt.Errorf("join timeout")
+	if reply.Status == "error" {
+		return fmt.Errorf("join error: %v", reply.Response)
 	}
+	return nil
 }
 
-// Push sends a JSON message and returns the ref for tracking replies.
+// Push sends a JSON message without waiting for a reply and returns its ref.
 func (c *PhoenixChannel) Push(event string, payload any) (uint64, error) {
 	ref := c.socket.nextRef()
 	data := encodeJSONMessageFast(c.joinRef, ref, c.topic, event, payload)
@@ -525,36 +517,74 @@ func (c *PhoenixChannel) Push(event string, payload any) (uint64, error) {
 	return ref, nil
 }
 
-// PushBinary sends a binary message with proper Phoenix V2 format.
-func (c *PhoenixChannel) PushBinary(event string, payload []byte) (uint64, error) {
-	ref := c.socket.nextRef()
-	data := encodeBinaryMessageFast(c.joinRef, ref, c.topic, event, payload)
-
-	if err := c.socket.send(websocket.BinaryMessage, data); err != nil {
-		return 0, err
-	}
-	return ref, nil
+// Request pushes a JSON event and waits for the server's reply to it.
+func (c *PhoenixChannel) Request(event string, payload any, timeout time.Duration) (ChannelReply, error) {
+	return c.request(websocket.TextMessage, func(ref uint64) []byte {
+		return encodeJSONMessageFast(c.joinRef, ref, c.topic, event, payload)
+	}, timeout)
 }
 
-// PushBinaryFile sends a file with metadata in our custom format.
-// Returns an error if the combined payload size would exceed safe limits.
-func (c *PhoenixChannel) PushBinaryFile(metadata map[string]string, content []byte) (uint64, error) {
+// RequestBinaryFile uploads one file as a binary "file" push and waits for the
+// server's reply to it.
+func (c *PhoenixChannel) RequestBinaryFile(metadata map[string]string, content []byte, timeout time.Duration) (ChannelReply, error) {
+	payload, err := binaryFilePayload(metadata, content)
+	if err != nil {
+		return ChannelReply{}, err
+	}
+	return c.request(websocket.BinaryMessage, func(ref uint64) []byte {
+		return encodeBinaryMessageFast(c.joinRef, ref, c.topic, "file", payload)
+	}, timeout)
+}
+
+// request sends the message encode builds for a fresh ref and waits for the
+// reply to that ref.
+//
+// The reply binding is registered BEFORE the send. readLoop runs on its own
+// goroutine, so a server that answers quickly can deliver the reply before a
+// binding registered after the send exists; that reply used to be dropped,
+// and the caller then waited out its whole timeout for an answer that had
+// already come.
+func (c *PhoenixChannel) request(msgType int, encode func(ref uint64) []byte, timeout time.Duration) (ChannelReply, error) {
+	ref := c.socket.nextRef()
+	replies := make(chan ChannelReply, 1)
+	c.bindings.Store(ref, replies)
+
+	if err := c.socket.send(msgType, encode(ref)); err != nil {
+		c.bindings.Delete(ref)
+		return ChannelReply{}, err
+	}
+	return c.await(ref, replies, timeout)
+}
+
+// await waits for the reply registered under ref.
+func (c *PhoenixChannel) await(ref uint64, replies chan ChannelReply, timeout time.Duration) (ChannelReply, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case reply := <-replies:
+		return reply, nil
+	case <-timer.C:
+		c.bindings.Delete(ref)
+		return ChannelReply{}, fmt.Errorf("%w after %s", ErrReplyTimeout, timeout)
+	}
+}
+
+// binaryFilePayload builds the body of a "file" push:
+// [metadata_len (4 bytes)] [metadata_json] [file_content].
+// It returns an error if the combined payload would exceed safe limits.
+func binaryFilePayload(metadata map[string]string, content []byte) ([]byte, error) {
 	metaJSON, err := json.Marshal(metadata)
 	if err != nil {
-		return 0, err
+		return nil, fmt.Errorf("encode file metadata: %w", err)
 	}
 
-	// Validate metadata length fits in uint32 (4 bytes header)
-	if len(metaJSON) > 0xFFFFFFFF {
-		return 0, fmt.Errorf("metadata too large: %d bytes exceeds maximum", len(metaJSON))
-	}
-
-	// Calculate total size using int64 to prevent overflow
-	// Build payload: [metadata_len (4 bytes)] [metadata_json] [file_content]
+	// Calculate total size using int64 to prevent overflow. The cap also keeps
+	// the metadata length well inside its 4-byte header.
 	const maxPayloadSize = 100 * 1024 * 1024 // 100MB limit
 	totalSize := int64(4) + int64(len(metaJSON)) + int64(len(content))
 	if totalSize > maxPayloadSize {
-		return 0, fmt.Errorf("payload too large: %d bytes exceeds maximum %d", totalSize, maxPayloadSize)
+		return nil, fmt.Errorf("payload too large: %d bytes exceeds maximum %d", totalSize, maxPayloadSize)
 	}
 
 	payload := make([]byte, int(totalSize))
@@ -562,29 +592,17 @@ func (c *PhoenixChannel) PushBinaryFile(metadata map[string]string, content []by
 	copy(payload[4:4+len(metaJSON)], metaJSON)
 	copy(payload[4+len(metaJSON):], content)
 
-	return c.PushBinary("file", payload)
-}
-
-// onRef registers a one-time callback for a specific ref.
-func (c *PhoenixChannel) onRef(ref uint64, callback func(any)) {
-	c.bindings.Store(ref, callback)
+	return payload, nil
 }
 
 func (c *PhoenixChannel) handleMessage(msg *phoenixMessage) {
-	if callback, ok := c.bindings.Load(msg.Ref); ok {
-		fn := callback.(func(any))
-
-		if msg.Event == "phx_reply" {
-			response := map[string]any{
-				"status":   msg.Status,
-				"response": msg.Payload,
-			}
-			fn(response)
-		} else {
-			fn(msg.Payload)
-		}
-
-		c.bindings.Delete(msg.Ref)
+	if msg.Event != "phx_reply" {
+		return
+	}
+	// LoadAndDelete hands each reply to at most one waiter, and the waiter's
+	// channel has room for it, so this send never blocks the read loop.
+	if replies, ok := c.bindings.LoadAndDelete(msg.Ref); ok {
+		replies.(chan ChannelReply) <- ChannelReply{Status: msg.Status, Response: msg.Payload}
 	}
 }
 

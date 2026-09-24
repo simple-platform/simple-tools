@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -90,76 +91,39 @@ func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]stri
 	}
 
 	// Convert to format expected by server
-	fileList := make([]map[string]interface{}, 0, len(files))
+	fileList := make([]map[string]any, 0, len(files))
 	for path, info := range files {
-		fileList = append(fileList, map[string]interface{}{
+		fileList = append(fileList, map[string]any{
 			"path": path,
 			"hash": info.Hash,
 			"size": info.Size,
 		})
 	}
 
-	ref, err := c.channel.Push("manifest", map[string]interface{}{
+	reply, err := c.channel.Request("manifest", map[string]any{
 		"files":   fileList,
 		"version": version,
-	})
+	}, c.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("manifest push failed: %w", err)
+		return nil, fmt.Errorf("manifest: %w", err)
+	}
+	if reply.Status == "error" {
+		return nil, fmt.Errorf("manifest rejected: %v", reply.Response)
 	}
 
-	done := make(chan struct {
-		files []string
-		err   error
-	}, 1)
-
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- struct {
-				files []string
-				err   error
-			}{nil, fmt.Errorf("invalid response format")}
-			return
-		}
-
-		// Check for error status
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			done <- struct {
-				files []string
-				err   error
-			}{nil, fmt.Errorf("manifest rejected: %v", resp["response"])}
-			return
-		}
-
-		// Extract response - for phx_reply, data is in "response" field
-		response, _ := resp["response"].(map[string]any)
-		needFiles, ok := response["need_files"].([]interface{})
-		if !ok {
-			done <- struct {
-				files []string
-				err   error
-			}{[]string{}, nil}
-			return
-		}
-
-		result := make([]string, len(needFiles))
-		for i, f := range needFiles {
-			if s, ok := f.(string); ok {
-				result[i] = s
-			}
-		}
-		done <- struct {
-			files []string
-			err   error
-		}{result, nil}
-	})
-
-	select {
-	case result := <-done:
-		return result.files, result.err
-	case <-time.After(c.timeout):
-		return nil, fmt.Errorf("manifest response timeout")
+	response, _ := reply.Response.(map[string]any)
+	needFiles, ok := response["need_files"].([]any)
+	if !ok {
+		return []string{}, nil
 	}
+
+	result := make([]string, len(needFiles))
+	for i, f := range needFiles {
+		if s, ok := f.(string); ok {
+			result[i] = s
+		}
+	}
+	return result, nil
 }
 
 // SendFiles uploads multiple files in parallel.
@@ -206,31 +170,14 @@ func (c *Client) sendFile(path string, fi FileInfo) error {
 		"hash": fi.Hash,
 	}
 
-	ref, err := c.channel.PushBinaryFile(metadata, fi.Content)
+	reply, err := c.channel.RequestBinaryFile(metadata, fi.Content, c.timeout)
 	if err != nil {
-		return fmt.Errorf("file push failed for %s: %w", path, err)
+		return fmt.Errorf("upload %s: %w", path, err)
 	}
-
-	done := make(chan error, 1)
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- nil // Binary file pushes may not reply, consider success
-			return
-		}
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			done <- fmt.Errorf("file rejected for %s: %v", path, resp["response"])
-			return
-		}
-		done <- nil
-	})
-
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(c.timeout):
-		return fmt.Errorf("timeout waiting for file response for %s", path)
+	if reply.Status == "error" {
+		return fmt.Errorf("file rejected for %s: %v", path, reply.Response)
 	}
+	return nil
 }
 
 // Deploy triggers the actual deployment.
@@ -239,62 +186,32 @@ func (c *Client) Deploy() (*DeployResult, error) {
 		return nil, fmt.Errorf("not joined to channel")
 	}
 
-	ref, err := c.channel.Push("deploy", map[string]interface{}{})
+	reply, err := c.channel.Request("deploy", map[string]any{}, c.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("deploy push failed: %w", err)
+		return nil, fmt.Errorf("deploy: %w", err)
 	}
 
-	done := make(chan struct {
-		result *DeployResult
-		err    error
-	}, 1)
-
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- struct {
-				result *DeployResult
-				err    error
-			}{nil, fmt.Errorf("invalid response format")}
-			return
+	if reply.Status == "error" {
+		errResp, _ := reply.Response.(map[string]any)
+		errMsg := "unknown error"
+		if msg, ok := errResp["message"].(string); ok {
+			errMsg = msg
 		}
-
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			errResp, _ := resp["response"].(map[string]any)
-			errMsg := "unknown error"
-			if msg, ok := errResp["message"].(string); ok {
-				errMsg = msg
-			}
-			done <- struct {
-				result *DeployResult
-				err    error
-			}{nil, fmt.Errorf("deploy failed: %s", errMsg)}
-			return
-		}
-
-		response, _ := resp["response"].(map[string]any)
-		version, _ := response["version"].(string)
-		fileCount := 0
-		if fc, ok := response["file_count"].(float64); ok {
-			fileCount = int(fc)
-		}
-
-		done <- struct {
-			result *DeployResult
-			err    error
-		}{&DeployResult{
-			AppID:     c.appID,
-			Version:   version,
-			FileCount: fileCount,
-		}, nil}
-	})
-
-	select {
-	case result := <-done:
-		return result.result, result.err
-	case <-time.After(c.timeout):
-		return nil, fmt.Errorf("deploy response timeout")
+		return nil, fmt.Errorf("deploy failed: %s", errMsg)
 	}
+
+	response, _ := reply.Response.(map[string]any)
+	version, _ := response["version"].(string)
+	fileCount := 0
+	if fc, ok := response["file_count"].(float64); ok {
+		fileCount = int(fc)
+	}
+
+	return &DeployResult{
+		AppID:     c.appID,
+		Version:   version,
+		FileCount: fileCount,
+	}, nil
 }
 
 // InstallResult represents the result of a successful installation.
@@ -310,64 +227,31 @@ func (c *Client) Install() (*InstallResult, error) {
 		return nil, fmt.Errorf("client not connected")
 	}
 
-	done := make(chan struct {
-		result *InstallResult
-		err    error
-	}, 1)
-
 	// Send install event with empty payload
-	ref, err := c.channel.Push("install", map[string]any{})
+	reply, err := c.channel.Request("install", map[string]any{}, c.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send install command: %w", err)
+		return nil, fmt.Errorf("install: %w", err)
 	}
 
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- struct {
-				result *InstallResult
-				err    error
-			}{nil, fmt.Errorf("invalid response format")}
-			return
+	// The server's own message is returned unchanged: callers match on it to
+	// recognise an install that is already done.
+	if reply.Status != "ok" {
+		response, _ := reply.Response.(map[string]any)
+		msg := "install failed"
+		if m, ok := response["message"].(string); ok {
+			msg = m
 		}
-
-		if status, _ := resp["status"].(string); status != "ok" {
-			response, _ := resp["response"].(map[string]any)
-			msg := "install failed"
-			if response != nil {
-				if m, ok := response["message"].(string); ok {
-					msg = m
-				}
-			}
-			done <- struct {
-				result *InstallResult
-				err    error
-			}{nil, fmt.Errorf("%s", msg)}
-			return
-		}
-
-		response, _ := resp["response"].(map[string]any)
-		version := ""
-		if v, ok := response["version"].(string); ok {
-			version = v
-		}
-
-		done <- struct {
-			result *InstallResult
-			err    error
-		}{&InstallResult{
-			AppID:   c.appID,
-			Version: version,
-			Success: true,
-		}, nil}
-	})
-
-	select {
-	case result := <-done:
-		return result.result, result.err
-	case <-time.After(c.timeout):
-		return nil, fmt.Errorf("install response timeout")
+		return nil, errors.New(msg)
 	}
+
+	response, _ := reply.Response.(map[string]any)
+	version, _ := response["version"].(string)
+
+	return &InstallResult{
+		AppID:   c.appID,
+		Version: version,
+		Success: true,
+	}, nil
 }
 
 // Close disconnects from the socket.

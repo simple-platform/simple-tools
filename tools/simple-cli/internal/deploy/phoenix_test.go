@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -842,6 +843,306 @@ func TestEncodeDecodeRoundtrip(t *testing.T) {
 			}
 			if decoded.Event != tt.event {
 				t.Errorf("Event = %q, want %q", decoded.Event, tt.event)
+			}
+		})
+	}
+}
+
+// socketURL is the Phoenix socket URL of a mock server.
+func socketURL(server *httptest.Server) *url.URL {
+	u, _ := url.Parse("ws" + strings.TrimPrefix(server.URL, "http") + "/socket")
+	return u
+}
+
+// decodeFrame decodes a Phoenix message of either frame type.
+func decodeFrame(msgType int, data []byte) *phoenixMessage {
+	if msgType == websocket.BinaryMessage {
+		return decodeBinaryMessageFast(data)
+	}
+	return decodeJSONMessageFast(data)
+}
+
+// writeReply answers msg the way Phoenix does, with a phx_reply that carries
+// the push's refs.
+func writeReply(conn *websocket.Conn, msg *phoenixMessage, status string, response any) {
+	data := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
+		map[string]any{"status": status, "response": response})
+	_ = conn.WriteMessage(websocket.TextMessage, data)
+}
+
+// channelServer answers every phx_join with ok and hands every other channel
+// message to onPush, which scripts the rest of the server. Heartbeats are
+// ignored. The handler returns when the connection closes or onPush returns
+// false, which closes the connection.
+func channelServer(onPush func(conn *websocket.Conn, msg *phoenixMessage) bool) func(*websocket.Conn) {
+	return func(conn *websocket.Conn) {
+		for {
+			msgType, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			msg := decodeFrame(msgType, data)
+			if msg == nil || msg.Topic == "phoenix" {
+				continue
+			}
+			if msg.Event == "phx_join" {
+				writeReply(conn, msg, "ok", map[string]any{})
+				continue
+			}
+			if !onPush(conn, msg) {
+				return
+			}
+		}
+	}
+}
+
+// joinedChannel connects a socket to server and joins topic on it.
+func joinedChannel(t *testing.T, server *httptest.Server, topic string) *PhoenixChannel {
+	t.Helper()
+	socket := NewPhoenixSocket(socketURL(server))
+	if err := socket.Connect(); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	t.Cleanup(socket.Disconnect)
+
+	ch := socket.Channel(topic)
+	if err := ch.Join(5 * time.Second); err != nil {
+		t.Fatalf("Join() error = %v", err)
+	}
+	return ch
+}
+
+func TestPhoenixChannel_Request(t *testing.T) {
+	tests := []struct {
+		name string
+		// serve scripts the server's answer to the request.
+		serve      func(conn *websocket.Conn, msg *phoenixMessage) bool
+		timeout    time.Duration
+		wantStatus string
+		wantErr    error
+	}{
+		{
+			name: "ok reply",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeReply(conn, msg, "ok", map[string]any{"event": msg.Event})
+				return true
+			},
+			timeout:    5 * time.Second,
+			wantStatus: "ok",
+		},
+		{
+			name: "error status is a reply, not an error",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeReply(conn, msg, "error", map[string]any{"message": "nope"})
+				return true
+			},
+			timeout:    5 * time.Second,
+			wantStatus: "error",
+		},
+		{
+			name: "broadcasts and replies to other refs are skipped",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				broadcast := encodeJSONMessageFast(0, 0, msg.Topic, "presence_diff", map[string]any{})
+				_ = conn.WriteMessage(websocket.TextMessage, broadcast)
+				writeReply(conn, &phoenixMessage{JoinRef: msg.JoinRef, Ref: msg.Ref + 1000, Topic: msg.Topic}, "error", nil)
+				writeReply(conn, msg, "ok", map[string]any{})
+				return true
+			},
+			timeout:    5 * time.Second,
+			wantStatus: "ok",
+		},
+		{
+			name:    "no reply times out",
+			serve:   func(*websocket.Conn, *phoenixMessage) bool { return true },
+			timeout: 100 * time.Millisecond,
+			wantErr: ErrReplyTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startMockPhoenixServer(t, channelServer(tt.serve))
+			defer server.Close()
+			ch := joinedChannel(t, server, "test:room")
+
+			reply, err := ch.Request("ping", map[string]any{}, tt.timeout)
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("Request() error = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Request() error = %v", err)
+			}
+			if reply.Status != tt.wantStatus {
+				t.Errorf("Request() status = %q, want %q", reply.Status, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// The binding must exist before the message can leave, since the reply can
+// arrive as soon as it does. Delivering the reply while the message is still
+// being encoded pins that order down without depending on the scheduler.
+func TestPhoenixChannel_RequestRegistersBeforeSend(t *testing.T) {
+	ch := NewPhoenixSocket(&url.URL{Scheme: "ws", Host: "example.invalid"}).Channel("test:room")
+
+	reply, err := ch.request(websocket.TextMessage, func(ref uint64) []byte {
+		ch.handleMessage(&phoenixMessage{Event: "phx_reply", Ref: ref, Status: "ok"})
+		return []byte("[]")
+	}, 200*time.Millisecond)
+	if err != nil || reply.Status != "ok" {
+		t.Fatalf("request() = %+v, %v; want the reply delivered while it was sent", reply, err)
+	}
+}
+
+// A server that answers at once can deliver the reply before the send even
+// returns. The binding must already be registered by then, or the reply is
+// dropped and the request waits out its timeout.
+func TestPhoenixChannel_RequestFastReply(t *testing.T) {
+	server := startMockPhoenixServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+		writeReply(conn, msg, "ok", msg.Payload)
+		return true
+	}))
+	defer server.Close()
+	ch := joinedChannel(t, server, "test:room")
+
+	const requests = 200
+	var wg sync.WaitGroup
+	errs := make(chan error, requests)
+	for i := range requests {
+		wg.Go(func() {
+			reply, err := ch.Request("echo", map[string]any{"n": i}, 5*time.Second)
+			if err != nil {
+				errs <- err
+				return
+			}
+			got, _ := reply.Response.(map[string]any)["n"].(float64)
+			if int(got) != i {
+				errs <- fmt.Errorf("request %d got the reply for %v", i, reply.Response)
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		t.Error(err)
+	}
+}
+
+func TestPhoenixChannel_Join(t *testing.T) {
+	tests := []struct {
+		name    string
+		status  string
+		wantErr string
+	}{
+		{name: "ok", status: "ok"},
+		{name: "rejected", status: "error", wantErr: "join error: map[reason:unauthorized]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startMockPhoenixServer(t, func(conn *websocket.Conn) {
+				for {
+					msgType, data, err := conn.ReadMessage()
+					if err != nil {
+						return
+					}
+					if msg := decodeFrame(msgType, data); msg != nil && msg.Event == "phx_join" {
+						writeReply(conn, msg, tt.status, map[string]any{"reason": "unauthorized"})
+					}
+				}
+			})
+			defer server.Close()
+
+			socket := NewPhoenixSocket(socketURL(server))
+			if err := socket.Connect(); err != nil {
+				t.Fatalf("Connect() error = %v", err)
+			}
+			defer socket.Disconnect()
+
+			err := socket.Channel("test:room").Join(5 * time.Second)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Join() error = %v", err)
+				}
+				return
+			}
+			if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("Join() error = %v, want %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRequestBinaryFile(t *testing.T) {
+	receivedPayload := make(chan []byte, 1)
+	server := startMockPhoenixServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+		if payload, ok := msg.Payload.([]byte); ok && msg.Event == "file" {
+			receivedPayload <- payload
+			writeReply(conn, msg, "ok", map[string]any{})
+		}
+		return true
+	}))
+	defer server.Close()
+	ch := joinedChannel(t, server, "deploy:com.test.app")
+
+	metadata := map[string]string{"path": "test.txt", "hash": "abc123"}
+	reply, err := ch.RequestBinaryFile(metadata, []byte("file content"), 5*time.Second)
+	if err != nil {
+		t.Fatalf("RequestBinaryFile() error = %v", err)
+	}
+	if reply.Status != "ok" {
+		t.Errorf("RequestBinaryFile() status = %q, want ok", reply.Status)
+	}
+
+	payload := <-receivedPayload
+	metaLen := binary.BigEndian.Uint32(payload[0:4])
+	var meta map[string]string
+	if err := json.Unmarshal(payload[4:4+metaLen], &meta); err != nil {
+		t.Fatalf("failed to parse metadata: %v", err)
+	}
+	if meta["path"] != "test.txt" || meta["hash"] != "abc123" {
+		t.Errorf("metadata = %v, want path test.txt and hash abc123", meta)
+	}
+	if got := string(payload[4+metaLen:]); got != "file content" {
+		t.Errorf("file content = %q, want %q", got, "file content")
+	}
+}
+
+func TestBinaryFilePayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		content []byte
+		wantErr string
+	}{
+		{name: "small file", content: []byte("hello")},
+		{name: "empty file", content: []byte{}},
+		{name: "over the 100MB limit", content: make([]byte, 100*1024*1024), wantErr: "payload too large"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload, err := binaryFilePayload(map[string]string{"path": "a"}, tt.content)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("binaryFilePayload() error = %v, want containing %q", err, tt.wantErr)
+				}
+				// The upload refuses it before anything is sent.
+				var ch PhoenixChannel
+				if _, err := ch.RequestBinaryFile(map[string]string{"path": "a"}, tt.content, time.Second); err == nil {
+					t.Error("RequestBinaryFile() accepted a payload binaryFilePayload refuses")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("binaryFilePayload() error = %v", err)
+			}
+			metaLen := binary.BigEndian.Uint32(payload[0:4])
+			if got := string(payload[4+metaLen:]); got != string(tt.content) {
+				t.Errorf("content = %q, want %q", got, tt.content)
 			}
 		})
 	}

@@ -1,10 +1,11 @@
 package deploy
 
 import (
-	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +123,15 @@ func TestClient_Deploy_NotJoined(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("Deploy() error = %v, want containing 'not joined'", err)
+	}
+}
+
+func TestClient_Install_NotConnected(t *testing.T) {
+	client := &Client{timeout: 5 * time.Second}
+
+	_, err := client.Install()
+	if err == nil || !strings.Contains(err.Error(), "not connected") {
+		t.Errorf("Install() error = %v, want containing 'not connected'", err)
 	}
 }
 
@@ -450,105 +460,159 @@ func TestClient_Close_WithConnection(t *testing.T) {
 	}
 }
 
-func TestPushBinaryFile(t *testing.T) {
-	receivedPayload := make(chan []byte, 1)
-
-	server := startClientMockServer(t, func(conn *websocket.Conn) {
-		for {
-			msgType, data, err := conn.ReadMessage()
-			if err != nil {
-				return
-			}
-
-			switch msgType {
-			case websocket.TextMessage:
-				msg := decodeJSONMessageFast(data)
-				if msg != nil && msg.Event == "phx_join" {
-					reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
-						map[string]any{"status": "ok", "response": map[string]any{}})
-					_ = conn.WriteMessage(websocket.TextMessage, reply)
-				}
-			case websocket.BinaryMessage:
-				// Decode Phoenix binary message
-				msg := decodeBinaryMessageFast(data)
-				if msg != nil && msg.Event == "file" {
-					if payload, ok := msg.Payload.([]byte); ok {
-						receivedPayload <- payload
-						// Send reply
-						reply := encodeJSONMessageFast(msg.JoinRef, msg.Ref, msg.Topic, "phx_reply",
-							map[string]any{"status": "ok", "response": map[string]any{}})
-						_ = conn.WriteMessage(websocket.TextMessage, reply)
-					}
-				}
-			}
-		}
-	})
-	defer server.Close()
-
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/socket"
-	u, _ := parseEndpointURL(wsURL)
-
-	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
-		t.Fatalf("Connect error: %v", err)
-	}
-	defer socket.Disconnect()
-
-	channel := socket.Channel("deploy:com.test.app")
-	if err := channel.Join(5 * time.Second); err != nil {
-		t.Fatalf("Join error: %v", err)
-	}
-
-	metadata := map[string]string{
-		"path": "test.txt",
-		"hash": "abc123",
-	}
-	content := []byte("file content")
-
-	ref, err := channel.PushBinaryFile(metadata, content)
-	if err != nil {
-		t.Fatalf("PushBinaryFile error: %v", err)
-	}
-	if ref == 0 {
-		t.Error("PushBinaryFile returned ref = 0")
-	}
-
-	// Verify payload format
-	select {
-	case payload := <-receivedPayload:
-		// First 4 bytes should be metadata length
-		if len(payload) < 4 {
-			t.Fatalf("payload too short: %d", len(payload))
-		}
-		metaLen := int(payload[0])<<24 | int(payload[1])<<16 | int(payload[2])<<8 | int(payload[3])
-		if metaLen <= 0 || metaLen > len(payload)-4 {
-			t.Fatalf("invalid metadata length: %d", metaLen)
-		}
-
-		// Parse metadata JSON
-		var meta map[string]string
-		if err := json.Unmarshal(payload[4:4+metaLen], &meta); err != nil {
-			t.Fatalf("failed to parse metadata: %v", err)
-		}
-
-		if meta["path"] != "test.txt" {
-			t.Errorf("metadata path = %q, want %q", meta["path"], "test.txt")
-		}
-		if meta["hash"] != "abc123" {
-			t.Errorf("metadata hash = %q, want %q", meta["hash"], "abc123")
-		}
-
-		// Verify content
-		fileContent := payload[4+metaLen:]
-		if string(fileContent) != "file content" {
-			t.Errorf("file content = %q, want %q", string(fileContent), "file content")
-		}
-	case <-time.After(5 * time.Second):
-		t.Error("timeout waiting for payload")
-	}
-}
-
 // Helper to parse endpoint URL
 func parseEndpointURL(rawURL string) (*url.URL, error) {
 	return url.Parse(rawURL)
+}
+
+// joinedClient connects a Client to server and joins the deploy channel of
+// com.test.app, the way the CLI does.
+func joinedClient(t *testing.T, server *httptest.Server, timeout time.Duration) *Client {
+	t.Helper()
+	client := NewClient(ClientConfig{
+		Endpoint: "ws" + strings.TrimPrefix(server.URL, "http"),
+		JWT:      "test-token",
+		Timeout:  timeout,
+	})
+	if err := client.Connect(); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	t.Cleanup(client.Close)
+
+	if err := client.JoinChannel("com.test.app"); err != nil {
+		t.Fatalf("JoinChannel() error = %v", err)
+	}
+	return client
+}
+
+// TestClient_Replies drives each request of the deploy protocol through the
+// server's possible answers: success, a server-reported error, and silence.
+func TestClient_Replies(t *testing.T) {
+	manifest := func(c *Client) (any, error) {
+		return c.SendManifest(map[string]FileInfo{"a.txt": {Hash: "h", Size: 1}}, "1.0.0")
+	}
+	publish := func(c *Client) (any, error) { return c.Deploy() }
+	install := func(c *Client) (any, error) { return c.Install() }
+	upload := func(c *Client) (any, error) {
+		return nil, c.SendFiles(map[string]FileInfo{"a.txt": {Hash: "h", Size: 1, Content: []byte("x")}}, []string{"a.txt"})
+	}
+
+	tests := []struct {
+		name  string
+		event string
+		// status is the server's reply status; "" means it never answers.
+		status   string
+		response any
+		call     func(*Client) (any, error)
+		want     any
+		wantErr  string
+		wantIs   error
+	}{
+		{
+			name: "manifest lists the needed files", event: "manifest", status: "ok",
+			response: map[string]any{"need_files": []string{"a.txt"}},
+			call:     manifest, want: []string{"a.txt"},
+		},
+		{
+			name: "manifest without need_files needs nothing", event: "manifest", status: "ok",
+			response: map[string]any{},
+			call:     manifest, want: []string{},
+		},
+		{
+			name: "manifest rejected", event: "manifest", status: "error",
+			response: map[string]any{"message": "Invalid version format"},
+			call:     manifest, wantErr: "manifest rejected: map[message:Invalid version format]",
+		},
+		{
+			name: "manifest unanswered", event: "manifest",
+			call: manifest, wantErr: "manifest: reply timeout", wantIs: ErrReplyTimeout,
+		},
+		{
+			name: "upload acknowledged", event: "file", status: "ok",
+			response: map[string]any{},
+			call:     upload,
+		},
+		{
+			name: "upload rejected", event: "file", status: "error",
+			response: map[string]any{"message": "Invalid binary format"},
+			call:     upload, wantErr: "file rejected for a.txt: map[message:Invalid binary format]",
+		},
+		{
+			name: "upload unanswered", event: "file",
+			call: upload, wantErr: "upload a.txt: reply timeout", wantIs: ErrReplyTimeout,
+		},
+		{
+			name: "deploy published", event: "deploy", status: "ok",
+			response: map[string]any{"version": "1.0.0", "file_count": 3},
+			call:     publish, want: &DeployResult{AppID: "com.test.app", Version: "1.0.0", FileCount: 3},
+		},
+		{
+			name: "deploy failed with a message", event: "deploy", status: "error",
+			response: map[string]any{"message": "storage unavailable"},
+			call:     publish, wantErr: "deploy failed: storage unavailable",
+		},
+		{
+			name: "deploy failed without a message", event: "deploy", status: "error",
+			response: "boom",
+			call:     publish, wantErr: "deploy failed: unknown error",
+		},
+		{
+			name: "deploy unanswered", event: "deploy",
+			call: publish, wantErr: "deploy: reply timeout", wantIs: ErrReplyTimeout,
+		},
+		{
+			name: "install done", event: "install", status: "ok",
+			response: map[string]any{"version": "1.0.0"},
+			call:     install, want: &InstallResult{AppID: "com.test.app", Version: "1.0.0", Success: true},
+		},
+		{
+			name: "install failure keeps the server message", event: "install", status: "error",
+			response: map[string]any{"message": "Version `1.0.0` of application `com.test.app` is already installed"},
+			call:     install, wantErr: "Version `1.0.0` of application `com.test.app` is already installed",
+		},
+		{
+			name: "install failure without a message", event: "install", status: "error",
+			response: map[string]any{"code": "S3_ERROR"},
+			call:     install, wantErr: "install failed",
+		},
+		{
+			name: "install unanswered", event: "install",
+			call: install, wantErr: "install: reply timeout", wantIs: ErrReplyTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startClientMockServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				if msg.Event == tt.event && tt.status != "" {
+					writeReply(conn, msg, tt.status, tt.response)
+				}
+				return true
+			}))
+			defer server.Close()
+
+			timeout := 5 * time.Second
+			if tt.status == "" {
+				timeout = 100 * time.Millisecond
+			}
+			client := joinedClient(t, server, timeout)
+
+			got, err := tt.call(client)
+			if tt.wantErr != "" {
+				if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want starting with %q", err, tt.wantErr)
+				}
+				if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
+					t.Errorf("error = %v, want wrapping %v", err, tt.wantIs)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error = %v", err)
+			}
+			if tt.want != nil && !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("result = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
 }
