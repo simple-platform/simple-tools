@@ -718,31 +718,71 @@ type installerFunc func(ctx context.Context) (*deploy.InstallResult, error)
 func (f installerFunc) Install(ctx context.Context) (*deploy.InstallResult, error) { return f(ctx) }
 
 func TestDryRunOutput(t *testing.T) {
-	files := map[string]deploy.FileInfo{"app.scl": {Hash: "0123456789abcdef", Size: 42}}
+	files := map[string]deploy.FileInfo{
+		"tables.scl":     {Hash: "bbbbbbbb22", Size: 880},
+		"app.scl":        {Hash: "0123456789abcdef", Size: 42},
+		"actions/a.wasm": {Hash: "cccccccc33", Size: 4000},
+		"records/r.scl":  {Hash: "dddddddd44", Size: 7},
+	}
 	tests := []struct {
 		name string
 		json bool
 		want string
 	}{
 		{
-			name: "text",
-			want: "\n📋 Dry run - files to deploy:\n  app.scl (42 bytes, hash: 01234567...)\n\nTotal: 1 files, version: 1.0.1-dev.1\n" +
+			name: "text is sorted by path",
+			want: "\n📋 Dry run - files to deploy:\n" +
+				"  actions/a.wasm (4000 bytes, hash: cccccccc...)\n" +
+				"  app.scl (42 bytes, hash: 01234567...)\n" +
+				"  records/r.scl (7 bytes, hash: dddddddd...)\n" +
+				"  tables.scl (880 bytes, hash: bbbbbbbb...)\n" +
+				"\nTotal: 4 files, version: 1.0.1-dev.1\n" +
 				"app.scl is listed as it is on disk; a real deploy uploads it with version 1.0.1-dev.1.\n",
 		},
 		{
-			name: "json",
+			name: "json is sorted by path",
 			json: true,
-			want: "{\n  \"dry_run\": true,\n  \"files\": [\n    {\n      \"hash\": \"0123456789abcdef\",\n      \"path\": \"app.scl\",\n      \"size\": 42\n    }\n  ],\n  \"version\": \"1.0.1-dev.1\"\n}\n",
+			want: `{
+  "dry_run": true,
+  "files": [
+    {
+      "hash": "cccccccc33",
+      "path": "actions/a.wasm",
+      "size": 4000
+    },
+    {
+      "hash": "0123456789abcdef",
+      "path": "app.scl",
+      "size": 42
+    },
+    {
+      "hash": "dddddddd44",
+      "path": "records/r.scl",
+      "size": 7
+    },
+    {
+      "hash": "bbbbbbbb22",
+      "path": "tables.scl",
+      "size": 880
+    }
+  ],
+  "version": "1.0.1-dev.1"
+}
+`,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			var out bytes.Buffer
-			if err := dryRunOutput(&out, files, "1.0.1-dev.1", tt.json); err != nil {
-				t.Fatal(err)
-			}
-			if out.String() != tt.want {
-				t.Errorf("output = %q, want %q", out.String(), tt.want)
+			// Map iteration order is random; several runs make an unsorted
+			// listing all but certain to show up.
+			for range 20 {
+				var out bytes.Buffer
+				if err := dryRunOutput(&out, files, "1.0.1-dev.1", tt.json); err != nil {
+					t.Fatal(err)
+				}
+				if out.String() != tt.want {
+					t.Fatalf("output =\n%s\nwant:\n%s", out.String(), tt.want)
+				}
 			}
 		})
 	}

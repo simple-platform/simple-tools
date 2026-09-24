@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
+	"slices"
 	"time"
 
 	"simple-cli/internal/deploy"
@@ -296,9 +298,13 @@ func dryRunDeploy(out io.Writer, deps deployDeps, versioner appVersioner, opts d
 
 // dryRunOutput prints the files that would be deployed without actually deploying.
 func dryRunOutput(out io.Writer, files map[string]deploy.FileInfo, version string, jsonMode bool) error {
+	// Sorted, so two dry runs of the same app print the same listing and
+	// can be diffed; map order would shuffle it on every run.
+	paths := slices.Sorted(maps.Keys(files))
 	if jsonMode {
 		fileList := make([]map[string]interface{}, 0, len(files))
-		for path, fi := range files {
+		for _, path := range paths {
+			fi := files[path]
 			fileList = append(fileList, map[string]interface{}{
 				"path": path,
 				"hash": fi.Hash,
@@ -313,7 +319,8 @@ func dryRunOutput(out io.Writer, files map[string]deploy.FileInfo, version strin
 	}
 
 	_, _ = fmt.Fprintln(out, "\n📋 Dry run - files to deploy:")
-	for path, fi := range files {
+	for _, path := range paths {
+		fi := files[path]
 		_, _ = fmt.Fprintf(out, "  %s (%d bytes, hash: %s...)\n", path, fi.Size, fi.Hash[:8])
 	}
 	_, _ = fmt.Fprintf(out, "\nTotal: %d files, version: %s\n", len(files), version)
