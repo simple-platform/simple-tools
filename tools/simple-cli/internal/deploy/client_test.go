@@ -1209,3 +1209,81 @@ func TestClient_SendFiles_ReportsProgressConcurrently(t *testing.T) {
 		t.Errorf("final progress = %+v, want %+v", final, want)
 	}
 }
+
+// The CLI refreshes its token and reconnects when Connect fails with an
+// AuthFailedError, so that error has to survive Connect's wrapping; any other
+// failure must not look like one.
+func TestClient_Connect(t *testing.T) {
+	upgrade := startClientMockServer(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage()
+	})
+	defer upgrade.Close()
+
+	reject := func(status int) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(status)
+		}))
+	}
+	unauthorized := reject(http.StatusUnauthorized)
+	defer unauthorized.Close()
+	forbidden := reject(http.StatusForbidden)
+	defer forbidden.Close()
+	gone := reject(http.StatusOK)
+	gone.Close() // nothing listens on its address any more
+
+	wsEndpoint := func(s *httptest.Server) string { return "ws" + strings.TrimPrefix(s.URL, "http") }
+
+	tests := []struct {
+		name       string
+		endpoint   string
+		wantErr    string
+		wantStatus int // AuthFailedError status, 0 for none
+	}{
+		{name: "connects", endpoint: wsEndpoint(upgrade)},
+		{
+			name: "token rejected", endpoint: wsEndpoint(unauthorized),
+			wantErr: "websocket connect failed: websocket auth failed: 401", wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name: "token forbidden", endpoint: wsEndpoint(forbidden),
+			wantErr: "websocket connect failed: websocket auth failed: 403", wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "server unreachable", endpoint: wsEndpoint(gone),
+			wantErr: "websocket connect failed: websocket dial failed: ",
+		},
+		{
+			name: "invalid endpoint", endpoint: "ws://[::1",
+			wantErr: "invalid endpoint URL: ",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(ClientConfig{Endpoint: tt.endpoint, JWT: "test-token"})
+			defer client.Close()
+
+			err := client.Connect(t.Context())
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("Connect() error = %v", err)
+				}
+				if client.socket == nil || !client.socket.IsConnected() {
+					t.Error("socket not connected after Connect()")
+				}
+				return
+			}
+			if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
+				t.Fatalf("Connect() error = %v, want starting with %q", err, tt.wantErr)
+			}
+
+			var authErr *AuthFailedError
+			switch {
+			case tt.wantStatus == 0 && errors.As(err, &authErr):
+				t.Errorf("Connect() error = %v looks like an auth failure", err)
+			case tt.wantStatus != 0 && (!errors.As(err, &authErr) || authErr.StatusCode != tt.wantStatus):
+				t.Errorf("Connect() error = %v, want an AuthFailedError with status %d", err, tt.wantStatus)
+			}
+		})
+	}
+}
