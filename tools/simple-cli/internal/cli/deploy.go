@@ -21,6 +21,7 @@ var (
 	deployBump      string
 	deployDryRun    bool
 	deployNoInstall bool
+	deployProgress  string
 )
 
 // deployCmd represents the 'deploy' command.
@@ -38,7 +39,8 @@ Use --no-install to skip installation (upload artifacts only).
 
 On a terminal, progress is a list of steps that updates in place. When
 stdout is not a terminal, TERM is dumb, or CI is set to anything but
-false or 0, each step prints plain lines instead.
+false or 0, each step prints plain lines instead; --progress=tty or
+--progress=plain overrides the choice.
 
 Examples:
   simple deploy apps/com.example.crm --env dev --bump patch
@@ -57,6 +59,7 @@ func init() {
 	deployCmd.Flags().StringVar(&deployBump, "bump", "", "version bump type: patch|minor|major (required for first deploy after prod)")
 	deployCmd.Flags().BoolVar(&deployDryRun, "dry-run", false, "show what would be deployed; nothing is written or uploaded")
 	deployCmd.Flags().BoolVar(&deployNoInstall, "no-install", false, "skip automatic installation after deploy")
+	deployCmd.Flags().StringVar(&deployProgress, "progress", "auto", progressFlagUsage)
 	_ = deployCmd.MarkFlagRequired("env")
 }
 
@@ -68,6 +71,11 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, out io.Writer, args []s
 	// Validate --env flag is provided
 	if deployEnv == "" {
 		return fmt.Errorf("--env flag is required (dev, staging, or prod)")
+	}
+
+	mode, err := progressModeFor(out, jsonOutput, deployProgress)
+	if err != nil {
+		return err
 	}
 
 	// Validate app exists
@@ -82,7 +90,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, out io.Writer, args []s
 		dryRun:    deployDryRun,
 		noInstall: deployNoInstall,
 		json:      jsonOutput,
-		mode:      progressModeFor(out, jsonOutput),
+		mode:      mode,
 	})
 }
 

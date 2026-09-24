@@ -14,7 +14,8 @@ import (
 )
 
 var (
-	installEnv string
+	installEnv      string
+	installProgress string
 )
 
 // installCmd represents the command to install a deployed app.
@@ -31,7 +32,8 @@ of the application in the target environment.
 
 On a terminal, progress is a list of steps that updates in place. When
 stdout is not a terminal, TERM is dumb, or CI is set to anything but
-false or 0, each step prints plain lines instead.
+false or 0, each step prints plain lines instead; --progress=tty or
+--progress=plain overrides the choice.
 
 Examples:
   simple install com.example.crm --env dev
@@ -46,6 +48,7 @@ Examples:
 func init() {
 	RootCmd.AddCommand(installCmd)
 	installCmd.Flags().StringVar(&installEnv, "env", "", "target environment (required: dev, staging, or prod)")
+	installCmd.Flags().StringVar(&installProgress, "progress", "auto", progressFlagUsage)
 	_ = installCmd.MarkFlagRequired("env")
 }
 
@@ -57,11 +60,16 @@ func runInstall(ctx context.Context, out io.Writer, appID string) error {
 		return fmt.Errorf("--env flag is required (dev, staging, or prod)")
 	}
 
+	mode, err := progressModeFor(out, jsonOutput, installProgress)
+	if err != nil {
+		return err
+	}
+
 	return runInstallWith(ctx, out, installDeps{devops: defaultDevopsDeps(), runner: defaultRunnerDeps()}, installOptions{
 		appID: appID,
 		env:   installEnv,
 		json:  jsonOutput,
-		mode:  progressModeFor(out, jsonOutput),
+		mode:  mode,
 	})
 }
 

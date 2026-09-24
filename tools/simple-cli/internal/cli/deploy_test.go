@@ -30,10 +30,12 @@ func TestRunDeploy(t *testing.T) {
 	origEnv := deployEnv
 	origBump := deployBump
 	origDryRun := deployDryRun
+	origProgress := deployProgress
 	defer func() {
 		deployEnv = origEnv
 		deployBump = origBump
 		deployDryRun = origDryRun
+		deployProgress = origProgress
 	}()
 
 	tests := []struct {
@@ -42,6 +44,7 @@ func TestRunDeploy(t *testing.T) {
 		env         string
 		bump        string
 		dryRun      bool
+		progress    string
 		setupDir    func(t *testing.T, dir string)
 		wantErr     bool
 		errContains string
@@ -52,6 +55,14 @@ func TestRunDeploy(t *testing.T) {
 			env:         "", // Missing --env
 			wantErr:     true,
 			errContains: "--env flag is required",
+		},
+		{
+			name:        "invalid --progress, checked before the app path",
+			args:        []string{"apps/nonexistent"},
+			env:         "dev",
+			progress:    "fancy",
+			wantErr:     true,
+			errContains: `invalid --progress value "fancy" (want auto, tty or plain)`,
 		},
 		{
 			name:        "app not found",
@@ -88,6 +99,10 @@ func TestRunDeploy(t *testing.T) {
 			deployEnv = tt.env
 			deployBump = tt.bump
 			deployDryRun = tt.dryRun
+			deployProgress = tt.progress
+			if deployProgress == "" {
+				deployProgress = "auto"
+			}
 
 			// Run setup if provided
 			if tt.setupDir != nil {

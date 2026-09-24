@@ -36,9 +36,25 @@ const (
 	progressTTY
 )
 
-// progressModeFor picks how to show progress on out.
-func progressModeFor(out io.Writer, jsonMode bool) progressMode {
-	return pickProgressMode(jsonMode, outputIsTerminal(out), os.Getenv("TERM"), os.Getenv("CI"))
+// progressFlagUsage documents the --progress flag deploy and install share.
+const progressFlagUsage = "progress output: auto (live on a terminal, plain lines otherwise), tty or plain"
+
+// progressModeFor picks how to show progress on out from the --progress
+// setting. --json always wins: stdout must carry only its document.
+// "tty" and "plain" override the detection, which is the escape hatch for
+// a terminal the detection gets wrong.
+func progressModeFor(out io.Writer, jsonMode bool, setting string) (progressMode, error) {
+	switch {
+	case setting != "auto" && setting != "tty" && setting != "plain":
+		return progressNone, fmt.Errorf("invalid --progress value %q (want auto, tty or plain)", setting)
+	case jsonMode:
+		return progressNone, nil
+	case setting == "tty":
+		return progressTTY, nil
+	case setting == "plain":
+		return progressPlain, nil
+	}
+	return pickProgressMode(false, outputIsTerminal(out), os.Getenv("TERM"), os.Getenv("CI")), nil
 }
 
 // outputIsTerminal reports whether out writes to a terminal, by the same

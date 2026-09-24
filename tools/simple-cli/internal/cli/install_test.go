@@ -28,8 +28,9 @@ func TestRunInstall_AuthRetry(t *testing.T) {
 	defer func() { deploy.VerifyEd25519 = origVerify }()
 
 	// Save and restore global flag state.
-	origEnv := installEnv
-	defer func() { installEnv = origEnv }()
+	origEnv, origProgress := installEnv, installProgress
+	defer func() { installEnv, installProgress = origEnv, origProgress }()
+	installProgress = "auto"
 
 	// Bypass TLS verification for both the HTTP client and the WebSocket dialer.
 	if tr, ok := http.DefaultTransport.(*http.Transport); ok {
@@ -129,12 +130,22 @@ func TestRunInstall_AuthRetry(t *testing.T) {
 	}
 }
 
-func TestRunInstall_RequiresEnv(t *testing.T) {
-	origEnv := installEnv
-	defer func() { installEnv = origEnv }()
-	installEnv = ""
-	if err := runInstall(context.Background(), &bytes.Buffer{}, "com.acme.crm"); err == nil || !strings.Contains(err.Error(), "--env flag is required") {
-		t.Errorf("err = %v, want the --env error", err)
+func TestRunInstall_ValidatesFlags(t *testing.T) {
+	origEnv, origProgress := installEnv, installProgress
+	defer func() { installEnv, installProgress = origEnv, origProgress }()
+	tests := []struct {
+		name, env, progress, wantErr string
+	}{
+		{"missing --env", "", "auto", "--env flag is required (dev, staging, or prod)"},
+		{"invalid --progress", "dev", "fancy", `invalid --progress value "fancy" (want auto, tty or plain)`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			installEnv, installProgress = tt.env, tt.progress
+			if err := runInstall(context.Background(), &bytes.Buffer{}, "com.acme.crm"); err == nil || err.Error() != tt.wantErr {
+				t.Errorf("err = %v, want %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

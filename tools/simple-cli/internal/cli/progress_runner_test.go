@@ -877,19 +877,34 @@ func TestProgressModeFor(t *testing.T) {
 	t.Setenv("TERM", "xterm-256color")
 	t.Setenv("CI", "")
 	tests := []struct {
-		name string
-		out  io.Writer
-		json bool
-		want progressMode
+		name    string
+		out     io.Writer
+		json    bool
+		setting string
+		want    progressMode
+		wantErr string
 	}{
-		{"json", &bytes.Buffer{}, true, progressNone},
-		{"buffer", &bytes.Buffer{}, false, progressPlain},
-		{"pipe", writer, false, progressPlain},
+		{name: "json", out: &bytes.Buffer{}, json: true, setting: "auto", want: progressNone},
+		{name: "json beats tty", out: &bytes.Buffer{}, json: true, setting: "tty", want: progressNone},
+		{name: "json beats plain", out: &bytes.Buffer{}, json: true, setting: "plain", want: progressNone},
+		{name: "buffer", out: &bytes.Buffer{}, setting: "auto", want: progressPlain},
+		{name: "pipe", out: writer, setting: "auto", want: progressPlain},
+		{name: "tty forced onto a pipe", out: writer, setting: "tty", want: progressTTY},
+		{name: "plain forced", out: writer, setting: "plain", want: progressPlain},
+		{name: "invalid", out: writer, setting: "fancy", wantErr: `invalid --progress value "fancy" (want auto, tty or plain)`},
+		{name: "invalid even with json", out: writer, json: true, setting: "", wantErr: `invalid --progress value "" (want auto, tty or plain)`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := progressModeFor(tt.out, tt.json); got != tt.want {
-				t.Errorf("progressModeFor() = %v, want %v", got, tt.want)
+			got, err := progressModeFor(tt.out, tt.json, tt.setting)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Errorf("progressModeFor() = %v, %v; want %v", got, err, tt.want)
 			}
 		})
 	}
