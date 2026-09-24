@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"regexp"
 	"time"
 
@@ -39,7 +40,7 @@ Examples:
   simple deploy apps/com.example.crm --env prod`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDeploy(cmd.Context(), fsx.OSFileSystem{}, args)
+		return runDeploy(cmd.Context(), fsx.OSFileSystem{}, cmd.OutOrStdout(), args)
 	},
 }
 
@@ -52,11 +53,10 @@ func init() {
 	_ = deployCmd.MarkFlagRequired("env")
 }
 
-// runDeploy executes the main deployment logic.
-// It orchestrates local preparation and remote communication with the DevOps service.
-func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
+// runDeploy validates the command's flags and deploys args[0] with the real
+// dependencies, writing progress and results to out.
+func runDeploy(ctx context.Context, fsys fsx.FileSystem, out io.Writer, args []string) error {
 	appPath := args[0]
-	start := time.Now()
 
 	// Validate --env flag is provided
 	if deployEnv == "" {
@@ -68,10 +68,46 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		return fmt.Errorf("app path '%s' not found", appPath)
 	}
 
+	return runDeployWith(ctx, out, defaultDeployDeps(), deployOptions{
+		appPath:   appPath,
+		env:       deployEnv,
+		bump:      deployBump,
+		dryRun:    deployDryRun,
+		noInstall: deployNoInstall,
+		json:      jsonOutput,
+	})
+}
+
+// deployOptions are the deploy command's arguments and flags.
+type deployOptions struct {
+	appPath, env, bump      string
+	dryRun, noInstall, json bool
+}
+
+// deployDeps are deploy's side effects, replaced in tests.
+type deployDeps struct {
+	devops       devopsDeps
+	newVersioner func(parserPath string) appVersioner
+	newCollector func() deploymentFileCollector
+}
+
+func defaultDeployDeps() deployDeps {
+	return deployDeps{
+		devops:       defaultDevopsDeps(),
+		newVersioner: func(parserPath string) appVersioner { return deploy.NewVersionManager(parserPath) },
+		newCollector: func() deploymentFileCollector { return deploy.NewFileCollector() },
+	}
+}
+
+// runDeployWith executes the main deployment logic.
+// It orchestrates local preparation and remote communication with the DevOps service.
+func runDeployWith(ctx context.Context, out io.Writer, deps deployDeps, opts deployOptions) error {
+	start := time.Now()
+
 	// === PHASE 1: Config & Auth ===
 	// Load configuration to determine endpoints and credentials.
-	notices := connectNotices{quiet: jsonOutput}
-	target, err := loadDevopsTarget(defaultDevopsDeps(), deployEnv, notices)
+	notices := connectNotices{out: out, quiet: opts.json}
+	target, err := loadDevopsTarget(deps.devops, opts.env, notices)
 	if err != nil {
 		return err
 	}
@@ -85,35 +121,36 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 	// app.scl is part of the upload manifest, so it must be collected only
 	// after its version has been updated. Parallel collection could otherwise
 	// upload an old app.scl under a new deployment version.
+	versioner := deps.newVersioner(target.parserPath)
 	newVersion, files, err := prepareVersionedFiles(
-		appPath,
-		deployEnv,
-		deployBump,
-		deploy.NewVersionManager(target.parserPath),
-		deploy.NewFileCollector(),
+		opts.appPath,
+		opts.env,
+		opts.bump,
+		versioner,
+		deps.newCollector(),
 	)
 	if err != nil {
 		return err
 	}
 
-	if !jsonOutput {
-		fmt.Printf("📦 Version: %s\n", newVersion)
-		fmt.Printf("📁 Files: %d\n", len(files))
+	if !opts.json {
+		_, _ = fmt.Fprintf(out, "📦 Version: %s\n", newVersion)
+		_, _ = fmt.Fprintf(out, "📁 Files: %d\n", len(files))
 	}
 
-	if deployDryRun {
-		return dryRunOutput(files, newVersion)
+	if opts.dryRun {
+		return dryRunOutput(out, files, newVersion, opts.json)
 	}
 
 	// === PHASE 3: Connect & Deploy ===
 	// Get app ID from app.scl to verify we are deploying the correct app
-	appID, err := deploy.ExtractAppID(target.parserPath, appPath)
+	app, err := versioner.ParseAppSCL(opts.appPath)
 	if err != nil {
 		return err
 	}
 
 	// Establish connection to DevOps service and join the app's channel.
-	client, err := target.connect(ctx, appID, notices)
+	client, err := target.connect(ctx, app.ID, notices)
 	if err != nil {
 		return err
 	}
@@ -125,8 +162,8 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		return err
 	}
 
-	if !jsonOutput {
-		fmt.Printf("⬆️  Uploading %d files (%d cached)\n", len(neededFiles), len(files)-len(neededFiles))
+	if !opts.json {
+		_, _ = fmt.Fprintf(out, "⬆️  Uploading %d files (%d cached)\n", len(neededFiles), len(files)-len(neededFiles))
 	}
 
 	// Upload needed files in parallel
@@ -143,15 +180,19 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 	// === PHASE 4: Auto-Install ===
 	// Optionally trigger installation immediately after successful deployment
 	var installResult *deploy.InstallResult
-	if !deployNoInstall {
-		if !jsonOutput {
-			fmt.Printf("🚀 Installing %s@%s to %s...\n", result.AppID, result.Version, deployEnv)
+	if !opts.noInstall {
+		if !opts.json {
+			_, _ = fmt.Fprintf(out, "🚀 Installing %s@%s to %s...\n", result.AppID, result.Version, opts.env)
 		}
-		installResult, err = installDeployedVersion(ctx, client, result.Version, jsonOutput)
+		installResult, err = installDeployedVersion(ctx, client, result.Version, func(resolved string) {
+			if !opts.json {
+				_, _ = fmt.Fprintf(out, "   ↻ server resolved %s; retrying install of %s…\n", resolved, result.Version)
+			}
+		})
 		if err != nil {
-			fmt.Printf("⚠️  Deploy successful but install failed: %v\n", err)
-			if jsonOutput {
-				return printJSON(map[string]interface{}{
+			_, _ = fmt.Fprintf(out, "⚠️  Deploy successful but install failed: %v\n", err)
+			if opts.json {
+				return printJSONTo(out, map[string]interface{}{
 					"status":  "error",
 					"error":   fmt.Sprintf("deploy successful but install failed: %v", err),
 					"app_id":  result.AppID,
@@ -164,7 +205,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 
 	duration := time.Since(start)
 
-	if jsonOutput {
+	if opts.json {
 		resp := map[string]interface{}{
 			"status":      "success",
 			"app_id":      result.AppID,
@@ -176,15 +217,21 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 			resp["installed"] = true
 			resp["install_success"] = installResult.Success
 		}
-		return printJSON(resp)
+		return printJSONTo(out, resp)
 	}
 
 	msg := fmt.Sprintf("✅ Deployed %s@%s", result.AppID, result.Version)
 	if installResult != nil && installResult.Success {
 		msg += " (Installed)"
 	}
-	fmt.Printf("%s in %s\n", msg, duration.Round(time.Millisecond))
+	_, _ = fmt.Fprintf(out, "%s in %s\n", msg, duration.Round(time.Millisecond))
 	return nil
+}
+
+// appVersioner reads and bumps an app's version in its app.scl.
+type appVersioner interface {
+	ParseAppSCL(appPath string) (*deploy.AppSCL, error)
+	versionBumper
 }
 
 type versionBumper interface {
@@ -216,8 +263,8 @@ func prepareVersionedFiles(
 }
 
 // dryRunOutput prints the files that would be deployed without actually deploying.
-func dryRunOutput(files map[string]deploy.FileInfo, version string) error {
-	if jsonOutput {
+func dryRunOutput(out io.Writer, files map[string]deploy.FileInfo, version string, jsonMode bool) error {
+	if jsonMode {
 		fileList := make([]map[string]interface{}, 0, len(files))
 		for path, fi := range files {
 			fileList = append(fileList, map[string]interface{}{
@@ -226,27 +273,29 @@ func dryRunOutput(files map[string]deploy.FileInfo, version string) error {
 				"size": fi.Size,
 			})
 		}
-		return printJSON(map[string]interface{}{
+		return printJSONTo(out, map[string]interface{}{
 			"dry_run": true,
 			"version": version,
 			"files":   fileList,
 		})
 	}
 
-	fmt.Println("\n📋 Dry run - files to deploy:")
+	_, _ = fmt.Fprintln(out, "\n📋 Dry run - files to deploy:")
 	for path, fi := range files {
-		fmt.Printf("  %s (%d bytes, hash: %s...)\n", path, fi.Size, fi.Hash[:8])
+		_, _ = fmt.Fprintf(out, "  %s (%d bytes, hash: %s...)\n", path, fi.Size, fi.Hash[:8])
 	}
-	fmt.Printf("\nTotal: %d files, version: %s\n", len(files), version)
+	_, _ = fmt.Fprintf(out, "\nTotal: %d files, version: %s\n", len(files), version)
 	return nil
 }
-
-// findSCLParser is deprecated - kept for test compatibility
-// Use build.EnsureSCLParser() instead which handles automatic download
 
 // alreadyInstalledRe extracts the version named in the server's
 // "Version `X` of application `Y` is already installed" reply.
 var alreadyInstalledRe = regexp.MustCompile("Version `([^`]+)` of application `[^`]+` is already installed")
+
+// installer is the part of the devops client that installs the deployed version.
+type installer interface {
+	Install(ctx context.Context) (*deploy.InstallResult, error)
+}
 
 // installDeployedVersion installs the version that was just deployed, absorbing
 // two server behaviours that are not real failures for a deploy:
@@ -262,14 +311,14 @@ var alreadyInstalledRe = regexp.MustCompile("Version `([^`]+)` of application `[
 //     always succeeded.
 //
 // Any other error is returned unchanged on the first attempt.
-func installDeployedVersion(ctx context.Context, client devopsClient, deployedVersion string, quiet bool) (*deploy.InstallResult, error) {
+func installDeployedVersion(ctx context.Context, inst installer, deployedVersion string, onRetry func(resolved string)) (*deploy.InstallResult, error) {
 	const attempts = 4
 
 	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
 
 	var lastErr error
 	for attempt := range attempts {
-		result, err := client.Install(ctx)
+		result, err := inst.Install(ctx)
 		if err == nil {
 			return result, nil
 		}
@@ -290,9 +339,7 @@ func installDeployedVersion(ctx context.Context, client devopsClient, deployedVe
 		if attempt == attempts-1 {
 			break
 		}
-		if !quiet {
-			fmt.Printf("   ↻ server resolved %s; retrying install of %s…\n", match[1], deployedVersion)
-		}
+		onRetry(match[1])
 		time.Sleep(backoff[attempt])
 	}
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -30,7 +31,7 @@ Examples:
   simple install com.example.crm --env prod`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runInstall(cmd.Context(), args[0])
+		return runInstall(cmd.Context(), cmd.OutOrStdout(), args[0])
 	},
 }
 
@@ -40,20 +41,36 @@ func init() {
 	_ = installCmd.MarkFlagRequired("env")
 }
 
-// runInstall executes the installation logic.
-// It connects to the DevOps server and requests an install for the given app ID.
-func runInstall(ctx context.Context, appID string) error {
-	start := time.Now()
-
+// runInstall validates the command's flags and installs appID with the real
+// dependencies, writing progress and results to out.
+func runInstall(ctx context.Context, out io.Writer, appID string) error {
 	// Validate --env flag is provided
 	if installEnv == "" {
 		return fmt.Errorf("--env flag is required (dev, staging, or prod)")
 	}
 
+	return runInstallWith(ctx, out, defaultDevopsDeps(), installOptions{
+		appID: appID,
+		env:   installEnv,
+		json:  jsonOutput,
+	})
+}
+
+// installOptions are the install command's arguments and flags.
+type installOptions struct {
+	appID, env string
+	json       bool
+}
+
+// runInstallWith executes the installation logic.
+// It connects to the DevOps server and requests an install for the given app ID.
+func runInstallWith(ctx context.Context, out io.Writer, deps devopsDeps, opts installOptions) error {
+	start := time.Now()
+
 	// === PHASE 1: Config & Auth ===
 	// Load configuration to determine where to connect (DevOps endpoint) and how to authenticate.
-	notices := connectNotices{quiet: jsonOutput}
-	target, err := loadDevopsTarget(defaultDevopsDeps(), installEnv, notices)
+	notices := connectNotices{out: out, quiet: opts.json}
+	target, err := loadDevopsTarget(deps, opts.env, notices)
 	if err != nil {
 		return err
 	}
@@ -66,14 +83,14 @@ func runInstall(ctx context.Context, appID string) error {
 
 	// === PHASE 2: Connect & Install ===
 	// Establish WebSocket connection to DevOps service and join the app's channel.
-	client, err := target.connect(ctx, appID, notices)
+	client, err := target.connect(ctx, opts.appID, notices)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
 
-	if !jsonOutput {
-		fmt.Printf("🚀 Installing %s to %s...\n", appID, installEnv)
+	if !opts.json {
+		_, _ = fmt.Fprintf(out, "🚀 Installing %s to %s...\n", opts.appID, opts.env)
 	}
 
 	// Trigger remote install process via WebSocket
@@ -84,16 +101,16 @@ func runInstall(ctx context.Context, appID string) error {
 
 	duration := time.Since(start)
 
-	if jsonOutput {
-		return printJSON(map[string]interface{}{
+	if opts.json {
+		return printJSONTo(out, map[string]interface{}{
 			"status":      "success",
 			"app_id":      result.AppID,
 			"version":     result.Version,
-			"env":         installEnv,
+			"env":         opts.env,
 			"duration_ms": duration.Milliseconds(),
 		})
 	}
 
-	fmt.Printf("✅ Installed %s (Version: %s) to %s in %s\n", result.AppID, result.Version, installEnv, duration.Round(time.Millisecond))
+	_, _ = fmt.Fprintf(out, "✅ Installed %s (Version: %s) to %s in %s\n", result.AppID, result.Version, opts.env, duration.Round(time.Millisecond))
 	return nil
 }

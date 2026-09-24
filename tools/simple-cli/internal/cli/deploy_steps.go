@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 
 	"simple-cli/internal/ui"
 )
@@ -18,12 +19,13 @@ const (
 // report is dropped, as before.
 type connectNotices struct {
 	ui.NopReporter
+	out   io.Writer
 	quiet bool
 }
 
 // Note implements ui.StepReporter.
 func (n connectNotices) Note(id ui.StepID, _ string) {
 	if id == stepConnect && !n.quiet {
-		fmt.Println("🔄 Auth token expired, refreshing...")
+		_, _ = fmt.Fprintln(n.out, "🔄 Auth token expired, refreshing...")
 	}
 }

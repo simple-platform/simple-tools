@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -110,11 +112,108 @@ func TestRunInstall_AuthRetry(t *testing.T) {
 
 	installEnv = "dev"
 
-	if err := runInstall(context.Background(), "com.example.myapp"); err != nil {
+	var out bytes.Buffer
+	if err := runInstall(context.Background(), &out, "com.example.myapp"); err != nil {
 		t.Fatalf("runInstall() failed unexpectedly: %v", err)
 	}
 
 	if authAttempts < 2 {
 		t.Errorf("expected at least 2 WebSocket auth attempts (retry on 401), got %d", authAttempts)
+	}
+	if !strings.Contains(out.String(), "✅ Installed com.example.myapp (Version: 1.0.0) to dev in ") {
+		t.Errorf("output does not report the install:\n%s", out.String())
+	}
+}
+
+func TestRunInstallWith(t *testing.T) {
+	tests := []struct {
+		name      string
+		opts      installOptions
+		dial      func(n int, c *fakeDevopsClient) (devopsClient, error)
+		install   func(context.Context) (*deploy.InstallResult, error)
+		wantErr   string
+		wantOut   []string
+		wantDials int
+	}{
+		{
+			name:      "installs",
+			opts:      installOptions{appID: "com.acme.crm", env: "dev"},
+			wantOut:   []string{"🚀 Installing com.acme.crm to dev...\n✅ Installed com.acme.crm (Version: 1.4.3-dev.5) to dev in "},
+			wantDials: 1,
+		},
+		{
+			name:      "--json prints one document",
+			opts:      installOptions{appID: "com.acme.crm", env: "dev", json: true},
+			wantOut:   []string{`"status": "success"`, `"env": "dev"`, `"version": "1.4.3-dev.5"`},
+			wantDials: 1,
+		},
+		{
+			name: "a rejected token prints the refresh notice",
+			opts: installOptions{appID: "com.acme.crm", env: "dev"},
+			dial: func(n int, c *fakeDevopsClient) (devopsClient, error) {
+				if n == 1 {
+					return nil, &deploy.AuthFailedError{StatusCode: 403}
+				}
+				return c, nil
+			},
+			wantOut:   []string{"🔄 Auth token expired, refreshing...\n"},
+			wantDials: 2,
+		},
+		{
+			name:    "a missing environment fails first",
+			opts:    installOptions{appID: "com.acme.crm", env: "prod"},
+			wantErr: "environment 'prod' not defined in simple.scl",
+		},
+		{
+			name:      "connect failure",
+			opts:      installOptions{appID: "com.acme.crm", env: "dev"},
+			dial:      func(int, *fakeDevopsClient) (devopsClient, error) { return nil, errors.New("no route to host") },
+			wantErr:   "no route to host",
+			wantDials: 1,
+		},
+		{
+			name:      "install failure",
+			opts:      installOptions{appID: "com.acme.crm", env: "dev"},
+			install:   func(context.Context) (*deploy.InstallResult, error) { return nil, errors.New("record sync failed") },
+			wantErr:   "record sync failed",
+			wantDials: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &fakeDevopsClient{install: tt.install}
+			if client.install == nil {
+				client.install = func(context.Context) (*deploy.InstallResult, error) {
+					return &deploy.InstallResult{AppID: "com.acme.crm", Version: "1.4.3-dev.5", Success: true}, nil
+				}
+			}
+			var dials []string
+			deps := fakeDevopsDeps(&fakeAuthenticator{}, &dials, func(n int) (devopsClient, error) {
+				if tt.dial != nil {
+					return tt.dial(n, client)
+				}
+				return client, nil
+			})
+			var out bytes.Buffer
+			err := runInstallWith(context.Background(), &out, deps, tt.opts)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("err = %v, want %q", err, tt.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("runInstallWith() error = %v", err)
+			}
+			for _, want := range tt.wantOut {
+				if !strings.Contains(out.String(), want) {
+					t.Errorf("output lacks %q:\n%s", want, out.String())
+				}
+			}
+			if len(dials) != tt.wantDials {
+				t.Errorf("dialled %d times, want %d", len(dials), tt.wantDials)
+			}
+			if tt.wantDials > 0 && tt.wantErr != "no route to host" && client.closed.Load() != 1 {
+				t.Errorf("client closed %d times, want 1", client.closed.Load())
+			}
+		})
 	}
 }

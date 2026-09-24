@@ -6,6 +6,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -58,7 +59,13 @@ func init() {
 // printJSON encodes data to stdout in JSON format.
 // This is used when the --json flag is provided.
 func printJSON(data interface{}) error {
-	encoder := json.NewEncoder(os.Stdout)
+	return printJSONTo(os.Stdout, data)
+}
+
+// printJSONTo encodes data to out in JSON format, for commands that take
+// their output writer from cobra.
+func printJSONTo(out io.Writer, data interface{}) error {
+	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(data); err != nil {
 		printErrorJSON(fmt.Errorf("failed to encode JSON output: %w", err))
