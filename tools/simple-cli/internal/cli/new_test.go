@@ -430,7 +430,7 @@ func TestNewActionCmd_Rust(t *testing.T) {
 	cargoToml, _ := os.ReadFile(filepath.Join(actionDir, "Cargo.toml"))
 	for _, want := range []string{
 		`name = "greet-user"`,
-		`simpleplatform-sdk = "0.3"`,
+		`simpleplatform-sdk = "0.4"`,
 		`async = ["simpleplatform-sdk/async"]`,
 		`opt-level = "z"`,
 	} {
