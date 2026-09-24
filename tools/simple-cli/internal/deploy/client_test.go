@@ -74,6 +74,58 @@ func TestClient_JoinChannel_NotConnected(t *testing.T) {
 	}
 }
 
+func TestClient_JoinWait(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+		want    time.Duration
+	}{
+		{name: "default reply timeout is capped", timeout: DefaultTimeout, want: joinTimeout},
+		{name: "longer reply timeout is capped", timeout: time.Hour, want: joinTimeout},
+		{name: "shorter reply timeout is kept", timeout: 100 * time.Millisecond, want: 100 * time.Millisecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(ClientConfig{Endpoint: "devops.acme.simple.dev", Timeout: tt.timeout})
+			if got := client.joinWait(); got != tt.want {
+				t.Errorf("joinWait() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// A server that accepts the socket but never answers the join must not hold
+// the CLI for the reply timeout.
+func TestClient_JoinChannel_Timeout(t *testing.T) {
+	server := startClientMockServer(t, func(conn *websocket.Conn) {
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	})
+	defer server.Close()
+
+	client := NewClient(ClientConfig{
+		Endpoint: "ws" + strings.TrimPrefix(server.URL, "http"),
+		JWT:      "test-token",
+		Timeout:  100 * time.Millisecond,
+	})
+	if err := client.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer client.Close()
+
+	err := client.JoinChannel(t.Context(), "com.test.app")
+	if !errors.Is(err, ErrReplyTimeout) {
+		t.Fatalf("JoinChannel() error = %v, want ErrReplyTimeout", err)
+	}
+	if want := "failed to join channel: join: reply timeout after 100ms"; err.Error() != want {
+		t.Errorf("JoinChannel() error = %q, want %q", err, want)
+	}
+}
+
 func TestClient_SendManifest_NotJoined(t *testing.T) {
 	client := &Client{
 		timeout: 5 * time.Second,

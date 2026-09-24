@@ -34,6 +34,12 @@ type ClientConfig struct {
 // running to completion on the server.
 const DefaultTimeout = 15 * time.Minute
 
+// joinTimeout caps the wait for the deploy channel join. The server does no
+// real work to admit a join, so one that has not been answered in this time
+// will not be; the reply timeout, sized for installs, would leave the CLI
+// waiting up to 15 minutes before saying so.
+const joinTimeout = 30 * time.Second
+
 // NewClient creates a deployment client.
 func NewClient(cfg ClientConfig) *Client {
 	timeout := cfg.Timeout
@@ -78,12 +84,18 @@ func (c *Client) JoinChannel(ctx context.Context, appID string) error {
 	c.appID = appID
 	channel := c.socket.Channel(fmt.Sprintf("deploy:%s", appID))
 
-	if err := channel.Join(ctx, c.timeout); err != nil {
+	if err := channel.Join(ctx, c.joinWait()); err != nil {
 		return fmt.Errorf("failed to join channel: %w", err)
 	}
 
 	c.channel = channel
 	return nil
+}
+
+// joinWait is how long JoinChannel waits for the join reply: the reply
+// timeout, but never more than joinTimeout.
+func (c *Client) joinWait() time.Duration {
+	return min(joinTimeout, c.timeout)
 }
 
 // SendManifest sends file manifest and returns paths of needed files.
