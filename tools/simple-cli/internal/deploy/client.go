@@ -151,6 +151,13 @@ func (c *Client) SendManifest(ctx context.Context, files map[string]FileInfo, ve
 	return result, nil
 }
 
+// UploadProgress is counted from the server's per-file acknowledgements.
+// Bytes are the FileInfo.Size of the files.
+type UploadProgress struct {
+	FilesDone, FilesTotal int
+	BytesDone, BytesTotal int64
+}
+
 // uploadJob is one file SendFiles has to upload.
 type uploadJob struct {
 	path string
@@ -159,22 +166,31 @@ type uploadJob struct {
 
 // SendFiles uploads the files the server asked for, keeping at most
 // uploadConcurrency of them in flight. A needed path missing from files is
-// skipped. The first failure stops new uploads, and is returned once the
-// uploads already in flight have ended.
+// skipped, and left out of the totals. The first failure stops new uploads,
+// and is returned once the uploads already in flight have ended.
+//
+// onProgress, when not nil, is called after each acknowledged upload. It runs
+// on the upload's goroutine, outside any lock, so it never holds up the
+// socket's read loop or the other uploads; calls can overlap and arrive out
+// of order, so keep the largest values. The call for the last
+// acknowledgement carries the totals.
 //
 // Uploads used to start all at once, one goroutine each. Every push then
 // waited in the socket's send queue, so an app that needed more than about a
 // thousand files failed with "send queue full", and an encoded copy of every
 // file sat in that queue at the same time.
-func (c *Client) SendFiles(ctx context.Context, files map[string]FileInfo, neededPaths []string) error {
+func (c *Client) SendFiles(ctx context.Context, files map[string]FileInfo, neededPaths []string, onProgress func(UploadProgress)) error {
 	if c.channel == nil {
 		return fmt.Errorf("not joined to channel")
 	}
 
+	var progress UploadProgress
 	jobs := make([]uploadJob, 0, len(neededPaths))
 	for _, path := range neededPaths {
 		if fi, ok := files[path]; ok {
 			jobs = append(jobs, uploadJob{path: path, file: fi})
+			progress.FilesTotal++
+			progress.BytesTotal += fi.Size
 		}
 	}
 	if len(jobs) == 0 {
@@ -187,7 +203,7 @@ func (c *Client) SendFiles(ctx context.Context, files map[string]FileInfo, neede
 	defer stop()
 
 	var (
-		mu       sync.Mutex
+		mu       sync.Mutex // guards firstErr and progress
 		firstErr error
 	)
 	queue := make(chan uploadJob)
@@ -203,6 +219,15 @@ func (c *Client) SendFiles(ctx context.Context, files map[string]FileInfo, neede
 					mu.Unlock()
 					stop()
 					return
+				}
+
+				mu.Lock()
+				progress.FilesDone++
+				progress.BytesDone += job.file.Size
+				snapshot := progress
+				mu.Unlock()
+				if onProgress != nil {
+					onProgress(snapshot)
 				}
 			}
 		})

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 // FileInfo represents a file to deploy.
@@ -23,6 +24,12 @@ type FileInfo struct {
 type FileCollector struct {
 	FS         FileSystem
 	NumWorkers int
+
+	// OnProgress, when set, is called once for every path after it is
+	// processed, whether it was read, had vanished or failed, so done always
+	// reaches total. It runs on the worker goroutines, concurrently and
+	// outside any lock, so values can arrive out of order: keep the largest.
+	OnProgress func(done, total int)
 }
 
 // NewFileCollector creates a FileCollector with default settings.
@@ -47,34 +54,32 @@ func (c *FileCollector) CollectFiles(appPath string) (map[string]FileInfo, error
 	}
 
 	// Process files in parallel
-	numWorkers := c.NumWorkers
-	if numWorkers < 1 {
-		numWorkers = 1
-	}
-	if numWorkers > len(paths) {
-		numWorkers = len(paths)
-	}
+	numWorkers := min(max(c.NumWorkers, 1), len(paths))
+	total := len(paths)
 
 	jobs := make(chan string, len(paths))
 	results := make(chan *FileInfo, len(paths))
-	errors := make(chan error, len(paths))
+	errs := make(chan error, len(paths))
 
+	var processed atomic.Int64
 	var wg sync.WaitGroup
-	for i := 0; i < numWorkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range numWorkers {
+		wg.Go(func() {
 			for path := range jobs {
 				fi, err := c.processFile(appPath, path)
-				if err != nil {
-					errors <- err
-					continue
-				}
-				if fi != nil {
+				switch {
+				case err != nil:
+					errs <- err
+				case fi != nil:
 					results <- fi
 				}
+
+				done := processed.Add(1)
+				if c.OnProgress != nil {
+					c.OnProgress(int(done), total)
+				}
 			}
-		}()
+		})
 	}
 
 	// Send jobs
@@ -86,11 +91,11 @@ func (c *FileCollector) CollectFiles(appPath string) (map[string]FileInfo, error
 	// Wait for workers to finish
 	wg.Wait()
 	close(results)
-	close(errors)
+	close(errs)
 
 	// Check for errors
 	var firstErr error
-	for err := range errors {
+	for err := range errs {
 		if firstErr == nil {
 			firstErr = err
 		}

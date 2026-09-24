@@ -195,7 +195,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 	}
 
 	// Upload needed files in parallel
-	if err := client.SendFiles(ctx, files, neededFiles); err != nil {
+	if err := client.SendFiles(ctx, files, neededFiles, nil); err != nil {
 		return err
 	}
 

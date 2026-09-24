@@ -150,7 +150,7 @@ func TestClient_SendFiles_NotJoined(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	err := client.SendFiles(t.Context(), nil, []string{"file1.txt"})
+	err := client.SendFiles(t.Context(), nil, []string{"file1.txt"}, nil)
 	if err == nil {
 		t.Error("SendFiles() expected error when not joined")
 	}
@@ -164,7 +164,7 @@ func TestClient_SendFiles_EmptyList(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	err := client.SendFiles(t.Context(), nil, []string{})
+	err := client.SendFiles(t.Context(), nil, []string{}, nil)
 	if err != nil && !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("SendFiles() unexpected error = %v", err)
 	}
@@ -382,7 +382,7 @@ func TestClient_SendFiles_Integration(t *testing.T) {
 		"file1.txt": {Path: "file1.txt", Hash: "abc123", Size: 11, Content: []byte("hello world")},
 	}
 
-	err := client.SendFiles(t.Context(), files, []string{"file1.txt"})
+	err := client.SendFiles(t.Context(), files, []string{"file1.txt"}, nil)
 	if err != nil {
 		t.Fatalf("SendFiles error: %v", err)
 	}
@@ -544,7 +544,7 @@ func TestClient_Replies(t *testing.T) {
 	publish := func(ctx context.Context, c *Client) (any, error) { return c.Deploy(ctx) }
 	install := func(ctx context.Context, c *Client) (any, error) { return c.Install(ctx) }
 	upload := func(ctx context.Context, c *Client) (any, error) {
-		return nil, c.SendFiles(ctx, map[string]FileInfo{"a.txt": {Hash: "h", Size: 1, Content: []byte("x")}}, []string{"a.txt"})
+		return nil, c.SendFiles(ctx, map[string]FileInfo{"a.txt": {Hash: "h", Size: 1, Content: []byte("x")}}, []string{"a.txt"}, nil)
 	}
 
 	tests := []struct {
@@ -725,7 +725,7 @@ func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
 			name:    "upload loses the connection",
 			event:   "file",
 			drop:    func(*websocket.Conn, *phoenixMessage) bool { return false },
-			call:    func(ctx context.Context, c *Client) error { return c.SendFiles(ctx, files, []string{"a.txt"}) },
+			call:    func(ctx context.Context, c *Client) error { return c.SendFiles(ctx, files, []string{"a.txt"}, nil) },
 			wantErr: "upload a.txt: connection to the devops server was lost: ",
 			wantIs:  ErrConnectionLost,
 		},
@@ -802,7 +802,7 @@ func TestClient_ContextEndsWait(t *testing.T) {
 		{
 			name:    "upload",
 			event:   "file",
-			call:    func(ctx context.Context, c *Client) error { return c.SendFiles(ctx, files, []string{"a.txt"}) },
+			call:    func(ctx context.Context, c *Client) error { return c.SendFiles(ctx, files, []string{"a.txt"}, nil) },
 			wantErr: "upload a.txt: context canceled",
 		},
 		{
@@ -929,7 +929,7 @@ func TestClient_SendFiles_Uploads(t *testing.T) {
 			defer server.Close()
 			client := joinedClient(t, server, 10*time.Second)
 
-			if err := client.SendFiles(t.Context(), tt.files, tt.needed); err != nil {
+			if err := client.SendFiles(t.Context(), tt.files, tt.needed, nil); err != nil {
 				t.Fatalf("SendFiles() error = %v", err)
 			}
 
@@ -1008,7 +1008,7 @@ func TestClient_SendFiles_BoundsInFlight(t *testing.T) {
 		t.Fatalf("JoinChannel() error = %v", err)
 	}
 
-	if err := client.SendFiles(t.Context(), files, paths); err != nil {
+	if err := client.SendFiles(t.Context(), files, paths, nil); err != nil {
 		t.Fatalf("SendFiles() error = %v", err)
 	}
 	if got := total.Load(); got != int64(len(paths)) {
@@ -1044,7 +1044,7 @@ func TestClient_SendFiles_StopsAfterFirstError(t *testing.T) {
 			client := joinedClient(t, server, 10*time.Second)
 			client.uploadConcurrency = tt.concurrency
 
-			err := client.SendFiles(t.Context(), files, paths)
+			err := client.SendFiles(t.Context(), files, paths, nil)
 			if err == nil || !strings.HasPrefix(err.Error(), "file rejected for f00") {
 				t.Fatalf("SendFiles() error = %v, want the server's rejection", err)
 			}
@@ -1089,7 +1089,7 @@ func TestClient_SendFiles_ContextCanceled(t *testing.T) {
 			}
 
 			start := time.Now()
-			err := client.SendFiles(ctx, files, paths)
+			err := client.SendFiles(ctx, files, paths, nil)
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("SendFiles() error = %v, want context.Canceled", err)
 			}
@@ -1100,5 +1100,112 @@ func TestClient_SendFiles_ContextCanceled(t *testing.T) {
 				t.Errorf("server received %d uploads, want %d", got, tt.wantReceived)
 			}
 		})
+	}
+}
+
+func TestClient_SendFiles_ReportsProgress(t *testing.T) {
+	files := map[string]FileInfo{
+		"a.txt": {Hash: "ha", Size: 10, Content: make([]byte, 10)},
+		"b.txt": {Hash: "hb", Size: 20, Content: make([]byte, 20)},
+		"c.txt": {Hash: "hc", Size: 30, Content: make([]byte, 30)},
+	}
+	// missing.txt was never collected: it is skipped and left out of the
+	// totals, so the count can still reach them.
+	needed := []string{"a.txt", "missing.txt", "b.txt", "c.txt"}
+
+	tests := []struct {
+		name   string
+		reject string // path the server rejects, if any
+		want   []UploadProgress
+	}{
+		{
+			name: "every acknowledgement is counted",
+			want: []UploadProgress{
+				{FilesDone: 1, FilesTotal: 3, BytesDone: 10, BytesTotal: 60},
+				{FilesDone: 2, FilesTotal: 3, BytesDone: 30, BytesTotal: 60},
+				{FilesDone: 3, FilesTotal: 3, BytesDone: 60, BytesTotal: 60},
+			},
+		},
+		{
+			name:   "a rejected upload is not counted",
+			reject: "b.txt",
+			want: []UploadProgress{
+				{FilesDone: 1, FilesTotal: 3, BytesDone: 10, BytesTotal: 60},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startClientMockServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				if uploadedPath(msg) == tt.reject {
+					writeReply(conn, msg, "error", map[string]any{"message": "Invalid binary format"})
+				} else {
+					writeReply(conn, msg, "ok", map[string]any{})
+				}
+				return true
+			}))
+			defer server.Close()
+			client := joinedClient(t, server, 10*time.Second)
+			// One at a time, so the files are acknowledged in order.
+			client.uploadConcurrency = 1
+
+			var got []UploadProgress
+			err := client.SendFiles(t.Context(), files, needed, func(p UploadProgress) {
+				got = append(got, p)
+			})
+			if (err != nil) != (tt.reject != "") {
+				t.Fatalf("SendFiles() error = %v, want an error: %v", err, tt.reject != "")
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("progress = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// With uploads running in parallel, progress calls overlap and can arrive out
+// of order, but every acknowledgement is reported once and the largest
+// snapshot carries the totals.
+func TestClient_SendFiles_ReportsProgressConcurrently(t *testing.T) {
+	files, paths := uploadFiles(200)
+	var totalBytes int64
+	for _, fi := range files {
+		totalBytes += fi.Size
+	}
+
+	server := startClientMockServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+		writeReply(conn, msg, "ok", map[string]any{})
+		return true
+	}))
+	defer server.Close()
+	client := joinedClient(t, server, 10*time.Second)
+
+	var (
+		mu    sync.Mutex
+		seen  = map[int]bool{}
+		final UploadProgress
+	)
+	err := client.SendFiles(t.Context(), files, paths, func(p UploadProgress) {
+		mu.Lock()
+		defer mu.Unlock()
+		if seen[p.FilesDone] {
+			t.Errorf("FilesDone %d reported twice", p.FilesDone)
+		}
+		seen[p.FilesDone] = true
+		if p.FilesDone > final.FilesDone {
+			final = p
+		}
+	})
+	if err != nil {
+		t.Fatalf("SendFiles() error = %v", err)
+	}
+
+	if len(seen) != len(paths) {
+		t.Errorf("got %d progress calls, want %d", len(seen), len(paths))
+	}
+	want := UploadProgress{FilesDone: len(paths), FilesTotal: len(paths), BytesDone: totalBytes, BytesTotal: totalBytes}
+	if final != want {
+		t.Errorf("final progress = %+v, want %+v", final, want)
 	}
 }
