@@ -36,8 +36,26 @@ const (
 	phxBroadcast = 2 // Server broadcast
 )
 
-// ErrReplyTimeout reports that the server did not answer a request in time.
-var ErrReplyTimeout = errors.New("reply timeout")
+// These errors end a request whose outcome is unknown: it may have reached
+// the server, and the server may still act on it. A request that never left
+// the client fails with an error that wraps none of them.
+var (
+	// ErrConnectionLost reports that the connection to the server dropped.
+	ErrConnectionLost = errors.New("connection to the devops server was lost")
+	// ErrChannelClosed reports that the server stopped the channel process
+	// for the current join.
+	ErrChannelClosed = errors.New("the devops server closed the deploy channel")
+	// ErrReplyTimeout reports that the server did not answer a request in time.
+	ErrReplyTimeout = errors.New("reply timeout")
+)
+
+var (
+	// errSocketClosed is the cause once the client closes the socket itself.
+	errSocketClosed = errors.New("socket closed")
+	// errNotSent marks a request that never left the client, so the server
+	// cannot have acted on it.
+	errNotSent = errors.New("request not sent")
+)
 
 // ChannelReply is the server's reply to one push.
 type ChannelReply struct {
@@ -73,6 +91,9 @@ type PhoenixSocket struct {
 	done       chan struct{}
 	sendCh     chan outgoingMsg
 	connMu     sync.RWMutex
+
+	closeOnce sync.Once
+	closeErr  error // why the socket closed; set before done is closed
 }
 
 type outgoingMsg struct {
@@ -84,8 +105,12 @@ type outgoingMsg struct {
 type PhoenixChannel struct {
 	socket   *PhoenixSocket
 	topic    string
-	joinRef  uint64
-	bindings sync.Map // map[uint64]chan ChannelReply, each buffered 1
+	joinRef  atomic.Uint64 // read by the read loop while Join sets it
+	bindings sync.Map      // map[uint64]chan ChannelReply, each buffered 1
+
+	closed    chan struct{}
+	closeOnce sync.Once
+	closeErr  error // why the server closed the channel; set before closed is closed
 }
 
 // phoenixMessage is the decoded Phoenix channel message.
@@ -157,21 +182,33 @@ func (s *PhoenixSocket) Connect() error {
 	return nil
 }
 
-// Disconnect closes the WebSocket connection.
+// Disconnect closes the WebSocket connection. Requests still waiting end
+// with a "socket closed" error.
 func (s *PhoenixSocket) Disconnect() {
-	select {
-	case <-s.done:
-		return // Already closed
-	default:
-		close(s.done)
-	}
+	s.shutdown(errSocketClosed)
+}
 
-	s.connMu.Lock()
-	if s.conn != nil {
-		_ = s.conn.Close()
-		s.conn = nil
-	}
-	s.connMu.Unlock()
+// shutdown closes the socket once, recording cause for every request that is
+// waiting on it or tries to send. Later calls are no-ops, so the first cause
+// sticks: a read error after Disconnect does not relabel it.
+func (s *PhoenixSocket) shutdown(cause error) {
+	s.closeOnce.Do(func() {
+		s.closeErr = cause
+		close(s.done)
+
+		s.connMu.Lock()
+		if s.conn != nil {
+			_ = s.conn.Close()
+			s.conn = nil
+		}
+		s.connMu.Unlock()
+	})
+}
+
+// notSentErr is the error for a message refused because the socket is closed.
+// Callers read it only after done is closed, which publishes closeErr.
+func (s *PhoenixSocket) notSentErr() error {
+	return fmt.Errorf("%w: %v", errNotSent, s.closeErr)
 }
 
 // IsConnected returns true if the socket is connected.
@@ -195,6 +232,7 @@ func (s *PhoenixSocket) Channel(topic string) *PhoenixChannel {
 	ch := &PhoenixChannel{
 		socket: s,
 		topic:  topic,
+		closed: make(chan struct{}),
 	}
 	actual, _ := s.channels.LoadOrStore(topic, ch)
 	return actual.(*PhoenixChannel)
@@ -207,18 +245,29 @@ func (s *PhoenixSocket) nextRef() uint64 {
 
 // send queues a message for sending (non-blocking with large buffer).
 func (s *PhoenixSocket) send(msgType int, data []byte) error {
+	msg := outgoingMsg{msgType: msgType, data: data}
+
+	// Check for a closed socket first. select picks at random among ready
+	// cases, so a closed socket with room in its queue would otherwise accept
+	// the message about half the time, and nothing would ever write it.
 	select {
-	case s.sendCh <- outgoingMsg{msgType: msgType, data: data}:
+	case <-s.done:
+		return s.notSentErr()
+	default:
+	}
+
+	select {
+	case s.sendCh <- msg:
 		return nil
 	case <-s.done:
-		return fmt.Errorf("socket closed")
+		return s.notSentErr()
 	default:
 		// Queue full, block briefly then try again
 		select {
-		case s.sendCh <- outgoingMsg{msgType: msgType, data: data}:
+		case s.sendCh <- msg:
 			return nil
 		case <-s.done:
-			return fmt.Errorf("socket closed")
+			return s.notSentErr()
 		case <-time.After(100 * time.Millisecond):
 			return fmt.Errorf("send queue full")
 		}
@@ -234,8 +283,15 @@ func (s *PhoenixSocket) writeLoop() {
 			s.connMu.RLock()
 			conn := s.conn
 			s.connMu.RUnlock()
-			if conn != nil {
-				_ = conn.WriteMessage(msg.msgType, msg.data)
+			if conn == nil {
+				return
+			}
+			// A failed write leaves the connection unusable and loses the
+			// message, so no reply will come: end every wait now instead of
+			// letting each one run out its timeout.
+			if err := conn.WriteMessage(msg.msgType, msg.data); err != nil {
+				s.shutdown(fmt.Errorf("%w: %v", ErrConnectionLost, err))
+				return
 			}
 		}
 	}
@@ -259,6 +315,10 @@ func (s *PhoenixSocket) readLoop() {
 
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
+			// Every pending request waits on this connection. Shut the socket
+			// down so they end now, with the cause, instead of each running out
+			// its timeout. After Disconnect this is a no-op.
+			s.shutdown(fmt.Errorf("%w: %v", ErrConnectionLost, err))
 			return
 		}
 
@@ -493,8 +553,8 @@ func parseRefFast(raw json.RawMessage) uint64 {
 func (c *PhoenixChannel) Join(timeout time.Duration) error {
 	reply, err := c.request(websocket.TextMessage, func(ref uint64) []byte {
 		// The join's ref becomes the channel's join ref, which every later
-		// push on this join carries.
-		c.joinRef = ref
+		// push on this join carries and which tells a stale phx_error apart.
+		c.joinRef.Store(ref)
 		return encodeJSONMessageFast(ref, ref, c.topic, "phx_join", nil)
 	}, timeout)
 	if err != nil {
@@ -509,7 +569,7 @@ func (c *PhoenixChannel) Join(timeout time.Duration) error {
 // Push sends a JSON message without waiting for a reply and returns its ref.
 func (c *PhoenixChannel) Push(event string, payload any) (uint64, error) {
 	ref := c.socket.nextRef()
-	data := encodeJSONMessageFast(c.joinRef, ref, c.topic, event, payload)
+	data := encodeJSONMessageFast(c.joinRef.Load(), ref, c.topic, event, payload)
 
 	if err := c.socket.send(websocket.TextMessage, data); err != nil {
 		return 0, err
@@ -520,7 +580,7 @@ func (c *PhoenixChannel) Push(event string, payload any) (uint64, error) {
 // Request pushes a JSON event and waits for the server's reply to it.
 func (c *PhoenixChannel) Request(event string, payload any, timeout time.Duration) (ChannelReply, error) {
 	return c.request(websocket.TextMessage, func(ref uint64) []byte {
-		return encodeJSONMessageFast(c.joinRef, ref, c.topic, event, payload)
+		return encodeJSONMessageFast(c.joinRef.Load(), ref, c.topic, event, payload)
 	}, timeout)
 }
 
@@ -532,7 +592,7 @@ func (c *PhoenixChannel) RequestBinaryFile(metadata map[string]string, content [
 		return ChannelReply{}, err
 	}
 	return c.request(websocket.BinaryMessage, func(ref uint64) []byte {
-		return encodeBinaryMessageFast(c.joinRef, ref, c.topic, "file", payload)
+		return encodeBinaryMessageFast(c.joinRef.Load(), ref, c.topic, "file", payload)
 	}, timeout)
 }
 
@@ -545,6 +605,15 @@ func (c *PhoenixChannel) RequestBinaryFile(metadata map[string]string, content [
 // and the caller then waited out its whole timeout for an answer that had
 // already come.
 func (c *PhoenixChannel) request(msgType int, encode func(ref uint64) []byte, timeout time.Duration) (ChannelReply, error) {
+	// The server does not handle a push on a channel it has closed. Refuse it
+	// here, so the error says it was never sent instead of leaving its
+	// outcome unknown.
+	select {
+	case <-c.closed:
+		return ChannelReply{}, fmt.Errorf("%w: %v", errNotSent, c.closeErr)
+	default:
+	}
+
 	ref := c.socket.nextRef()
 	replies := make(chan ChannelReply, 1)
 	c.bindings.Store(ref, replies)
@@ -556,18 +625,43 @@ func (c *PhoenixChannel) request(msgType int, encode func(ref uint64) []byte, ti
 	return c.await(ref, replies, timeout)
 }
 
-// await waits for the reply registered under ref.
+// await waits for the reply registered under ref. A dropped connection or a
+// channel the server closed ends the wait at once, with the cause.
 func (c *PhoenixChannel) await(ref uint64, replies chan ChannelReply, timeout time.Duration) (ChannelReply, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
+	var err error
 	select {
 	case reply := <-replies:
 		return reply, nil
+	case <-c.socket.done:
+		err = c.socket.closeErr
+	case <-c.closed:
+		err = c.closeErr
 	case <-timer.C:
-		c.bindings.Delete(ref)
-		return ChannelReply{}, fmt.Errorf("%w after %s", ErrReplyTimeout, timeout)
+		err = fmt.Errorf("%w after %s", ErrReplyTimeout, timeout)
 	}
+
+	// The read loop hands a reply over before it can see the connection drop
+	// or the channel close, so a reply that raced this wake-up is already
+	// buffered. It is the real answer: prefer it to the error.
+	select {
+	case reply := <-replies:
+		return reply, nil
+	default:
+	}
+	c.bindings.Delete(ref)
+	return ChannelReply{}, err
+}
+
+// shutdown marks the channel closed by the server, recording cause for every
+// request waiting on it or trying to push. Later calls are no-ops.
+func (c *PhoenixChannel) shutdown(cause error) {
+	c.closeOnce.Do(func() {
+		c.closeErr = cause
+		close(c.closed)
+	})
 }
 
 // binaryFilePayload builds the body of a "file" push:
@@ -596,20 +690,28 @@ func binaryFilePayload(metadata map[string]string, content []byte) ([]byte, erro
 }
 
 func (c *PhoenixChannel) handleMessage(msg *phoenixMessage) {
-	if msg.Event != "phx_reply" {
-		return
-	}
-	// LoadAndDelete hands each reply to at most one waiter, and the waiter's
-	// channel has room for it, so this send never blocks the read loop.
-	if replies, ok := c.bindings.LoadAndDelete(msg.Ref); ok {
-		replies.(chan ChannelReply) <- ChannelReply{Status: msg.Status, Response: msg.Payload}
+	switch msg.Event {
+	case "phx_reply":
+		// LoadAndDelete hands each reply to at most one waiter, and the
+		// waiter's channel has room for it, so this send never blocks the
+		// read loop.
+		if replies, ok := c.bindings.LoadAndDelete(msg.Ref); ok {
+			replies.(chan ChannelReply) <- ChannelReply{Status: msg.Status, Response: msg.Payload}
+		}
+	case "phx_error", "phx_close":
+		// The server sends these when the channel process of a join crashes
+		// or stops; no reply to a push on it will come. Only the current
+		// join counts: one stamped with an earlier join ref is stale.
+		if joinRef := c.joinRef.Load(); joinRef != 0 && msg.JoinRef == joinRef {
+			c.shutdown(fmt.Errorf("%w (%s)", ErrChannelClosed, msg.Event))
+		}
 	}
 }
 
 // Leave sends a leave message.
 func (c *PhoenixChannel) Leave() error {
 	ref := c.socket.nextRef()
-	data := encodeJSONMessageFast(c.joinRef, ref, c.topic, "phx_leave", nil)
+	data := encodeJSONMessageFast(c.joinRef.Load(), ref, c.topic, "phx_leave", nil)
 	return c.socket.send(websocket.TextMessage, data)
 }
 

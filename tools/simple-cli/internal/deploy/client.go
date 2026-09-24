@@ -223,8 +223,8 @@ type InstallResult struct {
 
 // Install triggers the installation of the app version.
 func (c *Client) Install() (*InstallResult, error) {
-	if !c.IsConnected() {
-		return nil, fmt.Errorf("client not connected")
+	if c.channel == nil {
+		return nil, fmt.Errorf("not joined to channel")
 	}
 
 	// Send install event with empty payload
@@ -262,9 +262,4 @@ func (c *Client) Close() {
 	if c.socket != nil {
 		c.socket.Disconnect()
 	}
-}
-
-// IsConnected returns true if the client is connected to the socket.
-func (c *Client) IsConnected() bool {
-	return c.socket != nil && c.socket.IsConnected()
 }

@@ -126,12 +126,12 @@ func TestClient_Deploy_NotJoined(t *testing.T) {
 	}
 }
 
-func TestClient_Install_NotConnected(t *testing.T) {
+func TestClient_Install_NotJoined(t *testing.T) {
 	client := &Client{timeout: 5 * time.Second}
 
 	_, err := client.Install()
-	if err == nil || !strings.Contains(err.Error(), "not connected") {
-		t.Errorf("Install() error = %v, want containing 'not connected'", err)
+	if err == nil || !strings.Contains(err.Error(), "not joined") {
+		t.Errorf("Install() error = %v, want containing 'not joined'", err)
 	}
 }
 
@@ -140,14 +140,6 @@ func TestClient_Close_NilSocketAndChannel(t *testing.T) {
 
 	// Should not panic
 	client.Close()
-}
-
-func TestClient_IsConnected_NotConnected(t *testing.T) {
-	client := &Client{}
-
-	if client.IsConnected() {
-		t.Error("IsConnected() should return false when socket is nil")
-	}
 }
 
 // Integration tests using mock Phoenix server
@@ -455,8 +447,8 @@ func TestClient_Close_WithConnection(t *testing.T) {
 	client.Close()
 
 	// Should be disconnected
-	if client.IsConnected() {
-		t.Error("IsConnected() should return false after Close()")
+	if socket.IsConnected() {
+		t.Error("socket still connected after Close()")
 	}
 }
 
@@ -614,5 +606,117 @@ func TestClient_Replies(t *testing.T) {
 				t.Errorf("result = %#v, want %#v", got, tt.want)
 			}
 		})
+	}
+}
+
+// A server restart or a dropped load balancer used to leave the CLI waiting
+// out the whole reply timeout (15 minutes by default) for an answer that could
+// no longer come. Each wait now ends as soon as the connection or channel goes.
+func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
+	files := map[string]FileInfo{"a.txt": {Hash: "h", Size: 1, Content: []byte("x")}}
+
+	tests := []struct {
+		name  string
+		event string
+		// drop is how the server goes away once the request arrives.
+		drop    func(conn *websocket.Conn, msg *phoenixMessage) bool
+		call    func(*Client) error
+		wantErr string
+		wantIs  error
+	}{
+		{
+			name:  "install loses the connection",
+			event: "install",
+			drop:  func(*websocket.Conn, *phoenixMessage) bool { return false },
+			call: func(c *Client) error {
+				_, err := c.Install()
+				return err
+			},
+			wantErr: "install: connection to the devops server was lost: ",
+			wantIs:  ErrConnectionLost,
+		},
+		{
+			name:  "deploy channel crashes",
+			event: "deploy",
+			drop: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeChannelEvent(conn, msg.JoinRef, msg.Topic, "phx_error")
+				return true
+			},
+			call: func(c *Client) error {
+				_, err := c.Deploy()
+				return err
+			},
+			wantErr: "deploy: the devops server closed the deploy channel (phx_error)",
+			wantIs:  ErrChannelClosed,
+		},
+		{
+			name:  "manifest channel closes",
+			event: "manifest",
+			drop: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeChannelEvent(conn, msg.JoinRef, msg.Topic, "phx_close")
+				return true
+			},
+			call: func(c *Client) error {
+				_, err := c.SendManifest(files, "1.0.0")
+				return err
+			},
+			wantErr: "manifest: the devops server closed the deploy channel (phx_close)",
+			wantIs:  ErrChannelClosed,
+		},
+		{
+			name:    "upload loses the connection",
+			event:   "file",
+			drop:    func(*websocket.Conn, *phoenixMessage) bool { return false },
+			call:    func(c *Client) error { return c.SendFiles(files, []string{"a.txt"}) },
+			wantErr: "upload a.txt: connection to the devops server was lost: ",
+			wantIs:  ErrConnectionLost,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := startClientMockServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				if msg.Event == tt.event {
+					return tt.drop(conn, msg)
+				}
+				return true
+			}))
+			defer server.Close()
+			client := joinedClient(t, server, time.Minute)
+
+			start := time.Now()
+			err := tt.call(client)
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Errorf("the wait took %s after the server went away", elapsed)
+			}
+			if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want starting with %q", err, tt.wantErr)
+			}
+			if !errors.Is(err, tt.wantIs) {
+				t.Errorf("error = %v, want wrapping %v", err, tt.wantIs)
+			}
+		})
+	}
+}
+
+// Once the connection is gone, a later request is refused before it is sent,
+// so its error must not claim the server might still be acting on it.
+func TestClient_RequestAfterDropIsNotSent(t *testing.T) {
+	server := startClientMockServer(t, channelServer(func(*websocket.Conn, *phoenixMessage) bool {
+		return false
+	}))
+	defer server.Close()
+	client := joinedClient(t, server, time.Minute)
+
+	if _, err := client.Deploy(); !errors.Is(err, ErrConnectionLost) {
+		t.Fatalf("Deploy() error = %v, want ErrConnectionLost", err)
+	}
+
+	_, err := client.Install()
+	if err == nil || !strings.HasPrefix(err.Error(), "install: request not sent: connection to the devops server was lost") {
+		t.Fatalf("Install() error = %v, want an install that was not sent", err)
+	}
+	if errors.Is(err, ErrConnectionLost) {
+		t.Errorf("Install() error = %v wraps ErrConnectionLost, but the install never left the client", err)
 	}
 }

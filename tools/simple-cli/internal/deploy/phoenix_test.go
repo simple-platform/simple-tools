@@ -599,6 +599,9 @@ func TestPhoenixSocketConnectAndJoin(t *testing.T) {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer socket.Disconnect()
+	if !socket.IsConnected() {
+		t.Error("IsConnected() = false right after Connect()")
+	}
 
 	// Join channel
 	ch := socket.Channel("test:room")
@@ -870,6 +873,13 @@ func writeReply(conn *websocket.Conn, msg *phoenixMessage, status string, respon
 	_ = conn.WriteMessage(websocket.TextMessage, data)
 }
 
+// writeChannelEvent sends a server-side channel event such as phx_error,
+// stamped with joinRef the way Phoenix stamps it.
+func writeChannelEvent(conn *websocket.Conn, joinRef uint64, topic, event string) {
+	data := encodeJSONMessageFast(joinRef, joinRef, topic, event, map[string]any{})
+	_ = conn.WriteMessage(websocket.TextMessage, data)
+}
+
 // channelServer answers every phx_join with ok and hands every other channel
 // message to onPush, which scripts the rest of the server. Heartbeats are
 // ignored. The handler returns when the connection closes or onPush returns
@@ -940,6 +950,61 @@ func TestPhoenixChannel_Request(t *testing.T) {
 			wantStatus: "error",
 		},
 		{
+			name: "dropped connection ends the wait",
+			serve: func(*websocket.Conn, *phoenixMessage) bool {
+				return false
+			},
+			timeout: 10 * time.Second,
+			wantErr: ErrConnectionLost,
+		},
+		{
+			name: "phx_error for the current join ends the wait",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeChannelEvent(conn, msg.JoinRef, msg.Topic, "phx_error")
+				return true
+			},
+			timeout: 10 * time.Second,
+			wantErr: ErrChannelClosed,
+		},
+		{
+			name: "phx_close for the current join ends the wait",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeChannelEvent(conn, msg.JoinRef, msg.Topic, "phx_close")
+				return true
+			},
+			timeout: 10 * time.Second,
+			wantErr: ErrChannelClosed,
+		},
+		{
+			name: "phx_error for a stale join is ignored",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeChannelEvent(conn, msg.JoinRef+1000, msg.Topic, "phx_error")
+				writeReply(conn, msg, "ok", map[string]any{})
+				return true
+			},
+			timeout:    10 * time.Second,
+			wantStatus: "ok",
+		},
+		{
+			name: "reply that arrives just before the drop wins",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeReply(conn, msg, "ok", map[string]any{})
+				return false
+			},
+			timeout:    10 * time.Second,
+			wantStatus: "ok",
+		},
+		{
+			name: "reply that arrives just before phx_close wins",
+			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				writeReply(conn, msg, "ok", map[string]any{})
+				writeChannelEvent(conn, msg.JoinRef, msg.Topic, "phx_close")
+				return true
+			},
+			timeout:    10 * time.Second,
+			wantStatus: "ok",
+		},
+		{
 			name: "broadcasts and replies to other refs are skipped",
 			serve: func(conn *websocket.Conn, msg *phoenixMessage) bool {
 				broadcast := encodeJSONMessageFast(0, 0, msg.Topic, "presence_diff", map[string]any{})
@@ -965,7 +1030,13 @@ func TestPhoenixChannel_Request(t *testing.T) {
 			defer server.Close()
 			ch := joinedChannel(t, server, "test:room")
 
+			start := time.Now()
 			reply, err := ch.Request("ping", map[string]any{}, tt.timeout)
+			// Nothing here should wait anywhere near a 10s timeout: a drop or
+			// a closed channel has to end the wait at once.
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Errorf("Request() took %s", elapsed)
+			}
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("Request() error = %v, want %v", err, tt.wantErr)
@@ -1029,6 +1100,185 @@ func TestPhoenixChannel_RequestFastReply(t *testing.T) {
 
 	for err := range errs {
 		t.Error(err)
+	}
+}
+
+// The read loop buffers a reply before it can notice the drop or close that
+// follows it, so when both are ready the reply is the answer. await is driven
+// directly here with the wake-up already armed, many times over, because
+// select picks among ready cases at random.
+func TestPhoenixChannel_RequestReplyWinsOverClose(t *testing.T) {
+	tests := []struct {
+		name    string
+		arm     func(*PhoenixSocket, *PhoenixChannel)
+		timeout time.Duration
+		// wantErr is what await returns when no reply is buffered.
+		wantErr error
+	}{
+		{
+			name:    "connection lost",
+			arm:     func(s *PhoenixSocket, _ *PhoenixChannel) { s.shutdown(fmt.Errorf("%w: EOF", ErrConnectionLost)) },
+			timeout: time.Minute,
+			wantErr: ErrConnectionLost,
+		},
+		{
+			name:    "socket closed by the client",
+			arm:     func(s *PhoenixSocket, _ *PhoenixChannel) { s.Disconnect() },
+			timeout: time.Minute,
+			wantErr: errSocketClosed,
+		},
+		{
+			name:    "channel closed by the server",
+			arm:     func(_ *PhoenixSocket, c *PhoenixChannel) { c.shutdown(fmt.Errorf("%w (phx_close)", ErrChannelClosed)) },
+			timeout: time.Minute,
+			wantErr: ErrChannelClosed,
+		},
+		{
+			name:    "timer fired",
+			arm:     func(*PhoenixSocket, *PhoenixChannel) {},
+			timeout: time.Nanosecond, // expires before await's select runs
+			wantErr: ErrReplyTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for range 50 {
+				socket := NewPhoenixSocket(&url.URL{Scheme: "ws", Host: "example.invalid"})
+				ch := socket.Channel("test:room")
+				tt.arm(socket, ch)
+
+				replies := make(chan ChannelReply, 1)
+				replies <- ChannelReply{Status: "ok"}
+				ch.bindings.Store(uint64(1), replies)
+				if reply, err := ch.await(1, replies, tt.timeout); err != nil || reply.Status != "ok" {
+					t.Fatalf("await() with a buffered reply = %+v, %v; want the reply", reply, err)
+				}
+			}
+
+			socket := NewPhoenixSocket(&url.URL{Scheme: "ws", Host: "example.invalid"})
+			ch := socket.Channel("test:room")
+			tt.arm(socket, ch)
+			replies := make(chan ChannelReply, 1)
+			ch.bindings.Store(uint64(1), replies)
+			if _, err := ch.await(1, replies, tt.timeout); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("await() error = %v, want %v", err, tt.wantErr)
+			}
+			if _, ok := ch.bindings.Load(uint64(1)); ok {
+				t.Error("await() left its binding registered after giving up")
+			}
+		})
+	}
+}
+
+// A request refused before it leaves the client reports that it was not
+// sent, and wraps none of the outcome-unknown errors: the server never saw it.
+func TestPhoenixChannel_RequestNotSent(t *testing.T) {
+	tests := []struct {
+		name    string
+		arm     func(*PhoenixSocket, *PhoenixChannel)
+		wantMsg string
+	}{
+		{
+			name:    "socket closed by the client",
+			arm:     func(s *PhoenixSocket, _ *PhoenixChannel) { s.Disconnect() },
+			wantMsg: "request not sent: socket closed",
+		},
+		{
+			name:    "connection already lost",
+			arm:     func(s *PhoenixSocket, _ *PhoenixChannel) { s.shutdown(fmt.Errorf("%w: EOF", ErrConnectionLost)) },
+			wantMsg: "request not sent: connection to the devops server was lost: EOF",
+		},
+		{
+			name:    "channel already closed by the server",
+			arm:     func(_ *PhoenixSocket, c *PhoenixChannel) { c.shutdown(fmt.Errorf("%w (phx_error)", ErrChannelClosed)) },
+			wantMsg: "request not sent: the devops server closed the deploy channel (phx_error)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			socket := NewPhoenixSocket(&url.URL{Scheme: "ws", Host: "example.invalid"})
+			ch := socket.Channel("test:room")
+			tt.arm(socket, ch)
+
+			_, err := ch.Request("ping", nil, time.Minute)
+			if err == nil || err.Error() != tt.wantMsg {
+				t.Fatalf("Request() error = %v, want %q", err, tt.wantMsg)
+			}
+			if !errors.Is(err, errNotSent) {
+				t.Errorf("Request() error = %v, want wrapping errNotSent", err)
+			}
+			for _, unknown := range []error{ErrConnectionLost, ErrChannelClosed, ErrReplyTimeout} {
+				if errors.Is(err, unknown) {
+					t.Errorf("Request() error wraps %v, but the request was never sent", unknown)
+				}
+			}
+			ch.bindings.Range(func(key, _ any) bool {
+				t.Errorf("binding %v left registered", key)
+				return true
+			})
+		})
+	}
+}
+
+// waitClosed waits for the socket to shut down and returns why it did.
+func waitClosed(t *testing.T, socket *PhoenixSocket) error {
+	t.Helper()
+	select {
+	case <-socket.done:
+		return socket.closeErr
+	case <-time.After(5 * time.Second):
+		t.Fatal("socket still open 5s after its connection failed")
+		return nil
+	}
+}
+
+func TestPhoenixSocket_ReadErrorMarksDisconnected(t *testing.T) {
+	// The handler returns at once, which closes the connection.
+	server := startMockPhoenixServer(t, func(*websocket.Conn) {})
+	defer server.Close()
+
+	socket := NewPhoenixSocket(socketURL(server))
+	if err := socket.Connect(); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer socket.Disconnect()
+
+	if err := waitClosed(t, socket); !errors.Is(err, ErrConnectionLost) {
+		t.Errorf("close cause = %v, want ErrConnectionLost", err)
+	}
+	if socket.IsConnected() {
+		t.Error("IsConnected() = true after the connection dropped")
+	}
+}
+
+func TestPhoenixSocket_WriteErrorMarksDisconnected(t *testing.T) {
+	server := startMockPhoenixServer(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage()
+	})
+	defer server.Close()
+
+	// Wire the socket by hand with only its write loop running, so the write
+	// is what notices the broken connection.
+	u := socketURL(server)
+	u.Path += "/websocket"
+	conn, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
+	if err != nil {
+		t.Fatalf("Dial() error = %v", err)
+	}
+	socket := NewPhoenixSocket(u)
+	socket.conn = conn
+	go socket.writeLoop()
+	defer socket.Disconnect()
+
+	_ = conn.UnderlyingConn().Close()
+	if err := socket.send(websocket.TextMessage, []byte("[]")); err != nil {
+		t.Fatalf("send() error = %v", err)
+	}
+
+	if err := waitClosed(t, socket); !errors.Is(err, ErrConnectionLost) {
+		t.Errorf("close cause = %v, want ErrConnectionLost", err)
 	}
 }
 
