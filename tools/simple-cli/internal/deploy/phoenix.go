@@ -121,7 +121,9 @@ func (s *PhoenixSocket) Connect() error {
 		wsURL.Scheme = "ws"
 	}
 
-	dialer := websocket.DefaultDialer
+	// Configure a copy: DefaultDialer is shared by the whole process, so
+	// writing to it races every other dial and leaks these settings into them.
+	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = defaultConnectTimeout
 	dialer.ReadBufferSize = 16384
 	dialer.WriteBufferSize = 16384

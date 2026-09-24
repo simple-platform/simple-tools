@@ -646,6 +646,37 @@ func TestPhoenixSocketConnectAuthFailure(t *testing.T) {
 	}
 }
 
+// Connect used to configure websocket.DefaultDialer in place, which leaked the
+// deploy client's timeout and buffer sizes into every other dial in the process
+// and raced any dial running at the same time.
+func TestPhoenixSocket_ConnectLeavesDefaultDialerUntouched(t *testing.T) {
+	server := startMockPhoenixServer(t, func(conn *websocket.Conn) {
+		_, _, _ = conn.ReadMessage()
+	})
+	defer server.Close()
+
+	original := *websocket.DefaultDialer
+	t.Cleanup(func() { *websocket.DefaultDialer = original })
+
+	// Values Connect would never choose, so an in-place write shows up.
+	websocket.DefaultDialer.HandshakeTimeout = 7 * time.Second
+	websocket.DefaultDialer.ReadBufferSize = 1234
+	websocket.DefaultDialer.WriteBufferSize = 4321
+
+	u, _ := url.Parse("ws" + strings.TrimPrefix(server.URL, "http") + "/socket")
+	socket := NewPhoenixSocket(u)
+	if err := socket.Connect(); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer socket.Disconnect()
+
+	got := websocket.DefaultDialer
+	if got.HandshakeTimeout != 7*time.Second || got.ReadBufferSize != 1234 || got.WriteBufferSize != 4321 {
+		t.Errorf("DefaultDialer changed to HandshakeTimeout=%v ReadBufferSize=%d WriteBufferSize=%d",
+			got.HandshakeTimeout, got.ReadBufferSize, got.WriteBufferSize)
+	}
+}
+
 func TestPhoenixSocketPush(t *testing.T) {
 	receivedMsg := make(chan *phoenixMessage, 1)
 
