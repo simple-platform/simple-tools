@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -64,7 +65,7 @@ func TestClient_JoinChannel_NotConnected(t *testing.T) {
 		timeout:  5 * time.Second,
 	}
 
-	err := client.JoinChannel("com.example.app")
+	err := client.JoinChannel(t.Context(), "com.example.app")
 	if err == nil {
 		t.Error("JoinChannel() expected error when not connected")
 	}
@@ -78,7 +79,7 @@ func TestClient_SendManifest_NotJoined(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	_, err := client.SendManifest(nil, "1.0.0")
+	_, err := client.SendManifest(t.Context(), nil, "1.0.0")
 	if err == nil {
 		t.Error("SendManifest() expected error when not joined")
 	}
@@ -92,7 +93,7 @@ func TestClient_SendFiles_NotJoined(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	err := client.SendFiles(nil, []string{"file1.txt"})
+	err := client.SendFiles(t.Context(), nil, []string{"file1.txt"})
 	if err == nil {
 		t.Error("SendFiles() expected error when not joined")
 	}
@@ -106,7 +107,7 @@ func TestClient_SendFiles_EmptyList(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	err := client.SendFiles(nil, []string{})
+	err := client.SendFiles(t.Context(), nil, []string{})
 	if err != nil && !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("SendFiles() unexpected error = %v", err)
 	}
@@ -117,7 +118,7 @@ func TestClient_Deploy_NotJoined(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	_, err := client.Deploy()
+	_, err := client.Deploy(t.Context())
 	if err == nil {
 		t.Error("Deploy() expected error when not joined")
 	}
@@ -129,7 +130,7 @@ func TestClient_Deploy_NotJoined(t *testing.T) {
 func TestClient_Install_NotJoined(t *testing.T) {
 	client := &Client{timeout: 5 * time.Second}
 
-	_, err := client.Install()
+	_, err := client.Install(t.Context())
 	if err == nil || !strings.Contains(err.Error(), "not joined") {
 		t.Errorf("Install() error = %v, want containing 'not joined'", err)
 	}
@@ -229,13 +230,13 @@ func TestClient_SendManifest_Integration(t *testing.T) {
 	u, _ := parseEndpointURL(wsURL)
 
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
 	defer socket.Disconnect()
 
 	channel := socket.Channel("deploy:com.test.app")
-	if err := channel.Join(5 * time.Second); err != nil {
+	if err := channel.Join(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("Join error: %v", err)
 	}
 
@@ -252,7 +253,7 @@ func TestClient_SendManifest_Integration(t *testing.T) {
 		"file1.txt": {Path: "file1.txt", Hash: "abc123", Size: 100},
 	}
 
-	needed, err := client.SendManifest(files, "1.0.0")
+	needed, err := client.SendManifest(t.Context(), files, "1.0.0")
 	if err != nil {
 		t.Fatalf("SendManifest error: %v", err)
 	}
@@ -303,13 +304,13 @@ func TestClient_SendFiles_Integration(t *testing.T) {
 	u, _ := parseEndpointURL(wsURL)
 
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
 	defer socket.Disconnect()
 
 	channel := socket.Channel("deploy:com.test.app")
-	if err := channel.Join(5 * time.Second); err != nil {
+	if err := channel.Join(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("Join error: %v", err)
 	}
 
@@ -324,7 +325,7 @@ func TestClient_SendFiles_Integration(t *testing.T) {
 		"file1.txt": {Path: "file1.txt", Hash: "abc123", Size: 11, Content: []byte("hello world")},
 	}
 
-	err := client.SendFiles(files, []string{"file1.txt"})
+	err := client.SendFiles(t.Context(), files, []string{"file1.txt"})
 	if err != nil {
 		t.Fatalf("SendFiles error: %v", err)
 	}
@@ -370,13 +371,13 @@ func TestClient_Deploy_Integration(t *testing.T) {
 	u, _ := parseEndpointURL(wsURL)
 
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
 	defer socket.Disconnect()
 
 	channel := socket.Channel("deploy:com.test.app")
-	if err := channel.Join(5 * time.Second); err != nil {
+	if err := channel.Join(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("Join error: %v", err)
 	}
 
@@ -387,7 +388,7 @@ func TestClient_Deploy_Integration(t *testing.T) {
 		timeout: 5 * time.Second,
 	}
 
-	result, err := client.Deploy()
+	result, err := client.Deploy(t.Context())
 	if err != nil {
 		t.Fatalf("Deploy error: %v", err)
 	}
@@ -427,12 +428,12 @@ func TestClient_Close_WithConnection(t *testing.T) {
 	u, _ := parseEndpointURL(wsURL)
 
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect error: %v", err)
 	}
 
 	channel := socket.Channel("deploy:com.test.app")
-	if err := channel.Join(5 * time.Second); err != nil {
+	if err := channel.Join(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("Join error: %v", err)
 	}
 
@@ -466,12 +467,12 @@ func joinedClient(t *testing.T, server *httptest.Server, timeout time.Duration) 
 		JWT:      "test-token",
 		Timeout:  timeout,
 	})
-	if err := client.Connect(); err != nil {
+	if err := client.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	t.Cleanup(client.Close)
 
-	if err := client.JoinChannel("com.test.app"); err != nil {
+	if err := client.JoinChannel(t.Context(), "com.test.app"); err != nil {
 		t.Fatalf("JoinChannel() error = %v", err)
 	}
 	return client
@@ -480,13 +481,13 @@ func joinedClient(t *testing.T, server *httptest.Server, timeout time.Duration) 
 // TestClient_Replies drives each request of the deploy protocol through the
 // server's possible answers: success, a server-reported error, and silence.
 func TestClient_Replies(t *testing.T) {
-	manifest := func(c *Client) (any, error) {
-		return c.SendManifest(map[string]FileInfo{"a.txt": {Hash: "h", Size: 1}}, "1.0.0")
+	manifest := func(ctx context.Context, c *Client) (any, error) {
+		return c.SendManifest(ctx, map[string]FileInfo{"a.txt": {Hash: "h", Size: 1}}, "1.0.0")
 	}
-	publish := func(c *Client) (any, error) { return c.Deploy() }
-	install := func(c *Client) (any, error) { return c.Install() }
-	upload := func(c *Client) (any, error) {
-		return nil, c.SendFiles(map[string]FileInfo{"a.txt": {Hash: "h", Size: 1, Content: []byte("x")}}, []string{"a.txt"})
+	publish := func(ctx context.Context, c *Client) (any, error) { return c.Deploy(ctx) }
+	install := func(ctx context.Context, c *Client) (any, error) { return c.Install(ctx) }
+	upload := func(ctx context.Context, c *Client) (any, error) {
+		return nil, c.SendFiles(ctx, map[string]FileInfo{"a.txt": {Hash: "h", Size: 1, Content: []byte("x")}}, []string{"a.txt"})
 	}
 
 	tests := []struct {
@@ -495,7 +496,7 @@ func TestClient_Replies(t *testing.T) {
 		// status is the server's reply status; "" means it never answers.
 		status   string
 		response any
-		call     func(*Client) (any, error)
+		call     func(context.Context, *Client) (any, error)
 		want     any
 		wantErr  string
 		wantIs   error
@@ -589,7 +590,7 @@ func TestClient_Replies(t *testing.T) {
 			}
 			client := joinedClient(t, server, timeout)
 
-			got, err := tt.call(client)
+			got, err := tt.call(t.Context(), client)
 			if tt.wantErr != "" {
 				if err == nil || !strings.HasPrefix(err.Error(), tt.wantErr) {
 					t.Fatalf("error = %v, want starting with %q", err, tt.wantErr)
@@ -620,7 +621,7 @@ func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
 		event string
 		// drop is how the server goes away once the request arrives.
 		drop    func(conn *websocket.Conn, msg *phoenixMessage) bool
-		call    func(*Client) error
+		call    func(context.Context, *Client) error
 		wantErr string
 		wantIs  error
 	}{
@@ -628,8 +629,8 @@ func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
 			name:  "install loses the connection",
 			event: "install",
 			drop:  func(*websocket.Conn, *phoenixMessage) bool { return false },
-			call: func(c *Client) error {
-				_, err := c.Install()
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Install(ctx)
 				return err
 			},
 			wantErr: "install: connection to the devops server was lost: ",
@@ -642,8 +643,8 @@ func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
 				writeChannelEvent(conn, msg.JoinRef, msg.Topic, "phx_error")
 				return true
 			},
-			call: func(c *Client) error {
-				_, err := c.Deploy()
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Deploy(ctx)
 				return err
 			},
 			wantErr: "deploy: the devops server closed the deploy channel (phx_error)",
@@ -656,8 +657,8 @@ func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
 				writeChannelEvent(conn, msg.JoinRef, msg.Topic, "phx_close")
 				return true
 			},
-			call: func(c *Client) error {
-				_, err := c.SendManifest(files, "1.0.0")
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.SendManifest(ctx, files, "1.0.0")
 				return err
 			},
 			wantErr: "manifest: the devops server closed the deploy channel (phx_close)",
@@ -667,7 +668,7 @@ func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
 			name:    "upload loses the connection",
 			event:   "file",
 			drop:    func(*websocket.Conn, *phoenixMessage) bool { return false },
-			call:    func(c *Client) error { return c.SendFiles(files, []string{"a.txt"}) },
+			call:    func(ctx context.Context, c *Client) error { return c.SendFiles(ctx, files, []string{"a.txt"}) },
 			wantErr: "upload a.txt: connection to the devops server was lost: ",
 			wantIs:  ErrConnectionLost,
 		},
@@ -685,7 +686,7 @@ func TestClient_WaitsEndWhenConnectionDrops(t *testing.T) {
 			client := joinedClient(t, server, time.Minute)
 
 			start := time.Now()
-			err := tt.call(client)
+			err := tt.call(t.Context(), client)
 			if elapsed := time.Since(start); elapsed > 5*time.Second {
 				t.Errorf("the wait took %s after the server went away", elapsed)
 			}
@@ -708,15 +709,86 @@ func TestClient_RequestAfterDropIsNotSent(t *testing.T) {
 	defer server.Close()
 	client := joinedClient(t, server, time.Minute)
 
-	if _, err := client.Deploy(); !errors.Is(err, ErrConnectionLost) {
+	if _, err := client.Deploy(t.Context()); !errors.Is(err, ErrConnectionLost) {
 		t.Fatalf("Deploy() error = %v, want ErrConnectionLost", err)
 	}
 
-	_, err := client.Install()
+	_, err := client.Install(t.Context())
 	if err == nil || !strings.HasPrefix(err.Error(), "install: request not sent: connection to the devops server was lost") {
 		t.Fatalf("Install() error = %v, want an install that was not sent", err)
 	}
 	if errors.Is(err, ErrConnectionLost) {
 		t.Errorf("Install() error = %v wraps ErrConnectionLost, but the install never left the client", err)
+	}
+}
+
+// Cancelling the context ends a request's wait at once. The server is not
+// told, so the error is the context's.
+func TestClient_ContextEndsWait(t *testing.T) {
+	files := map[string]FileInfo{"a.txt": {Hash: "h", Size: 1, Content: []byte("x")}}
+
+	tests := []struct {
+		name    string
+		event   string
+		call    func(context.Context, *Client) error
+		wantErr string
+	}{
+		{
+			name:  "manifest",
+			event: "manifest",
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.SendManifest(ctx, files, "1.0.0")
+				return err
+			},
+			wantErr: "manifest: context canceled",
+		},
+		{
+			name:    "upload",
+			event:   "file",
+			call:    func(ctx context.Context, c *Client) error { return c.SendFiles(ctx, files, []string{"a.txt"}) },
+			wantErr: "upload a.txt: context canceled",
+		},
+		{
+			name:  "deploy",
+			event: "deploy",
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Deploy(ctx)
+				return err
+			},
+			wantErr: "deploy: context canceled",
+		},
+		{
+			name:  "install",
+			event: "install",
+			call: func(ctx context.Context, c *Client) error {
+				_, err := c.Install(ctx)
+				return err
+			},
+			wantErr: "install: context canceled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			server := startClientMockServer(t, channelServer(func(_ *websocket.Conn, msg *phoenixMessage) bool {
+				if msg.Event == tt.event {
+					cancel() // and never reply
+				}
+				return true
+			}))
+			defer server.Close()
+			client := joinedClient(t, server, time.Minute)
+
+			start := time.Now()
+			err := tt.call(ctx, client)
+			if err == nil || err.Error() != tt.wantErr || !errors.Is(err, context.Canceled) {
+				t.Fatalf("error = %v, want %q wrapping context.Canceled", err, tt.wantErr)
+			}
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Errorf("the wait took %s after the context was cancelled", elapsed)
+			}
+		})
 	}
 }

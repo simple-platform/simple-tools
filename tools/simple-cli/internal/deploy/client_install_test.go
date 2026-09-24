@@ -50,16 +50,16 @@ func TestClient_Install(t *testing.T) {
 		Timeout:  time.Second,
 	})
 
-	if err := client.Connect(); err != nil {
+	if err := client.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer client.Close()
 
-	if err := client.JoinChannel(appID); err != nil {
+	if err := client.JoinChannel(t.Context(), appID); err != nil {
 		t.Fatalf("JoinChannel() error = %v", err)
 	}
 
-	result, err := client.Install()
+	result, err := client.Install(t.Context())
 	if err != nil {
 		t.Fatalf("Install() error = %v", err)
 	}
@@ -114,16 +114,16 @@ func TestClient_Install_Error(t *testing.T) {
 		Timeout:  time.Second,
 	})
 
-	if err := client.Connect(); err != nil {
+	if err := client.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer client.Close()
 
-	if err := client.JoinChannel(appID); err != nil {
+	if err := client.JoinChannel(t.Context(), appID); err != nil {
 		t.Fatalf("JoinChannel() error = %v", err)
 	}
 
-	_, err := client.Install()
+	_, err := client.Install(t.Context())
 	if err == nil {
 		t.Fatal("Install() expected error, got nil")
 	}

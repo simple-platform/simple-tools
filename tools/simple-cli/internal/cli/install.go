@@ -99,7 +99,7 @@ func runInstall(ctx context.Context, appID string) error {
 		Timeout:  15 * time.Minute,
 	})
 
-	if err := client.Connect(); err != nil {
+	if err := client.Connect(ctx); err != nil {
 		var authErr *deploy.AuthFailedError
 		if errors.As(err, &authErr) { // 401/403
 			if !jsonOutput {
@@ -129,7 +129,7 @@ func runInstall(ctx context.Context, appID string) error {
 			})
 
 			// 4. Retry connection once
-			if err := client.Connect(); err != nil {
+			if err := client.Connect(ctx); err != nil {
 				return fmt.Errorf("connection failed after token refresh: %w", err)
 			}
 		} else {
@@ -138,7 +138,7 @@ func runInstall(ctx context.Context, appID string) error {
 	}
 	defer client.Close()
 
-	if err := client.JoinChannel(appID); err != nil {
+	if err := client.JoinChannel(ctx, appID); err != nil {
 		return err
 	}
 
@@ -147,7 +147,7 @@ func runInstall(ctx context.Context, appID string) error {
 	}
 
 	// Trigger remote install process via WebSocket
-	result, err := client.Install()
+	result, err := client.Install(ctx)
 	if err != nil {
 		return err
 	}

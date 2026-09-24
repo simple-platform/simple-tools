@@ -1,12 +1,14 @@
 package deploy
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -594,7 +596,7 @@ func TestPhoenixSocketConnectAndJoin(t *testing.T) {
 
 	// Connect
 	socket := NewPhoenixSocket(u)
-	err := socket.Connect()
+	err := socket.Connect(t.Context())
 	if err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
@@ -605,7 +607,7 @@ func TestPhoenixSocketConnectAndJoin(t *testing.T) {
 
 	// Join channel
 	ch := socket.Channel("test:room")
-	err = ch.Join(5 * time.Second)
+	err = ch.Join(t.Context(), 5*time.Second)
 	if err != nil {
 		t.Fatalf("Join() error = %v", err)
 	}
@@ -637,7 +639,7 @@ func TestPhoenixSocketConnectAuthFailure(t *testing.T) {
 
 	// Connect
 	socket := NewPhoenixSocket(u)
-	err = socket.Connect()
+	err = socket.Connect(t.Context())
 	if err == nil {
 		t.Fatal("Connect() should have failed")
 	}
@@ -669,7 +671,7 @@ func TestPhoenixSocket_ConnectLeavesDefaultDialerUntouched(t *testing.T) {
 
 	u, _ := url.Parse("ws" + strings.TrimPrefix(server.URL, "http") + "/socket")
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer socket.Disconnect()
@@ -717,13 +719,13 @@ func TestPhoenixSocketPush(t *testing.T) {
 	u, _ := url.Parse(wsURL)
 
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer socket.Disconnect()
 
 	ch := socket.Channel("test:room")
-	if err := ch.Join(5 * time.Second); err != nil {
+	if err := ch.Join(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("Join() error = %v", err)
 	}
 
@@ -771,13 +773,13 @@ func TestPhoenixChannelLeave(t *testing.T) {
 	u, _ := url.Parse(wsURL)
 
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer socket.Disconnect()
 
 	ch := socket.Channel("test:room")
-	if err := ch.Join(5 * time.Second); err != nil {
+	if err := ch.Join(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("Join() error = %v", err)
 	}
 
@@ -799,13 +801,13 @@ func TestPhoenixChannelJoinTimeout(t *testing.T) {
 	u, _ := url.Parse(wsURL)
 
 	socket := NewPhoenixSocket(u)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer socket.Disconnect()
 
 	ch := socket.Channel("test:room")
-	err := ch.Join(100 * time.Millisecond)
+	err := ch.Join(t.Context(), 100*time.Millisecond)
 	if err == nil {
 		t.Error("Join() should have timed out")
 	}
@@ -910,13 +912,13 @@ func channelServer(onPush func(conn *websocket.Conn, msg *phoenixMessage) bool) 
 func joinedChannel(t *testing.T, server *httptest.Server, topic string) *PhoenixChannel {
 	t.Helper()
 	socket := NewPhoenixSocket(socketURL(server))
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	t.Cleanup(socket.Disconnect)
 
 	ch := socket.Channel(topic)
-	if err := ch.Join(5 * time.Second); err != nil {
+	if err := ch.Join(t.Context(), 5*time.Second); err != nil {
 		t.Fatalf("Join() error = %v", err)
 	}
 	return ch
@@ -1031,7 +1033,7 @@ func TestPhoenixChannel_Request(t *testing.T) {
 			ch := joinedChannel(t, server, "test:room")
 
 			start := time.Now()
-			reply, err := ch.Request("ping", map[string]any{}, tt.timeout)
+			reply, err := ch.Request(t.Context(), "ping", map[string]any{}, tt.timeout)
 			// Nothing here should wait anywhere near a 10s timeout: a drop or
 			// a closed channel has to end the wait at once.
 			if elapsed := time.Since(start); elapsed > 5*time.Second {
@@ -1059,7 +1061,7 @@ func TestPhoenixChannel_Request(t *testing.T) {
 func TestPhoenixChannel_RequestRegistersBeforeSend(t *testing.T) {
 	ch := NewPhoenixSocket(&url.URL{Scheme: "ws", Host: "example.invalid"}).Channel("test:room")
 
-	reply, err := ch.request(websocket.TextMessage, func(ref uint64) []byte {
+	reply, err := ch.request(t.Context(), websocket.TextMessage, func(ref uint64) []byte {
 		ch.handleMessage(&phoenixMessage{Event: "phx_reply", Ref: ref, Status: "ok"})
 		return []byte("[]")
 	}, 200*time.Millisecond)
@@ -1084,7 +1086,7 @@ func TestPhoenixChannel_RequestFastReply(t *testing.T) {
 	errs := make(chan error, requests)
 	for i := range requests {
 		wg.Go(func() {
-			reply, err := ch.Request("echo", map[string]any{"n": i}, 5*time.Second)
+			reply, err := ch.Request(t.Context(), "echo", map[string]any{"n": i}, 5*time.Second)
 			if err != nil {
 				errs <- err
 				return
@@ -1108,34 +1110,55 @@ func TestPhoenixChannel_RequestFastReply(t *testing.T) {
 // directly here with the wake-up already armed, many times over, because
 // select picks among ready cases at random.
 func TestPhoenixChannel_RequestReplyWinsOverClose(t *testing.T) {
+	background := func(*PhoenixSocket, *PhoenixChannel) context.Context { return context.Background() }
 	tests := []struct {
-		name    string
-		arm     func(*PhoenixSocket, *PhoenixChannel)
+		name string
+		// arm triggers the wake-up and returns the context to wait with.
+		arm     func(*PhoenixSocket, *PhoenixChannel) context.Context
 		timeout time.Duration
 		// wantErr is what await returns when no reply is buffered.
 		wantErr error
 	}{
 		{
-			name:    "connection lost",
-			arm:     func(s *PhoenixSocket, _ *PhoenixChannel) { s.shutdown(fmt.Errorf("%w: EOF", ErrConnectionLost)) },
+			name: "connection lost",
+			arm: func(s *PhoenixSocket, _ *PhoenixChannel) context.Context {
+				s.shutdown(fmt.Errorf("%w: EOF", ErrConnectionLost))
+				return context.Background()
+			},
 			timeout: time.Minute,
 			wantErr: ErrConnectionLost,
 		},
 		{
-			name:    "socket closed by the client",
-			arm:     func(s *PhoenixSocket, _ *PhoenixChannel) { s.Disconnect() },
+			name: "socket closed by the client",
+			arm: func(s *PhoenixSocket, _ *PhoenixChannel) context.Context {
+				s.Disconnect()
+				return context.Background()
+			},
 			timeout: time.Minute,
 			wantErr: errSocketClosed,
 		},
 		{
-			name:    "channel closed by the server",
-			arm:     func(_ *PhoenixSocket, c *PhoenixChannel) { c.shutdown(fmt.Errorf("%w (phx_close)", ErrChannelClosed)) },
+			name: "channel closed by the server",
+			arm: func(_ *PhoenixSocket, c *PhoenixChannel) context.Context {
+				c.shutdown(fmt.Errorf("%w (phx_close)", ErrChannelClosed))
+				return context.Background()
+			},
 			timeout: time.Minute,
 			wantErr: ErrChannelClosed,
 		},
 		{
+			name: "context cancelled",
+			arm: func(*PhoenixSocket, *PhoenixChannel) context.Context {
+				ctx, cancel := context.WithCancel(context.Background())
+				cancel()
+				return ctx
+			},
+			timeout: time.Minute,
+			wantErr: context.Canceled,
+		},
+		{
 			name:    "timer fired",
-			arm:     func(*PhoenixSocket, *PhoenixChannel) {},
+			arm:     background,
 			timeout: time.Nanosecond, // expires before await's select runs
 			wantErr: ErrReplyTimeout,
 		},
@@ -1146,22 +1169,22 @@ func TestPhoenixChannel_RequestReplyWinsOverClose(t *testing.T) {
 			for range 50 {
 				socket := NewPhoenixSocket(&url.URL{Scheme: "ws", Host: "example.invalid"})
 				ch := socket.Channel("test:room")
-				tt.arm(socket, ch)
+				ctx := tt.arm(socket, ch)
 
 				replies := make(chan ChannelReply, 1)
 				replies <- ChannelReply{Status: "ok"}
 				ch.bindings.Store(uint64(1), replies)
-				if reply, err := ch.await(1, replies, tt.timeout); err != nil || reply.Status != "ok" {
+				if reply, err := ch.await(ctx, 1, replies, tt.timeout); err != nil || reply.Status != "ok" {
 					t.Fatalf("await() with a buffered reply = %+v, %v; want the reply", reply, err)
 				}
 			}
 
 			socket := NewPhoenixSocket(&url.URL{Scheme: "ws", Host: "example.invalid"})
 			ch := socket.Channel("test:room")
-			tt.arm(socket, ch)
+			ctx := tt.arm(socket, ch)
 			replies := make(chan ChannelReply, 1)
 			ch.bindings.Store(uint64(1), replies)
-			if _, err := ch.await(1, replies, tt.timeout); !errors.Is(err, tt.wantErr) {
+			if _, err := ch.await(ctx, 1, replies, tt.timeout); !errors.Is(err, tt.wantErr) {
 				t.Fatalf("await() error = %v, want %v", err, tt.wantErr)
 			}
 			if _, ok := ch.bindings.Load(uint64(1)); ok {
@@ -1202,7 +1225,7 @@ func TestPhoenixChannel_RequestNotSent(t *testing.T) {
 			ch := socket.Channel("test:room")
 			tt.arm(socket, ch)
 
-			_, err := ch.Request("ping", nil, time.Minute)
+			_, err := ch.Request(t.Context(), "ping", nil, time.Minute)
 			if err == nil || err.Error() != tt.wantMsg {
 				t.Fatalf("Request() error = %v, want %q", err, tt.wantMsg)
 			}
@@ -1218,6 +1241,156 @@ func TestPhoenixChannel_RequestNotSent(t *testing.T) {
 				t.Errorf("binding %v left registered", key)
 				return true
 			})
+		})
+	}
+}
+
+func TestPhoenixChannel_RequestContext(t *testing.T) {
+	tests := []struct {
+		name         string
+		cancelBefore bool          // cancel before the request is made
+		cancelOnPush bool          // the server cancels once the push arrives
+		deadline     time.Duration // 0 means none
+		wantErr      error
+	}{
+		{name: "cancelled before sending", cancelBefore: true, wantErr: context.Canceled},
+		{name: "cancelled while waiting", cancelOnPush: true, wantErr: context.Canceled},
+		{name: "deadline while waiting", deadline: 100 * time.Millisecond, wantErr: context.DeadlineExceeded},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tt.deadline > 0 {
+				var cancelDeadline context.CancelFunc
+				ctx, cancelDeadline = context.WithTimeout(ctx, tt.deadline)
+				defer cancelDeadline()
+			}
+
+			server := startMockPhoenixServer(t, channelServer(func(*websocket.Conn, *phoenixMessage) bool {
+				if tt.cancelOnPush {
+					cancel() // and never reply
+				}
+				return true
+			}))
+			defer server.Close()
+			ch := joinedChannel(t, server, "test:room")
+
+			if tt.cancelBefore {
+				cancel()
+			}
+			start := time.Now()
+			_, err := ch.Request(ctx, "ping", nil, time.Minute)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Request() error = %v, want %v", err, tt.wantErr)
+			}
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Errorf("Request() took %s to notice its context", elapsed)
+			}
+			ch.bindings.Range(func(key, _ any) bool {
+				t.Errorf("binding %v left registered", key)
+				return true
+			})
+		})
+	}
+}
+
+// Connect used Dial, which a caller could not cancel; a server that accepted
+// the TCP connection and never answered the upgrade held it for the whole
+// handshake timeout. DialContext alone is not enough: gorilla/websocket
+// applies the context's deadline to the upgrade, but not its cancellation.
+func TestPhoenixSocket_ConnectHonorsContext(t *testing.T) {
+	silent := func(t *testing.T) *httptest.Server {
+		release := make(chan struct{})
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			<-release // never answer the upgrade
+		}))
+		t.Cleanup(server.Close)
+		t.Cleanup(func() { close(release) }) // runs first, so Close does not wait
+		return server
+	}
+	upgrading := func(t *testing.T) *httptest.Server {
+		server := startMockPhoenixServer(t, func(conn *websocket.Conn) {
+			_, _, _ = conn.ReadMessage()
+		})
+		t.Cleanup(server.Close)
+		return server
+	}
+
+	tests := []struct {
+		name    string
+		server  func(*testing.T) *httptest.Server
+		context func(parent context.Context) (context.Context, context.CancelFunc)
+		wantErr error // nil to accept any error
+	}{
+		{
+			name:   "already cancelled",
+			server: silent,
+			context: func(parent context.Context) (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(parent)
+				cancel()
+				return ctx, cancel
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			// No wantErr: gorilla puts the same deadline on the connection,
+			// and its read can fail before ctx records DeadlineExceeded.
+			name:   "deadline during the handshake",
+			server: silent,
+			context: func(parent context.Context) (context.Context, context.CancelFunc) {
+				return context.WithTimeout(parent, 200*time.Millisecond)
+			},
+		},
+		{
+			name:   "cancelled during the handshake",
+			server: silent,
+			context: func(parent context.Context) (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(parent)
+				time.AfterFunc(200*time.Millisecond, cancel)
+				return ctx, cancel
+			},
+			wantErr: context.Canceled,
+		},
+		{
+			// The server's answer is already buffered when the cancel lands,
+			// so the upgrade completes: Connect must still give it up.
+			name:   "cancelled as the upgrade is answered",
+			server: upgrading,
+			context: func(parent context.Context) (context.Context, context.CancelFunc) {
+				ctx, cancel := context.WithCancel(parent)
+				trace := &httptrace.ClientTrace{GotFirstResponseByte: cancel}
+				return httptrace.WithClientTrace(ctx, trace), cancel
+			},
+			wantErr: context.Canceled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := tt.server(t)
+			ctx, cancel := tt.context(t.Context())
+			defer cancel()
+
+			socket := NewPhoenixSocket(socketURL(server))
+			defer socket.Disconnect()
+
+			start := time.Now()
+			err := socket.Connect(ctx)
+			if err == nil {
+				t.Fatal("Connect() succeeded although its context ended")
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("Connect() error = %v, want %v", err, tt.wantErr)
+			}
+			if elapsed := time.Since(start); elapsed >= defaultConnectTimeout/2 {
+				t.Errorf("Connect() took %s; the context should end it well before the %s handshake timeout",
+					elapsed, defaultConnectTimeout)
+			}
+			if socket.IsConnected() {
+				t.Error("IsConnected() = true after Connect() failed")
+			}
 		})
 	}
 }
@@ -1240,7 +1413,7 @@ func TestPhoenixSocket_ReadErrorMarksDisconnected(t *testing.T) {
 	defer server.Close()
 
 	socket := NewPhoenixSocket(socketURL(server))
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(t.Context()); err != nil {
 		t.Fatalf("Connect() error = %v", err)
 	}
 	defer socket.Disconnect()
@@ -1308,12 +1481,12 @@ func TestPhoenixChannel_Join(t *testing.T) {
 			defer server.Close()
 
 			socket := NewPhoenixSocket(socketURL(server))
-			if err := socket.Connect(); err != nil {
+			if err := socket.Connect(t.Context()); err != nil {
 				t.Fatalf("Connect() error = %v", err)
 			}
 			defer socket.Disconnect()
 
-			err := socket.Channel("test:room").Join(5 * time.Second)
+			err := socket.Channel("test:room").Join(t.Context(), 5*time.Second)
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("Join() error = %v", err)
@@ -1340,7 +1513,7 @@ func TestRequestBinaryFile(t *testing.T) {
 	ch := joinedChannel(t, server, "deploy:com.test.app")
 
 	metadata := map[string]string{"path": "test.txt", "hash": "abc123"}
-	reply, err := ch.RequestBinaryFile(metadata, []byte("file content"), 5*time.Second)
+	reply, err := ch.RequestBinaryFile(t.Context(), metadata, []byte("file content"), 5*time.Second)
 	if err != nil {
 		t.Fatalf("RequestBinaryFile() error = %v", err)
 	}
@@ -1382,7 +1555,7 @@ func TestBinaryFilePayload(t *testing.T) {
 				}
 				// The upload refuses it before anything is sent.
 				var ch PhoenixChannel
-				if _, err := ch.RequestBinaryFile(map[string]string{"path": "a"}, tt.content, time.Second); err == nil {
+				if _, err := ch.RequestBinaryFile(t.Context(), map[string]string{"path": "a"}, tt.content, time.Second); err == nil {
 					t.Error("RequestBinaryFile() accepted a payload binaryFilePayload refuses")
 				}
 				return

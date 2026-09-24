@@ -2,10 +2,12 @@ package deploy
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -141,8 +143,9 @@ func (e *AuthFailedError) Error() string {
 	return fmt.Sprintf("websocket auth failed: %d", e.StatusCode)
 }
 
-// Connect establishes the WebSocket connection.
-func (s *PhoenixSocket) Connect() error {
+// Connect establishes the WebSocket connection. ctx bounds the dial and the
+// handshake; the connection it opens lives until Disconnect.
+func (s *PhoenixSocket) Connect(ctx context.Context) error {
 	wsURL := *s.endpoint
 	wsURL.Path = path.Join(wsURL.Path, "websocket")
 	q := wsURL.Query()
@@ -162,13 +165,24 @@ func (s *PhoenixSocket) Connect() error {
 	dialer.HandshakeTimeout = defaultConnectTimeout
 	dialer.ReadBufferSize = 16384
 	dialer.WriteBufferSize = 16384
+	canceller := &handshakeCanceller{ctx: ctx}
+	dialer.NetDialContext = canceller.dial
 
-	conn, resp, err := dialer.Dial(wsURL.String(), http.Header{})
+	conn, resp, err := dialer.DialContext(ctx, wsURL.String(), http.Header{})
+	ctxClosedConn := canceller.release()
 	if err != nil {
 		if resp != nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
 			return &AuthFailedError{StatusCode: resp.StatusCode}
 		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return fmt.Errorf("websocket dial failed: %w (%v)", ctxErr, err)
+		}
 		return fmt.Errorf("websocket dial failed: %w", err)
+	}
+	if ctxClosedConn {
+		// ctx ended as the handshake finished, and closed the connection.
+		_ = conn.Close()
+		return fmt.Errorf("websocket dial failed: %w", ctx.Err())
 	}
 
 	s.connMu.Lock()
@@ -180,6 +194,50 @@ func (s *PhoenixSocket) Connect() error {
 	go s.heartbeatLoop()
 
 	return nil
+}
+
+// handshakeCanceller closes the connection dialed for a websocket handshake
+// when ctx ends. gorilla/websocket applies only ctx's deadline to the HTTP
+// upgrade, not its cancellation, so without it a cancel while the server has
+// yet to answer the upgrade would wait out the whole HandshakeTimeout.
+// Closing, rather than expiring the deadline, cannot be undone by the
+// deadline gorilla sets on the connection right after dialing it.
+type handshakeCanceller struct {
+	ctx   context.Context
+	mu    sync.Mutex
+	stops []func() bool
+}
+
+// dial is the dialer's NetDialContext.
+func (h *handshakeCanceller) dial(dialCtx context.Context, network, addr string) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(dialCtx, network, addr)
+	if err != nil {
+		return nil, err
+	}
+	// Watch the caller's ctx, not dialCtx: gorilla cancels the context it
+	// derives as soon as the handshake returns, successful or not.
+	stop := context.AfterFunc(h.ctx, func() { _ = conn.Close() })
+
+	h.mu.Lock()
+	h.stops = append(h.stops, stop)
+	h.mu.Unlock()
+	return conn, nil
+}
+
+// release stops watching ctx. It reports whether ctx already closed a
+// dialed connection, which leaves the handshake's result unusable.
+func (h *handshakeCanceller) release() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	closed := false
+	for _, stop := range h.stops {
+		if !stop() {
+			closed = true
+		}
+	}
+	return closed
 }
 
 // Disconnect closes the WebSocket connection. Requests still waiting end
@@ -550,8 +608,8 @@ func parseRefFast(raw json.RawMessage) uint64 {
 }
 
 // Join sends a join message and waits for response.
-func (c *PhoenixChannel) Join(timeout time.Duration) error {
-	reply, err := c.request(websocket.TextMessage, func(ref uint64) []byte {
+func (c *PhoenixChannel) Join(ctx context.Context, timeout time.Duration) error {
+	reply, err := c.request(ctx, websocket.TextMessage, func(ref uint64) []byte {
 		// The join's ref becomes the channel's join ref, which every later
 		// push on this join carries and which tells a stale phx_error apart.
 		c.joinRef.Store(ref)
@@ -578,33 +636,38 @@ func (c *PhoenixChannel) Push(event string, payload any) (uint64, error) {
 }
 
 // Request pushes a JSON event and waits for the server's reply to it.
-func (c *PhoenixChannel) Request(event string, payload any, timeout time.Duration) (ChannelReply, error) {
-	return c.request(websocket.TextMessage, func(ref uint64) []byte {
+func (c *PhoenixChannel) Request(ctx context.Context, event string, payload any, timeout time.Duration) (ChannelReply, error) {
+	return c.request(ctx, websocket.TextMessage, func(ref uint64) []byte {
 		return encodeJSONMessageFast(c.joinRef.Load(), ref, c.topic, event, payload)
 	}, timeout)
 }
 
 // RequestBinaryFile uploads one file as a binary "file" push and waits for the
 // server's reply to it.
-func (c *PhoenixChannel) RequestBinaryFile(metadata map[string]string, content []byte, timeout time.Duration) (ChannelReply, error) {
+func (c *PhoenixChannel) RequestBinaryFile(ctx context.Context, metadata map[string]string, content []byte, timeout time.Duration) (ChannelReply, error) {
 	payload, err := binaryFilePayload(metadata, content)
 	if err != nil {
 		return ChannelReply{}, err
 	}
-	return c.request(websocket.BinaryMessage, func(ref uint64) []byte {
+	return c.request(ctx, websocket.BinaryMessage, func(ref uint64) []byte {
 		return encodeBinaryMessageFast(c.joinRef.Load(), ref, c.topic, "file", payload)
 	}, timeout)
 }
 
 // request sends the message encode builds for a fresh ref and waits for the
-// reply to that ref.
+// reply to that ref. Cancelling ctx ends the wait; the server is not told,
+// and may still act on a request it already received.
 //
 // The reply binding is registered BEFORE the send. readLoop runs on its own
 // goroutine, so a server that answers quickly can deliver the reply before a
 // binding registered after the send exists; that reply used to be dropped,
 // and the caller then waited out its whole timeout for an answer that had
 // already come.
-func (c *PhoenixChannel) request(msgType int, encode func(ref uint64) []byte, timeout time.Duration) (ChannelReply, error) {
+func (c *PhoenixChannel) request(ctx context.Context, msgType int, encode func(ref uint64) []byte, timeout time.Duration) (ChannelReply, error) {
+	if err := ctx.Err(); err != nil {
+		return ChannelReply{}, err
+	}
+
 	// The server does not handle a push on a channel it has closed. Refuse it
 	// here, so the error says it was never sent instead of leaving its
 	// outcome unknown.
@@ -622,12 +685,12 @@ func (c *PhoenixChannel) request(msgType int, encode func(ref uint64) []byte, ti
 		c.bindings.Delete(ref)
 		return ChannelReply{}, err
 	}
-	return c.await(ref, replies, timeout)
+	return c.await(ctx, ref, replies, timeout)
 }
 
-// await waits for the reply registered under ref. A dropped connection or a
-// channel the server closed ends the wait at once, with the cause.
-func (c *PhoenixChannel) await(ref uint64, replies chan ChannelReply, timeout time.Duration) (ChannelReply, error) {
+// await waits for the reply registered under ref. A cancelled ctx, a dropped
+// connection or a channel the server closed ends the wait at once.
+func (c *PhoenixChannel) await(ctx context.Context, ref uint64, replies chan ChannelReply, timeout time.Duration) (ChannelReply, error) {
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
 
@@ -635,6 +698,8 @@ func (c *PhoenixChannel) await(ref uint64, replies chan ChannelReply, timeout ti
 	select {
 	case reply := <-replies:
 		return reply, nil
+	case <-ctx.Done():
+		err = ctx.Err()
 	case <-c.socket.done:
 		err = c.socket.closeErr
 	case <-c.closed:
@@ -645,7 +710,8 @@ func (c *PhoenixChannel) await(ref uint64, replies chan ChannelReply, timeout ti
 
 	// The read loop hands a reply over before it can see the connection drop
 	// or the channel close, so a reply that raced this wake-up is already
-	// buffered. It is the real answer: prefer it to the error.
+	// buffered. It is the real answer: prefer it to the error, whichever woke
+	// the wait.
 	select {
 	case reply := <-replies:
 		return reply, nil

@@ -1,6 +1,7 @@
 package deploy
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/url"
@@ -46,8 +47,9 @@ func NewClient(cfg ClientConfig) *Client {
 	}
 }
 
-// Connect establishes WebSocket connection to the Phoenix server.
-func (c *Client) Connect() error {
+// Connect establishes WebSocket connection to the Phoenix server. ctx bounds
+// the dial and handshake only.
+func (c *Client) Connect(ctx context.Context) error {
 	endpoint := c.endpoint
 	if !strings.Contains(endpoint, "://") {
 		endpoint = fmt.Sprintf("wss://%s", endpoint)
@@ -59,7 +61,7 @@ func (c *Client) Connect() error {
 	}
 
 	socket := NewPhoenixSocket(endpointURL)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(ctx); err != nil {
 		return fmt.Errorf("websocket connect failed: %w", err)
 	}
 
@@ -68,7 +70,7 @@ func (c *Client) Connect() error {
 }
 
 // JoinChannel joins the deploy channel for the app.
-func (c *Client) JoinChannel(appID string) error {
+func (c *Client) JoinChannel(ctx context.Context, appID string) error {
 	if c.socket == nil {
 		return fmt.Errorf("not connected to socket")
 	}
@@ -76,7 +78,7 @@ func (c *Client) JoinChannel(appID string) error {
 	c.appID = appID
 	channel := c.socket.Channel(fmt.Sprintf("deploy:%s", appID))
 
-	if err := channel.Join(c.timeout); err != nil {
+	if err := channel.Join(ctx, c.timeout); err != nil {
 		return fmt.Errorf("failed to join channel: %w", err)
 	}
 
@@ -85,7 +87,7 @@ func (c *Client) JoinChannel(appID string) error {
 }
 
 // SendManifest sends file manifest and returns paths of needed files.
-func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]string, error) {
+func (c *Client) SendManifest(ctx context.Context, files map[string]FileInfo, version string) ([]string, error) {
 	if c.channel == nil {
 		return nil, fmt.Errorf("not joined to channel")
 	}
@@ -100,7 +102,7 @@ func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]stri
 		})
 	}
 
-	reply, err := c.channel.Request("manifest", map[string]any{
+	reply, err := c.channel.Request(ctx, "manifest", map[string]any{
 		"files":   fileList,
 		"version": version,
 	}, c.timeout)
@@ -127,7 +129,7 @@ func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]stri
 }
 
 // SendFiles uploads multiple files in parallel.
-func (c *Client) SendFiles(files map[string]FileInfo, neededPaths []string) error {
+func (c *Client) SendFiles(ctx context.Context, files map[string]FileInfo, neededPaths []string) error {
 	if c.channel == nil {
 		return fmt.Errorf("not joined to channel")
 	}
@@ -144,7 +146,7 @@ func (c *Client) SendFiles(files map[string]FileInfo, neededPaths []string) erro
 		go func(p string) {
 			defer wg.Done()
 			if fi, ok := files[p]; ok {
-				if err := c.sendFile(p, fi); err != nil {
+				if err := c.sendFile(ctx, p, fi); err != nil {
 					errChan <- err
 				}
 			}
@@ -164,13 +166,13 @@ func (c *Client) SendFiles(files map[string]FileInfo, neededPaths []string) erro
 
 // sendFile sends a single file using Phoenix V2 binary protocol.
 // Format: [metadata_len (4 bytes)] [metadata_json] [file_content]
-func (c *Client) sendFile(path string, fi FileInfo) error {
+func (c *Client) sendFile(ctx context.Context, path string, fi FileInfo) error {
 	metadata := map[string]string{
 		"path": path,
 		"hash": fi.Hash,
 	}
 
-	reply, err := c.channel.RequestBinaryFile(metadata, fi.Content, c.timeout)
+	reply, err := c.channel.RequestBinaryFile(ctx, metadata, fi.Content, c.timeout)
 	if err != nil {
 		return fmt.Errorf("upload %s: %w", path, err)
 	}
@@ -181,12 +183,12 @@ func (c *Client) sendFile(path string, fi FileInfo) error {
 }
 
 // Deploy triggers the actual deployment.
-func (c *Client) Deploy() (*DeployResult, error) {
+func (c *Client) Deploy(ctx context.Context) (*DeployResult, error) {
 	if c.channel == nil {
 		return nil, fmt.Errorf("not joined to channel")
 	}
 
-	reply, err := c.channel.Request("deploy", map[string]any{}, c.timeout)
+	reply, err := c.channel.Request(ctx, "deploy", map[string]any{}, c.timeout)
 	if err != nil {
 		return nil, fmt.Errorf("deploy: %w", err)
 	}
@@ -222,13 +224,13 @@ type InstallResult struct {
 }
 
 // Install triggers the installation of the app version.
-func (c *Client) Install() (*InstallResult, error) {
+func (c *Client) Install(ctx context.Context) (*InstallResult, error) {
 	if c.channel == nil {
 		return nil, fmt.Errorf("not joined to channel")
 	}
 
 	// Send install event with empty payload
-	reply, err := c.channel.Request("install", map[string]any{}, c.timeout)
+	reply, err := c.channel.Request(ctx, "install", map[string]any{}, c.timeout)
 	if err != nil {
 		return nil, fmt.Errorf("install: %w", err)
 	}

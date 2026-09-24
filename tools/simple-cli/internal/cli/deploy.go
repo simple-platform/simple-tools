@@ -136,7 +136,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		Timeout:  15 * time.Minute,
 	})
 
-	if err := client.Connect(); err != nil {
+	if err := client.Connect(ctx); err != nil {
 		// Handle potential auth failure (expired token)
 		// If 401/403, we try to refresh the token and reconnect once.
 		var authErr *deploy.AuthFailedError
@@ -165,7 +165,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 			})
 
 			// 4. Retry connection
-			if err := client.Connect(); err != nil {
+			if err := client.Connect(ctx); err != nil {
 				return fmt.Errorf("connection failed after refresh: %w", err)
 			}
 		} else {
@@ -180,12 +180,12 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		return err
 	}
 
-	if err := client.JoinChannel(appID); err != nil {
+	if err := client.JoinChannel(ctx, appID); err != nil {
 		return err
 	}
 
 	// Send manifest to server to check which files are missing (delta upload)
-	neededFiles, err := client.SendManifest(files, newVersion)
+	neededFiles, err := client.SendManifest(ctx, files, newVersion)
 	if err != nil {
 		return err
 	}
@@ -195,12 +195,12 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 	}
 
 	// Upload needed files in parallel
-	if err := client.SendFiles(files, neededFiles); err != nil {
+	if err := client.SendFiles(ctx, files, neededFiles); err != nil {
 		return err
 	}
 
 	// Trigger deploy on server (finalize version)
-	result, err := client.Deploy()
+	result, err := client.Deploy(ctx)
 	if err != nil {
 		return err
 	}
@@ -212,7 +212,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, args []string) error {
 		if !jsonOutput {
 			fmt.Printf("🚀 Installing %s@%s to %s...\n", result.AppID, result.Version, deployEnv)
 		}
-		installResult, err = installDeployedVersion(client, result.Version, jsonOutput)
+		installResult, err = installDeployedVersion(ctx, client, result.Version, jsonOutput)
 		if err != nil {
 			fmt.Printf("⚠️  Deploy successful but install failed: %v\n", err)
 			if jsonOutput {
@@ -327,14 +327,14 @@ var alreadyInstalledRe = regexp.MustCompile("Version `([^`]+)` of application `[
 //     always succeeded.
 //
 // Any other error is returned unchanged on the first attempt.
-func installDeployedVersion(client *deploy.Client, deployedVersion string, quiet bool) (*deploy.InstallResult, error) {
+func installDeployedVersion(ctx context.Context, client *deploy.Client, deployedVersion string, quiet bool) (*deploy.InstallResult, error) {
 	const attempts = 4
 
 	backoff := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
 
 	var lastErr error
 	for attempt := range attempts {
-		result, err := client.Install()
+		result, err := client.Install(ctx)
 		if err == nil {
 			return result, nil
 		}
