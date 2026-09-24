@@ -190,14 +190,21 @@ func runDeployWith(ctx context.Context, out io.Writer, deps deployDeps, opts dep
 			}
 		})
 		if err != nil {
-			_, _ = fmt.Fprintf(out, "⚠️  Deploy successful but install failed: %v\n", err)
-			if opts.json {
-				return printJSONTo(out, map[string]interface{}{
-					"status":  "error",
-					"error":   fmt.Sprintf("deploy successful but install failed: %v", err),
-					"app_id":  result.AppID,
-					"version": result.Version,
-				})
+			if !opts.json {
+				_, _ = fmt.Fprintf(out, "⚠️  Deploy successful but install failed: %v\n", err)
+				return err
+			}
+			// stdout carries exactly one JSON document, and the exit code
+			// still says the install failed: a pipeline that only checks
+			// the exit status must not read a failed install as a success.
+			// This is the contract build --json follows.
+			if jsonErr := printJSONTo(out, map[string]interface{}{
+				"status":  "error",
+				"error":   fmt.Sprintf("deploy successful but install failed: %v", err),
+				"app_id":  result.AppID,
+				"version": result.Version,
+			}); jsonErr != nil {
+				return jsonErr
 			}
 			return err
 		}

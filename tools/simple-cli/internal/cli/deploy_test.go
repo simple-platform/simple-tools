@@ -371,6 +371,7 @@ func TestRunDeployWith(t *testing.T) {
 		wantErr    string
 		wantOut    []string
 		wantNotOut []string
+		wantJSON   map[string]any // the only thing on out, when set
 		wantDials  int
 	}{
 		{
@@ -483,6 +484,22 @@ func TestRunDeployWith(t *testing.T) {
 			wantDials: 1,
 		},
 		{
+			name: "install failure with --json prints one document and fails",
+			opts: deployOptions{appPath: "apps/com.acme.crm", env: "dev", json: true},
+			setup: func(f *deployFixture) {
+				f.client.install = func(context.Context) (*deploy.InstallResult, error) { return nil, errors.New("record sync failed") }
+			},
+			wantErr: "record sync failed",
+			wantJSON: map[string]any{
+				"status":  "error",
+				"error":   "deploy successful but install failed: record sync failed",
+				"app_id":  "com.acme.crm",
+				"version": "1.4.3-dev.5",
+			},
+			wantNotOut: []string{"⚠️"},
+			wantDials:  1,
+		},
+		{
 			name: "connect failure",
 			opts: deployOptions{appPath: "apps/com.acme.crm", env: "dev"},
 			setup: func(f *deployFixture) {
@@ -512,6 +529,9 @@ func TestRunDeployWith(t *testing.T) {
 					t.Errorf("output lacks %q:\n%s", want, out.String())
 				}
 			}
+			if tt.wantJSON != nil {
+				assertOneJSONDocument(t, out.Bytes(), tt.wantJSON)
+			}
 			for _, unwanted := range tt.wantNotOut {
 				if strings.Contains(out.String(), unwanted) {
 					t.Errorf("output has %q:\n%s", unwanted, out.String())
@@ -521,6 +541,23 @@ func TestRunDeployWith(t *testing.T) {
 				t.Errorf("dialled %d times, want %d", len(f.dials), tt.wantDials)
 			}
 		})
+	}
+}
+
+// assertOneJSONDocument fails t unless data is exactly one JSON object equal
+// to want.
+func assertOneJSONDocument(t *testing.T, data []byte, want map[string]any) {
+	t.Helper()
+	dec := json.NewDecoder(bytes.NewReader(data))
+	var got map[string]any
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("output is not a JSON document: %v\n%s", err, data)
+	}
+	if dec.More() {
+		t.Fatalf("output has more than one JSON document:\n%s", data)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("JSON = %v, want %v", got, want)
 	}
 }
 
