@@ -12,12 +12,13 @@ import (
 
 // Client handles deployment via Phoenix Channel.
 type Client struct {
-	endpoint string
-	jwt      string
-	appID    string
-	socket   *PhoenixSocket
-	channel  *PhoenixChannel
-	timeout  time.Duration
+	endpoint          string
+	jwt               string
+	appID             string
+	socket            *PhoenixSocket
+	channel           *PhoenixChannel
+	timeout           time.Duration
+	uploadConcurrency int
 }
 
 // ClientConfig holds configuration for creating a Client.
@@ -25,6 +26,9 @@ type ClientConfig struct {
 	Endpoint string
 	JWT      string
 	Timeout  time.Duration
+	// UploadConcurrency caps the files SendFiles keeps in flight; 0 means
+	// defaultUploadConcurrency.
+	UploadConcurrency int
 }
 
 // DefaultTimeout is the fallback wait for a channel reply when a caller does
@@ -40,6 +44,12 @@ const DefaultTimeout = 15 * time.Minute
 // waiting up to 15 minutes before saying so.
 const joinTimeout = 30 * time.Second
 
+// defaultUploadConcurrency is how many files SendFiles keeps in flight. The
+// server's channel process handles pushes one at a time, so a small window
+// already keeps the link busy (32 files of about 37 KB cover the
+// bandwidth-delay product of a typical link) without queueing the whole app.
+const defaultUploadConcurrency = 32
+
 // NewClient creates a deployment client.
 func NewClient(cfg ClientConfig) *Client {
 	timeout := cfg.Timeout
@@ -47,9 +57,10 @@ func NewClient(cfg ClientConfig) *Client {
 		timeout = DefaultTimeout
 	}
 	return &Client{
-		endpoint: cfg.Endpoint,
-		jwt:      cfg.JWT,
-		timeout:  timeout,
+		endpoint:          cfg.Endpoint,
+		jwt:               cfg.JWT,
+		timeout:           timeout,
+		uploadConcurrency: cfg.UploadConcurrency,
 	}
 }
 
@@ -140,40 +151,93 @@ func (c *Client) SendManifest(ctx context.Context, files map[string]FileInfo, ve
 	return result, nil
 }
 
-// SendFiles uploads multiple files in parallel.
+// uploadJob is one file SendFiles has to upload.
+type uploadJob struct {
+	path string
+	file FileInfo
+}
+
+// SendFiles uploads the files the server asked for, keeping at most
+// uploadConcurrency of them in flight. A needed path missing from files is
+// skipped. The first failure stops new uploads, and is returned once the
+// uploads already in flight have ended.
+//
+// Uploads used to start all at once, one goroutine each. Every push then
+// waited in the socket's send queue, so an app that needed more than about a
+// thousand files failed with "send queue full", and an encoded copy of every
+// file sat in that queue at the same time.
 func (c *Client) SendFiles(ctx context.Context, files map[string]FileInfo, neededPaths []string) error {
 	if c.channel == nil {
 		return fmt.Errorf("not joined to channel")
 	}
 
-	if len(neededPaths) == 0 {
+	jobs := make([]uploadJob, 0, len(neededPaths))
+	for _, path := range neededPaths {
+		if fi, ok := files[path]; ok {
+			jobs = append(jobs, uploadJob{path: path, file: fi})
+		}
+	}
+	if len(jobs) == 0 {
 		return nil
 	}
 
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(neededPaths))
+	// Cancelling runCtx stops the feed after the first failure, and ends the
+	// waits of the uploads still in flight.
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
 
-	for _, path := range neededPaths {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-			if fi, ok := files[p]; ok {
-				if err := c.sendFile(ctx, p, fi); err != nil {
-					errChan <- err
+	var (
+		mu       sync.Mutex
+		firstErr error
+	)
+	queue := make(chan uploadJob)
+	var wg sync.WaitGroup
+	for range c.uploadWorkers(len(jobs)) {
+		wg.Go(func() {
+			for job := range queue {
+				if err := c.sendFile(runCtx, job.path, job.file); err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					stop()
+					return
 				}
 			}
-		}(path)
+		})
 	}
 
+	fedAll := true
+feed:
+	for _, job := range jobs {
+		select {
+		case queue <- job:
+		case <-runCtx.Done():
+			fedAll = false
+			break feed
+		}
+	}
+	close(queue)
 	wg.Wait()
-	close(errChan)
 
-	// Return first error if any
-	for err := range errChan {
-		return err
+	if firstErr != nil {
+		return firstErr
 	}
-
+	if !fedAll {
+		// Nothing failed, so ctx itself was cancelled before every file went.
+		return ctx.Err()
+	}
 	return nil
+}
+
+// uploadWorkers is how many uploads SendFiles runs at once for jobs files.
+func (c *Client) uploadWorkers(jobs int) int {
+	workers := c.uploadConcurrency
+	if workers <= 0 {
+		workers = defaultUploadConcurrency
+	}
+	return min(workers, jobs)
 }
 
 // sendFile sends a single file using Phoenix V2 binary protocol.

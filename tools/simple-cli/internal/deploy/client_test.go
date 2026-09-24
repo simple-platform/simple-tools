@@ -2,12 +2,17 @@ package deploy
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -840,6 +845,259 @@ func TestClient_ContextEndsWait(t *testing.T) {
 			}
 			if elapsed := time.Since(start); elapsed > 5*time.Second {
 				t.Errorf("the wait took %s after the context was cancelled", elapsed)
+			}
+		})
+	}
+}
+
+// uploadFiles builds n small files named f0000.txt, f0001.txt, … and the
+// list of their paths.
+func uploadFiles(n int) (map[string]FileInfo, []string) {
+	files := make(map[string]FileInfo, n)
+	paths := make([]string, 0, n)
+	for i := range n {
+		path := fmt.Sprintf("f%04d.txt", i)
+		content := []byte(path)
+		files[path] = FileInfo{Path: path, Hash: "h" + path, Size: int64(len(content)), Content: content}
+		paths = append(paths, path)
+	}
+	return files, paths
+}
+
+// uploadedPath returns the path in a "file" push's metadata.
+func uploadedPath(msg *phoenixMessage) string {
+	payload, _ := msg.Payload.([]byte)
+	if len(payload) < 4 {
+		return ""
+	}
+	var meta map[string]string
+	_ = json.Unmarshal(payload[4:4+binary.BigEndian.Uint32(payload[0:4])], &meta)
+	return meta["path"]
+}
+
+func TestClient_UploadWorkers(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+		jobs        int
+		want        int
+	}{
+		{name: "unset uses the default", concurrency: 0, jobs: 1000, want: defaultUploadConcurrency},
+		{name: "negative uses the default", concurrency: -1, jobs: 1000, want: defaultUploadConcurrency},
+		{name: "configured", concurrency: 4, jobs: 1000, want: 4},
+		{name: "never more workers than files", concurrency: 32, jobs: 3, want: 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(ClientConfig{UploadConcurrency: tt.concurrency})
+			if got := client.uploadWorkers(tt.jobs); got != tt.want {
+				t.Errorf("uploadWorkers(%d) = %d, want %d", tt.jobs, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClient_SendFiles_Uploads(t *testing.T) {
+	many, manyPaths := uploadFiles(1500)
+	two, _ := uploadFiles(2)
+
+	tests := []struct {
+		name   string
+		files  map[string]FileInfo
+		needed []string
+		want   int // files the server should receive
+	}{
+		// More than the socket's 1000-message send queue: starting every
+		// upload at once used to fail with "send queue full".
+		{name: "many files", files: many, needed: manyPaths, want: 1500},
+		{name: "needed path that was not collected is skipped", files: two, needed: []string{"f0000.txt", "missing.txt", "f0001.txt"}, want: 2},
+		{name: "nothing needed", files: two, needed: nil, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var mu sync.Mutex
+			received := map[string]bool{}
+			server := startClientMockServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				mu.Lock()
+				received[uploadedPath(msg)] = true
+				mu.Unlock()
+				writeReply(conn, msg, "ok", map[string]any{})
+				return true
+			}))
+			defer server.Close()
+			client := joinedClient(t, server, 10*time.Second)
+
+			if err := client.SendFiles(t.Context(), tt.files, tt.needed); err != nil {
+				t.Fatalf("SendFiles() error = %v", err)
+			}
+
+			mu.Lock()
+			defer mu.Unlock()
+			if len(received) != tt.want {
+				t.Errorf("server received %d files, want %d", len(received), tt.want)
+			}
+			if received["missing.txt"] || received[""] {
+				t.Errorf("server received a path that was not collected: %v", received)
+			}
+		})
+	}
+}
+
+// The server holds its acknowledgements until the client goes quiet, so every
+// upload the client starts is outstanding at once and can be counted.
+func TestClient_SendFiles_BoundsInFlight(t *testing.T) {
+	const limit = 4
+	files, paths := uploadFiles(20)
+
+	var maxOutstanding, total atomic.Int64
+	server := startClientMockServer(t, func(conn *websocket.Conn) {
+		incoming := make(chan *phoenixMessage)
+		go func() {
+			defer close(incoming)
+			for {
+				msgType, data, err := conn.ReadMessage()
+				if err != nil {
+					return
+				}
+				if msg := decodeFrame(msgType, data); msg != nil && msg.Topic != "phoenix" {
+					incoming <- msg
+				}
+			}
+		}()
+
+		var held []*phoenixMessage
+		for {
+			select {
+			case msg, ok := <-incoming:
+				if !ok {
+					return
+				}
+				if msg.Event == "phx_join" {
+					writeReply(conn, msg, "ok", map[string]any{})
+					continue
+				}
+				held = append(held, msg)
+				total.Add(1)
+				if n := int64(len(held)); n > maxOutstanding.Load() {
+					maxOutstanding.Store(n)
+				}
+			case <-time.After(50 * time.Millisecond):
+				// Quiet: the client has sent all it will without an answer.
+				for _, msg := range held {
+					writeReply(conn, msg, "ok", map[string]any{})
+				}
+				held = held[:0]
+			}
+		}
+	})
+	defer server.Close()
+
+	client := NewClient(ClientConfig{
+		Endpoint:          "ws" + strings.TrimPrefix(server.URL, "http"),
+		JWT:               "test-token",
+		Timeout:           10 * time.Second,
+		UploadConcurrency: limit,
+	})
+	if err := client.Connect(t.Context()); err != nil {
+		t.Fatalf("Connect() error = %v", err)
+	}
+	defer client.Close()
+	if err := client.JoinChannel(t.Context(), "com.test.app"); err != nil {
+		t.Fatalf("JoinChannel() error = %v", err)
+	}
+
+	if err := client.SendFiles(t.Context(), files, paths); err != nil {
+		t.Fatalf("SendFiles() error = %v", err)
+	}
+	if got := total.Load(); got != int64(len(paths)) {
+		t.Errorf("server received %d uploads, want %d", got, len(paths))
+	}
+	if got := maxOutstanding.Load(); got > limit {
+		t.Errorf("%d uploads were in flight at once, want at most %d", got, limit)
+	} else if got < 2 {
+		t.Errorf("at most %d upload was in flight at once, want them to overlap", got)
+	}
+}
+
+func TestClient_SendFiles_StopsAfterFirstError(t *testing.T) {
+	tests := []struct {
+		name        string
+		concurrency int
+	}{
+		{name: "one at a time", concurrency: 1},
+		{name: "four at a time", concurrency: 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			files, paths := uploadFiles(20)
+			var received atomic.Int64
+			server := startClientMockServer(t, channelServer(func(conn *websocket.Conn, msg *phoenixMessage) bool {
+				received.Add(1)
+				writeReply(conn, msg, "error", map[string]any{"message": "Invalid binary format"})
+				return true
+			}))
+			defer server.Close()
+
+			client := joinedClient(t, server, 10*time.Second)
+			client.uploadConcurrency = tt.concurrency
+
+			err := client.SendFiles(t.Context(), files, paths)
+			if err == nil || !strings.HasPrefix(err.Error(), "file rejected for f00") {
+				t.Fatalf("SendFiles() error = %v, want the server's rejection", err)
+			}
+			// Only the uploads already in flight when the first one failed
+			// were sent; no new one started after it.
+			if got := received.Load(); got > int64(tt.concurrency) {
+				t.Errorf("server received %d uploads, want at most %d", got, tt.concurrency)
+			}
+		})
+	}
+}
+
+func TestClient_SendFiles_ContextCanceled(t *testing.T) {
+	tests := []struct {
+		name         string
+		cancelBefore bool // cancel before SendFiles is called
+		wantReceived int64
+	}{
+		{name: "cancelled before the first upload", cancelBefore: true, wantReceived: 0},
+		// The server cancels on the first upload and never answers it.
+		{name: "cancelled while uploading", wantReceived: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+
+			files, paths := uploadFiles(10)
+			var received atomic.Int64
+			server := startClientMockServer(t, channelServer(func(*websocket.Conn, *phoenixMessage) bool {
+				received.Add(1)
+				cancel()
+				return true
+			}))
+			defer server.Close()
+
+			client := joinedClient(t, server, time.Minute)
+			client.uploadConcurrency = 1
+			if tt.cancelBefore {
+				cancel()
+			}
+
+			start := time.Now()
+			err := client.SendFiles(ctx, files, paths)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("SendFiles() error = %v, want context.Canceled", err)
+			}
+			if elapsed := time.Since(start); elapsed > 5*time.Second {
+				t.Errorf("SendFiles() took %s after the context was cancelled", elapsed)
+			}
+			if got := received.Load(); got != tt.wantReceived {
+				t.Errorf("server received %d uploads, want %d", got, tt.wantReceived)
 			}
 		})
 	}
