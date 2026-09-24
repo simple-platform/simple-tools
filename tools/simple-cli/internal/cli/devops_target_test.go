@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
@@ -47,8 +48,10 @@ func (r *recordingReporter) got() []string {
 }
 
 // fakeAuthenticator hands out tokens in order and records cache clears.
+// Each sign-in takes wait.
 type fakeAuthenticator struct {
 	mu       sync.Mutex
+	wait     time.Duration
 	tokens   []string
 	errs     []error
 	calls    int
@@ -57,6 +60,7 @@ type fakeAuthenticator struct {
 }
 
 func (a *fakeAuthenticator) GetJWT(_ context.Context, _, _, _ string) (string, error) {
+	time.Sleep(a.wait)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	i := a.calls

@@ -6,12 +6,16 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 
+	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
 
 	"github.com/gorilla/websocket"
@@ -125,95 +129,268 @@ func TestRunInstall_AuthRetry(t *testing.T) {
 	}
 }
 
+func TestRunInstall_RequiresEnv(t *testing.T) {
+	origEnv := installEnv
+	defer func() { installEnv = origEnv }()
+	installEnv = ""
+	if err := runInstall(context.Background(), &bytes.Buffer{}, "com.acme.crm"); err == nil || !strings.Contains(err.Error(), "--env flag is required") {
+		t.Errorf("err = %v, want the --env error", err)
+	}
+}
+
+// installFixture installs com.acme.crm on dev with fakes that take the
+// time the design's example shows.
+type installFixture struct {
+	auth      *fakeAuthenticator
+	client    *fakeDevopsClient
+	signals   *fakeSignals
+	ensureErr error
+	dial      func(ctx context.Context, n int) (devopsClient, error)
+	dials     int
+}
+
+func newInstallFixture() *installFixture {
+	return &installFixture{
+		auth:    &fakeAuthenticator{wait: 900 * time.Millisecond},
+		signals: &fakeSignals{},
+		client: &fakeDevopsClient{install: func(context.Context) (*deploy.InstallResult, error) {
+			time.Sleep(112 * time.Second)
+			return &deploy.InstallResult{AppID: "com.acme.crm", Version: "1.4.3-dev.5", Success: true}, nil
+		}},
+	}
+}
+
+func (f *installFixture) deps() installDeps {
+	devops := devopsDeps{
+		ensureParser: func(func(string)) (string, error) {
+			time.Sleep(400 * time.Millisecond)
+			if f.ensureErr != nil {
+				return "", f.ensureErr
+			}
+			return "/fake/scl-parser", nil
+		},
+		loadConfig:       func(string) (*config.SimpleSCL, error) { return testSCL(), nil },
+		newAuthenticator: func() devopsAuthenticator { return f.auth },
+		dial: func(ctx context.Context, _, _ string) (devopsClient, error) {
+			f.dials++
+			if f.dial != nil {
+				return f.dial(ctx, f.dials)
+			}
+			time.Sleep(300 * time.Millisecond)
+			return f.client, nil
+		},
+	}
+	return installDeps{devops: devops, runner: runnerDeps{notifySignals: f.signals.notify}}
+}
+
+func (f *installFixture) interruptAfter(ctx context.Context, d time.Duration) error {
+	time.Sleep(d)
+	f.signals.interrupt()
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// installConnected is the transcript of an install up to the install step.
+const installConnected = `📥 Installing com.acme.crm to dev
+[1/4] Load project config
+[1/4] ✓ Load project config: tenant acme (0.4s)
+[2/4] Authenticate
+[2/4] ✓ Authenticate (0.9s)
+[3/4] Connect
+[3/4] ✓ Connect: devops.acme.simple.dev (0.3s)
+[4/4] Install to dev
+`
+
 func TestRunInstallWith(t *testing.T) {
 	tests := []struct {
-		name      string
-		opts      installOptions
-		dial      func(n int, c *fakeDevopsClient) (devopsClient, error)
-		install   func(context.Context) (*deploy.InstallResult, error)
-		wantErr   string
-		wantOut   []string
-		wantDials int
+		name    string
+		json    bool
+		setup   func(f *installFixture)
+		want    string
+		wantErr string
+		// wantJSON, when set, is the only thing out may hold. Under --json
+		// without it, out must stay empty.
+		wantJSON map[string]any
+		// noClose: the run never got a client to close.
+		noClose bool
 	}{
 		{
-			name:      "installs",
-			opts:      installOptions{appID: "com.acme.crm", env: "dev"},
-			wantOut:   []string{"🚀 Installing com.acme.crm to dev...\n✅ Installed com.acme.crm (Version: 1.4.3-dev.5) to dev in "},
-			wantDials: 1,
+			name: "installs",
+			want: installConnected + `      still running (30s)
+      still running (1m00s)
+      still running (1m30s)
+[4/4] ✓ Install to dev: 1.4.3-dev.5 (1m52s)
+✅ Installed com.acme.crm (Version: 1.4.3-dev.5) to dev in 1m53.6s
+`,
 		},
 		{
-			name:      "--json prints one document",
-			opts:      installOptions{appID: "com.acme.crm", env: "dev", json: true},
-			wantOut:   []string{`"status": "success"`, `"env": "dev"`, `"version": "1.4.3-dev.5"`},
-			wantDials: 1,
-		},
-		{
-			name: "a rejected token prints the refresh notice",
-			opts: installOptions{appID: "com.acme.crm", env: "dev"},
-			dial: func(n int, c *fakeDevopsClient) (devopsClient, error) {
-				if n == 1 {
-					return nil, &deploy.AuthFailedError{StatusCode: 403}
-				}
-				return c, nil
+			name: "--json prints only the result",
+			json: true,
+			wantJSON: map[string]any{
+				"status":      "success",
+				"app_id":      "com.acme.crm",
+				"version":     "1.4.3-dev.5",
+				"env":         "dev",
+				"duration_ms": 113600.0,
 			},
-			wantOut:   []string{"🔄 Auth token expired, refreshing...\n"},
-			wantDials: 2,
 		},
 		{
-			name:    "a missing environment fails first",
-			opts:    installOptions{appID: "com.acme.crm", env: "prod"},
-			wantErr: "environment 'prod' not defined in simple.scl",
+			name: "a rejected session is signed in again",
+			setup: func(f *installFixture) {
+				f.dial = func(_ context.Context, n int) (devopsClient, error) {
+					time.Sleep(300 * time.Millisecond)
+					if n == 1 {
+						return nil, &deploy.AuthFailedError{StatusCode: 403}
+					}
+					return f.client, nil
+				}
+				f.client.install = func(context.Context) (*deploy.InstallResult, error) {
+					return &deploy.InstallResult{AppID: "com.acme.crm", Version: "1.4.3-dev.5", Success: true}, nil
+				}
+			},
+			want: `📥 Installing com.acme.crm to dev
+[1/4] Load project config
+[1/4] ✓ Load project config: tenant acme (0.4s)
+[2/4] Authenticate
+[2/4] ✓ Authenticate (0.9s)
+[3/4] Connect
+      server rejected the saved session; signing in again
+[3/4] ✓ Connect: devops.acme.simple.dev (1.5s)
+[4/4] Install to dev
+[4/4] ✓ Install to dev: 1.4.3-dev.5 (0s)
+✅ Installed com.acme.crm (Version: 1.4.3-dev.5) to dev in 2.8s
+`,
 		},
 		{
-			name:      "connect failure",
-			opts:      installOptions{appID: "com.acme.crm", env: "dev"},
-			dial:      func(int, *fakeDevopsClient) (devopsClient, error) { return nil, errors.New("no route to host") },
-			wantErr:   "no route to host",
-			wantDials: 1,
+			name: "the server rejects the install",
+			setup: func(f *installFixture) {
+				f.client.install = func(context.Context) (*deploy.InstallResult, error) {
+					time.Sleep(4 * time.Second)
+					return nil, errors.New("no deployed version of com.acme.crm")
+				}
+			},
+			want:    installConnected + "[4/4] ✗ Install to dev: no deployed version of com.acme.crm (4s)\n",
+			wantErr: "no deployed version of com.acme.crm",
 		},
 		{
-			name:      "install failure",
-			opts:      installOptions{appID: "com.acme.crm", env: "dev"},
-			install:   func(context.Context) (*deploy.InstallResult, error) { return nil, errors.New("record sync failed") },
-			wantErr:   "record sync failed",
-			wantDials: 1,
+			name: "the connection drops during the install",
+			setup: func(f *installFixture) {
+				f.client.install = func(context.Context) (*deploy.InstallResult, error) {
+					time.Sleep(20 * time.Second)
+					return nil, fmt.Errorf("install: %w: websocket: close 1006 (abnormal closure)", deploy.ErrConnectionLost)
+				}
+			},
+			want: installConnected + `[4/4] ✗ Install to dev: install: connection to the devops server was lost: websocket: close 1006 (abnormal closure) (20s)
+The CLI stopped waiting, but the server may still be installing com.acme.crm on dev. Let it finish before running simple install again.
+`,
+			wantErr: "install: connection to the devops server was lost: websocket: close 1006 (abnormal closure)",
+		},
+		{
+			name: "interrupted while installing",
+			setup: func(f *installFixture) {
+				f.client.install = func(ctx context.Context) (*deploy.InstallResult, error) {
+					return nil, f.interruptAfter(ctx, 48200*time.Millisecond)
+				}
+			},
+			want: installConnected + `      still running (30s)
+[4/4] ■ Install to dev: interrupted (48.2s)
+The server does not cancel an install when the CLI disconnects: it will keep installing com.acme.crm on dev, and its result is not reported here. Let it finish before running simple install again.
+`,
+			wantErr: `install interrupted during "Install to dev" after 48.2s`,
+		},
+		{
+			name: "interrupted while connecting",
+			setup: func(f *installFixture) {
+				f.dial = func(ctx context.Context, _ int) (devopsClient, error) {
+					return nil, f.interruptAfter(ctx, 5*time.Second)
+				}
+			},
+			want: `📥 Installing com.acme.crm to dev
+[1/4] Load project config
+[1/4] ✓ Load project config: tenant acme (0.4s)
+[2/4] Authenticate
+[2/4] ✓ Authenticate (0.9s)
+[3/4] Connect
+[3/4] ■ Connect: interrupted (5s)
+`,
+			wantErr: `install interrupted during "Connect" after 5s`,
+			noClose: true,
+		},
+		{
+			name:    "loading the config fails",
+			setup:   func(f *installFixture) { f.ensureErr = errors.New("offline") },
+			want:    "📥 Installing com.acme.crm to dev\n[1/4] Load project config\n[1/4] ✗ Load project config: failed to ensure scl-parser: offline (0.4s)\n",
+			wantErr: "failed to ensure scl-parser: offline",
+		},
+		{
+			name: "the connection drops under --json",
+			json: true,
+			setup: func(f *installFixture) {
+				f.client.install = func(context.Context) (*deploy.InstallResult, error) {
+					return nil, fmt.Errorf("install: %w: EOF", deploy.ErrConnectionLost)
+				}
+			},
+			wantErr: "install: connection to the devops server was lost: EOF",
+		},
+		{
+			name: "an interrupt under --json prints nothing",
+			json: true,
+			setup: func(f *installFixture) {
+				f.client.install = func(ctx context.Context) (*deploy.InstallResult, error) {
+					return nil, f.interruptAfter(ctx, 3*time.Second)
+				}
+			},
+			wantErr: `install interrupted during "Install to dev" after 3s`,
+		},
+		{
+			name: "authentication fails",
+			setup: func(f *installFixture) {
+				f.auth.errs = []error{errors.New("unreachable")}
+			},
+			want: `📥 Installing com.acme.crm to dev
+[1/4] Load project config
+[1/4] ✓ Load project config: tenant acme (0.4s)
+[2/4] Authenticate
+[2/4] ✗ Authenticate: authentication failed: unreachable (0.9s)
+`,
+			wantErr: "authentication failed: unreachable",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			client := &fakeDevopsClient{install: tt.install}
-			if client.install == nil {
-				client.install = func(context.Context) (*deploy.InstallResult, error) {
-					return &deploy.InstallResult{AppID: "com.acme.crm", Version: "1.4.3-dev.5", Success: true}, nil
+			synctest.Test(t, func(t *testing.T) {
+				f := newInstallFixture()
+				if tt.setup != nil {
+					tt.setup(f)
 				}
-			}
-			var dials []string
-			deps := fakeDevopsDeps(&fakeAuthenticator{}, &dials, func(n int) (devopsClient, error) {
-				if tt.dial != nil {
-					return tt.dial(n, client)
+				opts := installOptions{appID: "com.acme.crm", env: "dev", json: tt.json, mode: progressPlain}
+				if tt.json {
+					opts.mode = progressNone
 				}
-				return client, nil
+				var out bytes.Buffer
+				err := runInstallWith(context.Background(), &out, f.deps(), opts)
+
+				switch {
+				case tt.wantErr == "" && err != nil:
+					t.Errorf("err = %v, want nil", err)
+				case tt.wantErr != "" && (err == nil || err.Error() != tt.wantErr):
+					t.Errorf("err = %v, want %q", err, tt.wantErr)
+				}
+				if tt.wantJSON != nil {
+					assertOneJSONDocument(t, out.Bytes(), tt.wantJSON)
+				} else if got := out.String(); got != tt.want {
+					t.Errorf("transcript:\n%s\nwant:\n%s", got, tt.want)
+				}
+				if f.dials > 0 {
+					wantClosed := int32(1)
+					if tt.noClose {
+						wantClosed = 0
+					}
+					if got := f.client.closed.Load(); got != wantClosed {
+						t.Errorf("client closed %d times, want %d", got, wantClosed)
+					}
+				}
 			})
-			var out bytes.Buffer
-			err := runInstallWith(context.Background(), &out, deps, tt.opts)
-			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Fatalf("err = %v, want %q", err, tt.wantErr)
-				}
-			} else if err != nil {
-				t.Fatalf("runInstallWith() error = %v", err)
-			}
-			for _, want := range tt.wantOut {
-				if !strings.Contains(out.String(), want) {
-					t.Errorf("output lacks %q:\n%s", want, out.String())
-				}
-			}
-			if len(dials) != tt.wantDials {
-				t.Errorf("dialled %d times, want %d", len(dials), tt.wantDials)
-			}
-			if tt.wantDials > 0 && tt.wantErr != "no route to host" && client.closed.Load() != 1 {
-				t.Errorf("client closed %d times, want 1", client.closed.Load())
-			}
 		})
 	}
 }

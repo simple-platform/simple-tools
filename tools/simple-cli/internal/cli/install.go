@@ -4,7 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
+
+	"simple-cli/internal/deploy"
+	"simple-cli/internal/ui"
 
 	"github.com/spf13/cobra"
 )
@@ -24,6 +28,10 @@ var installCmd = &cobra.Command{
 This command triggers the installation process (database migrations, 
 service configuration, cache warming) for the latest deployed version 
 of the application in the target environment.
+
+On a terminal, progress is a list of steps that updates in place. When
+stdout is not a terminal, TERM is dumb, or CI is set to anything but
+false or 0, each step prints plain lines instead.
 
 Examples:
   simple install com.example.crm --env dev
@@ -49,10 +57,11 @@ func runInstall(ctx context.Context, out io.Writer, appID string) error {
 		return fmt.Errorf("--env flag is required (dev, staging, or prod)")
 	}
 
-	return runInstallWith(ctx, out, defaultDevopsDeps(), installOptions{
+	return runInstallWith(ctx, out, installDeps{devops: defaultDevopsDeps(), runner: defaultRunnerDeps()}, installOptions{
 		appID: appID,
 		env:   installEnv,
 		json:  jsonOutput,
+		mode:  progressModeFor(out, jsonOutput),
 	})
 }
 
@@ -60,43 +69,77 @@ func runInstall(ctx context.Context, out io.Writer, appID string) error {
 type installOptions struct {
 	appID, env string
 	json       bool
+	mode       progressMode
 }
 
-// runInstallWith executes the installation logic.
-// It connects to the DevOps server and requests an install for the given app ID.
-func runInstallWith(ctx context.Context, out io.Writer, deps devopsDeps, opts installOptions) error {
+// installDeps are install's side effects, replaced in tests.
+type installDeps struct {
+	devops devopsDeps
+	runner runnerDeps
+}
+
+// runInstallWith installs the latest deployed version of opts.appID,
+// showing each step on out, then prints the result, or what a failure or
+// interrupt may have left running.
+func runInstallWith(ctx context.Context, out io.Writer, deps installDeps, opts installOptions) error {
 	start := time.Now()
+	var (
+		// Written by the work; read only after a run that succeeded.
+		result *deploy.InstallResult
+		// Whether an install may be running on the server, for the lines
+		// printed after a failure or an interrupt.
+		installSent atomic.Bool
+	)
 
-	// === PHASE 1: Config & Auth ===
-	// Load configuration to determine where to connect (DevOps endpoint) and how to authenticate.
-	notices := connectNotices{out: out, quiet: opts.json}
-	target, err := loadDevopsTarget(deps, opts.env, notices)
-	if err != nil {
-		return err
+	run := stepRun{
+		runner: deps.runner,
+		out:    out,
+		mode:   opts.mode,
+		verb:   "install",
+		header: fmt.Sprintf("📥 Installing %s to %s", opts.appID, opts.env),
+		plan:   installPlan(opts.env),
 	}
+	outcome := run.execute(ctx, func(ctx context.Context, steps ui.StepReporter) error {
+		var target *devopsTarget
+		if err := runStep(ctx, steps, stepConfig, "", func() (string, error) {
+			t, err := loadDevopsTarget(deps.devops, opts.env, steps)
+			if err != nil {
+				return "", err
+			}
+			target = t
+			return "tenant " + t.cfg.Tenant, nil
+		}); err != nil {
+			return err
+		}
 
-	// Get JWT (cached for token lifetime)
-	// Authentication is required to allow the CLI into the DevOps channel.
-	if err := target.authenticate(ctx); err != nil {
-		return err
-	}
+		// Authentication is required to allow the CLI into the DevOps channel.
+		if err := runStep(ctx, steps, stepAuth, "", func() (string, error) { return "", target.authenticate(ctx) }); err != nil {
+			return err
+		}
 
-	// === PHASE 2: Connect & Install ===
-	// Establish WebSocket connection to DevOps service and join the app's channel.
-	client, err := target.connect(ctx, opts.appID, notices)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
+		client, err := connectStep(ctx, steps, target, opts.appID)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
 
-	if !opts.json {
-		_, _ = fmt.Fprintf(out, "🚀 Installing %s to %s...\n", opts.appID, opts.env)
-	}
+		return runStep(ctx, steps, stepInstall, "running on the server (can take minutes)", func() (string, error) {
+			installed, err := trackedInstaller{inner: client, running: installSent.Store}.Install(ctx)
+			if err != nil {
+				return "", err
+			}
+			result = installed
+			return installed.Version, nil
+		})
+	})
 
-	// Trigger remote install process via WebSocket
-	result, err := client.Install(ctx)
-	if err != nil {
-		return err
+	if outcome.err != nil {
+		if !opts.json {
+			for _, line := range installAftermath(opts.appID, opts.env, installSent.Load(), outcome.interrupted, outcome.err) {
+				_, _ = fmt.Fprintln(out, line)
+			}
+		}
+		return outcome.err
 	}
 
 	duration := time.Since(start)
