@@ -1,6 +1,8 @@
 package deploy
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -10,12 +12,13 @@ import (
 
 // Client handles deployment via Phoenix Channel.
 type Client struct {
-	endpoint string
-	jwt      string
-	appID    string
-	socket   *PhoenixSocket
-	channel  *PhoenixChannel
-	timeout  time.Duration
+	endpoint          string
+	jwt               string
+	appID             string
+	socket            *PhoenixSocket
+	channel           *PhoenixChannel
+	timeout           time.Duration
+	uploadConcurrency int
 }
 
 // ClientConfig holds configuration for creating a Client.
@@ -23,6 +26,9 @@ type ClientConfig struct {
 	Endpoint string
 	JWT      string
 	Timeout  time.Duration
+	// UploadConcurrency caps the files SendFiles keeps in flight; 0 means
+	// defaultUploadConcurrency.
+	UploadConcurrency int
 }
 
 // DefaultTimeout is the fallback wait for a channel reply when a caller does
@@ -32,6 +38,18 @@ type ClientConfig struct {
 // running to completion on the server.
 const DefaultTimeout = 15 * time.Minute
 
+// joinTimeout caps the wait for the deploy channel join. The server does no
+// real work to admit a join, so one that has not been answered in this time
+// will not be; the reply timeout, sized for installs, would leave the CLI
+// waiting up to 15 minutes before saying so.
+const joinTimeout = 30 * time.Second
+
+// defaultUploadConcurrency is how many files SendFiles keeps in flight. The
+// server's channel process handles pushes one at a time, so a small window
+// already keeps the link busy (32 files of about 37 KB cover the
+// bandwidth-delay product of a typical link) without queueing the whole app.
+const defaultUploadConcurrency = 32
+
 // NewClient creates a deployment client.
 func NewClient(cfg ClientConfig) *Client {
 	timeout := cfg.Timeout
@@ -39,14 +57,16 @@ func NewClient(cfg ClientConfig) *Client {
 		timeout = DefaultTimeout
 	}
 	return &Client{
-		endpoint: cfg.Endpoint,
-		jwt:      cfg.JWT,
-		timeout:  timeout,
+		endpoint:          cfg.Endpoint,
+		jwt:               cfg.JWT,
+		timeout:           timeout,
+		uploadConcurrency: cfg.UploadConcurrency,
 	}
 }
 
-// Connect establishes WebSocket connection to the Phoenix server.
-func (c *Client) Connect() error {
+// Connect establishes WebSocket connection to the Phoenix server. ctx bounds
+// the dial and handshake only.
+func (c *Client) Connect(ctx context.Context) error {
 	endpoint := c.endpoint
 	if !strings.Contains(endpoint, "://") {
 		endpoint = fmt.Sprintf("wss://%s", endpoint)
@@ -58,7 +78,7 @@ func (c *Client) Connect() error {
 	}
 
 	socket := NewPhoenixSocket(endpointURL)
-	if err := socket.Connect(); err != nil {
+	if err := socket.Connect(ctx); err != nil {
 		return fmt.Errorf("websocket connect failed: %w", err)
 	}
 
@@ -67,7 +87,7 @@ func (c *Client) Connect() error {
 }
 
 // JoinChannel joins the deploy channel for the app.
-func (c *Client) JoinChannel(appID string) error {
+func (c *Client) JoinChannel(ctx context.Context, appID string) error {
 	if c.socket == nil {
 		return fmt.Errorf("not connected to socket")
 	}
@@ -75,7 +95,7 @@ func (c *Client) JoinChannel(appID string) error {
 	c.appID = appID
 	channel := c.socket.Channel(fmt.Sprintf("deploy:%s", appID))
 
-	if err := channel.Join(c.timeout); err != nil {
+	if err := channel.Join(ctx, c.joinWait()); err != nil {
 		return fmt.Errorf("failed to join channel: %w", err)
 	}
 
@@ -83,218 +103,218 @@ func (c *Client) JoinChannel(appID string) error {
 	return nil
 }
 
+// joinWait is how long JoinChannel waits for the join reply: the reply
+// timeout, but never more than joinTimeout.
+func (c *Client) joinWait() time.Duration {
+	return min(joinTimeout, c.timeout)
+}
+
 // SendManifest sends file manifest and returns paths of needed files.
-func (c *Client) SendManifest(files map[string]FileInfo, version string) ([]string, error) {
+func (c *Client) SendManifest(ctx context.Context, files map[string]FileInfo, version string) ([]string, error) {
 	if c.channel == nil {
 		return nil, fmt.Errorf("not joined to channel")
 	}
 
 	// Convert to format expected by server
-	fileList := make([]map[string]interface{}, 0, len(files))
+	fileList := make([]map[string]any, 0, len(files))
 	for path, info := range files {
-		fileList = append(fileList, map[string]interface{}{
+		fileList = append(fileList, map[string]any{
 			"path": path,
 			"hash": info.Hash,
 			"size": info.Size,
 		})
 	}
 
-	ref, err := c.channel.Push("manifest", map[string]interface{}{
+	reply, err := c.channel.Request(ctx, "manifest", map[string]any{
 		"files":   fileList,
 		"version": version,
-	})
+	}, c.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("manifest push failed: %w", err)
+		return nil, fmt.Errorf("manifest: %w", err)
+	}
+	if reply.Status == "error" {
+		return nil, fmt.Errorf("manifest rejected: %v", reply.Response)
 	}
 
-	done := make(chan struct {
-		files []string
-		err   error
-	}, 1)
-
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- struct {
-				files []string
-				err   error
-			}{nil, fmt.Errorf("invalid response format")}
-			return
-		}
-
-		// Check for error status
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			done <- struct {
-				files []string
-				err   error
-			}{nil, fmt.Errorf("manifest rejected: %v", resp["response"])}
-			return
-		}
-
-		// Extract response - for phx_reply, data is in "response" field
-		response, _ := resp["response"].(map[string]any)
-		needFiles, ok := response["need_files"].([]interface{})
-		if !ok {
-			done <- struct {
-				files []string
-				err   error
-			}{[]string{}, nil}
-			return
-		}
-
-		result := make([]string, len(needFiles))
-		for i, f := range needFiles {
-			if s, ok := f.(string); ok {
-				result[i] = s
-			}
-		}
-		done <- struct {
-			files []string
-			err   error
-		}{result, nil}
-	})
-
-	select {
-	case result := <-done:
-		return result.files, result.err
-	case <-time.After(c.timeout):
-		return nil, fmt.Errorf("manifest response timeout")
+	response, _ := reply.Response.(map[string]any)
+	needFiles, ok := response["need_files"].([]any)
+	if !ok {
+		return []string{}, nil
 	}
+
+	result := make([]string, len(needFiles))
+	for i, f := range needFiles {
+		if s, ok := f.(string); ok {
+			result[i] = s
+		}
+	}
+	return result, nil
 }
 
-// SendFiles uploads multiple files in parallel.
-func (c *Client) SendFiles(files map[string]FileInfo, neededPaths []string) error {
+// UploadProgress is counted from the server's per-file acknowledgements.
+// Bytes are the FileInfo.Size of the files.
+type UploadProgress struct {
+	FilesDone, FilesTotal int
+	BytesDone, BytesTotal int64
+}
+
+// uploadJob is one file SendFiles has to upload.
+type uploadJob struct {
+	path string
+	file FileInfo
+}
+
+// SendFiles uploads the files the server asked for, keeping at most
+// uploadConcurrency of them in flight. A needed path missing from files is
+// skipped, and left out of the totals. The first failure stops new uploads,
+// and is returned once the uploads already in flight have ended.
+//
+// onProgress, when not nil, is called after each acknowledged upload. It runs
+// on the upload's goroutine, outside any lock, so it never holds up the
+// socket's read loop or the other uploads; calls can overlap and arrive out
+// of order, so keep the largest values. The call for the last
+// acknowledgement carries the totals.
+//
+// Uploads used to start all at once, one goroutine each. Every push then
+// waited in the socket's send queue, so an app that needed more than about a
+// thousand files failed with "send queue full", and an encoded copy of every
+// file sat in that queue at the same time.
+func (c *Client) SendFiles(ctx context.Context, files map[string]FileInfo, neededPaths []string, onProgress func(UploadProgress)) error {
 	if c.channel == nil {
 		return fmt.Errorf("not joined to channel")
 	}
 
-	if len(neededPaths) == 0 {
+	var progress UploadProgress
+	jobs := make([]uploadJob, 0, len(neededPaths))
+	for _, path := range neededPaths {
+		if fi, ok := files[path]; ok {
+			jobs = append(jobs, uploadJob{path: path, file: fi})
+			progress.FilesTotal++
+			progress.BytesTotal += fi.Size
+		}
+	}
+	if len(jobs) == 0 {
 		return nil
 	}
 
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(neededPaths))
+	// Cancelling runCtx stops the feed after the first failure, and ends the
+	// waits of the uploads still in flight.
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
 
-	for _, path := range neededPaths {
-		wg.Add(1)
-		go func(p string) {
-			defer wg.Done()
-			if fi, ok := files[p]; ok {
-				if err := c.sendFile(p, fi); err != nil {
-					errChan <- err
+	var (
+		mu       sync.Mutex // guards firstErr and progress
+		firstErr error
+	)
+	queue := make(chan uploadJob)
+	var wg sync.WaitGroup
+	for range c.uploadWorkers(len(jobs)) {
+		wg.Go(func() {
+			for job := range queue {
+				if err := c.sendFile(runCtx, job.path, job.file); err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					stop()
+					return
+				}
+
+				mu.Lock()
+				progress.FilesDone++
+				progress.BytesDone += job.file.Size
+				snapshot := progress
+				mu.Unlock()
+				if onProgress != nil {
+					onProgress(snapshot)
 				}
 			}
-		}(path)
+		})
 	}
 
+	fedAll := true
+feed:
+	for _, job := range jobs {
+		select {
+		case queue <- job:
+		case <-runCtx.Done():
+			fedAll = false
+			break feed
+		}
+	}
+	close(queue)
 	wg.Wait()
-	close(errChan)
 
-	// Return first error if any
-	for err := range errChan {
-		return err
+	if firstErr != nil {
+		return firstErr
 	}
-
+	if !fedAll {
+		// Nothing failed, so ctx itself was cancelled before every file went.
+		return ctx.Err()
+	}
 	return nil
+}
+
+// uploadWorkers is how many uploads SendFiles runs at once for jobs files.
+func (c *Client) uploadWorkers(jobs int) int {
+	workers := c.uploadConcurrency
+	if workers <= 0 {
+		workers = defaultUploadConcurrency
+	}
+	return min(workers, jobs)
 }
 
 // sendFile sends a single file using Phoenix V2 binary protocol.
 // Format: [metadata_len (4 bytes)] [metadata_json] [file_content]
-func (c *Client) sendFile(path string, fi FileInfo) error {
+func (c *Client) sendFile(ctx context.Context, path string, fi FileInfo) error {
 	metadata := map[string]string{
 		"path": path,
 		"hash": fi.Hash,
 	}
 
-	ref, err := c.channel.PushBinaryFile(metadata, fi.Content)
+	reply, err := c.channel.RequestBinaryFile(ctx, metadata, fi.Content, c.timeout)
 	if err != nil {
-		return fmt.Errorf("file push failed for %s: %w", path, err)
+		return fmt.Errorf("upload %s: %w", path, err)
 	}
-
-	done := make(chan error, 1)
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- nil // Binary file pushes may not reply, consider success
-			return
-		}
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			done <- fmt.Errorf("file rejected for %s: %v", path, resp["response"])
-			return
-		}
-		done <- nil
-	})
-
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(c.timeout):
-		return fmt.Errorf("timeout waiting for file response for %s", path)
+	if reply.Status == "error" {
+		return fmt.Errorf("file rejected for %s: %v", path, reply.Response)
 	}
+	return nil
 }
 
 // Deploy triggers the actual deployment.
-func (c *Client) Deploy() (*DeployResult, error) {
+func (c *Client) Deploy(ctx context.Context) (*DeployResult, error) {
 	if c.channel == nil {
 		return nil, fmt.Errorf("not joined to channel")
 	}
 
-	ref, err := c.channel.Push("deploy", map[string]interface{}{})
+	reply, err := c.channel.Request(ctx, "deploy", map[string]any{}, c.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("deploy push failed: %w", err)
+		return nil, fmt.Errorf("deploy: %w", err)
 	}
 
-	done := make(chan struct {
-		result *DeployResult
-		err    error
-	}, 1)
-
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- struct {
-				result *DeployResult
-				err    error
-			}{nil, fmt.Errorf("invalid response format")}
-			return
+	if reply.Status == "error" {
+		errResp, _ := reply.Response.(map[string]any)
+		errMsg := "unknown error"
+		if msg, ok := errResp["message"].(string); ok {
+			errMsg = msg
 		}
-
-		if status, ok := resp["status"].(string); ok && status == "error" {
-			errResp, _ := resp["response"].(map[string]any)
-			errMsg := "unknown error"
-			if msg, ok := errResp["message"].(string); ok {
-				errMsg = msg
-			}
-			done <- struct {
-				result *DeployResult
-				err    error
-			}{nil, fmt.Errorf("deploy failed: %s", errMsg)}
-			return
-		}
-
-		response, _ := resp["response"].(map[string]any)
-		version, _ := response["version"].(string)
-		fileCount := 0
-		if fc, ok := response["file_count"].(float64); ok {
-			fileCount = int(fc)
-		}
-
-		done <- struct {
-			result *DeployResult
-			err    error
-		}{&DeployResult{
-			AppID:     c.appID,
-			Version:   version,
-			FileCount: fileCount,
-		}, nil}
-	})
-
-	select {
-	case result := <-done:
-		return result.result, result.err
-	case <-time.After(c.timeout):
-		return nil, fmt.Errorf("deploy response timeout")
+		return nil, fmt.Errorf("deploy failed: %s", errMsg)
 	}
+
+	response, _ := reply.Response.(map[string]any)
+	version, _ := response["version"].(string)
+	fileCount := 0
+	if fc, ok := response["file_count"].(float64); ok {
+		fileCount = int(fc)
+	}
+
+	return &DeployResult{
+		AppID:     c.appID,
+		Version:   version,
+		FileCount: fileCount,
+	}, nil
 }
 
 // InstallResult represents the result of a successful installation.
@@ -305,69 +325,36 @@ type InstallResult struct {
 }
 
 // Install triggers the installation of the app version.
-func (c *Client) Install() (*InstallResult, error) {
-	if !c.IsConnected() {
-		return nil, fmt.Errorf("client not connected")
+func (c *Client) Install(ctx context.Context) (*InstallResult, error) {
+	if c.channel == nil {
+		return nil, fmt.Errorf("not joined to channel")
 	}
-
-	done := make(chan struct {
-		result *InstallResult
-		err    error
-	}, 1)
 
 	// Send install event with empty payload
-	ref, err := c.channel.Push("install", map[string]any{})
+	reply, err := c.channel.Request(ctx, "install", map[string]any{}, c.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("failed to send install command: %w", err)
+		return nil, fmt.Errorf("install: %w", err)
 	}
 
-	c.channel.onRef(ref, func(payload any) {
-		resp, ok := payload.(map[string]any)
-		if !ok {
-			done <- struct {
-				result *InstallResult
-				err    error
-			}{nil, fmt.Errorf("invalid response format")}
-			return
+	// The server's own message is returned unchanged: callers match on it to
+	// recognise an install that is already done.
+	if reply.Status != "ok" {
+		response, _ := reply.Response.(map[string]any)
+		msg := "install failed"
+		if m, ok := response["message"].(string); ok {
+			msg = m
 		}
-
-		if status, _ := resp["status"].(string); status != "ok" {
-			response, _ := resp["response"].(map[string]any)
-			msg := "install failed"
-			if response != nil {
-				if m, ok := response["message"].(string); ok {
-					msg = m
-				}
-			}
-			done <- struct {
-				result *InstallResult
-				err    error
-			}{nil, fmt.Errorf("%s", msg)}
-			return
-		}
-
-		response, _ := resp["response"].(map[string]any)
-		version := ""
-		if v, ok := response["version"].(string); ok {
-			version = v
-		}
-
-		done <- struct {
-			result *InstallResult
-			err    error
-		}{&InstallResult{
-			AppID:   c.appID,
-			Version: version,
-			Success: true,
-		}, nil}
-	})
-
-	select {
-	case result := <-done:
-		return result.result, result.err
-	case <-time.After(c.timeout):
-		return nil, fmt.Errorf("install response timeout")
+		return nil, errors.New(msg)
 	}
+
+	response, _ := reply.Response.(map[string]any)
+	version, _ := response["version"].(string)
+
+	return &InstallResult{
+		AppID:   c.appID,
+		Version: version,
+		Success: true,
+	}, nil
 }
 
 // Close disconnects from the socket.
@@ -378,9 +365,4 @@ func (c *Client) Close() {
 	if c.socket != nil {
 		c.socket.Disconnect()
 	}
-}
-
-// IsConnected returns true if the client is connected to the socket.
-func (c *Client) IsConnected() bool {
-	return c.socket != nil && c.socket.IsConnected()
 }

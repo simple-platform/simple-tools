@@ -2,19 +2,20 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"io"
+	"sync/atomic"
 	"time"
 
-	"simple-cli/internal/build"
-	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
+	"simple-cli/internal/ui"
 
 	"github.com/spf13/cobra"
 )
 
 var (
-	installEnv string
+	installEnv      string
+	installProgress string
 )
 
 // installCmd represents the command to install a deployed app.
@@ -29,141 +30,138 @@ This command triggers the installation process (database migrations,
 service configuration, cache warming) for the latest deployed version 
 of the application in the target environment.
 
+On a terminal, progress is a list of steps that updates in place. When
+stdout is not a terminal, TERM is dumb, or CI is set to anything but
+false or 0, each step prints plain lines instead; --progress=tty or
+--progress=plain overrides the choice.
+
 Examples:
   simple install com.example.crm --env dev
   simple install com.example.crm --env staging
   simple install com.example.crm --env prod`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runInstall(cmd.Context(), args[0])
+		return runInstall(cmd.Context(), cmd.OutOrStdout(), args[0])
 	},
 }
 
 func init() {
 	RootCmd.AddCommand(installCmd)
 	installCmd.Flags().StringVar(&installEnv, "env", "", "target environment (required: dev, staging, or prod)")
+	installCmd.Flags().StringVar(&installProgress, "progress", "auto", progressFlagUsage)
 	_ = installCmd.MarkFlagRequired("env")
 }
 
-// runInstall executes the installation logic.
-// It connects to the DevOps server and requests an install for the given app ID.
-func runInstall(ctx context.Context, appID string) error {
-	start := time.Now()
-
+// runInstall validates the command's flags and installs appID with the real
+// dependencies, writing progress and results to out.
+func runInstall(ctx context.Context, out io.Writer, appID string) error {
 	// Validate --env flag is provided
 	if installEnv == "" {
 		return fmt.Errorf("--env flag is required (dev, staging, or prod)")
 	}
 
-	// Ensure scl-parser is available (for config loading)
-	// We need this to parse simple.scl to find the environment endpoints.
-	parserPath, err := build.EnsureSCLParser(nil)
+	mode, err := progressModeFor(out, jsonOutput, installProgress)
 	if err != nil {
-		return fmt.Errorf("failed to ensure scl-parser: %w", err)
+		return err
 	}
 
-	// === PHASE 1: Config & Auth ===
-	// Load configuration to determine where to connect (DevOps endpoint) and how to authenticate.
-	var cfg *config.SimpleSCL
-	var env *config.Environment
-	var cfgErr, authErr error
-	var jwt string
-
-	// Load simple.scl config from current directory
-	// Note: We need simple.scl for endpoints and API keys
-	loader := config.NewLoader(parserPath)
-	cfg, cfgErr = loader.LoadSimpleSCL(".")
-	if cfgErr != nil {
-		return fmt.Errorf("failed to load simple.scl: %w", cfgErr)
-	}
-
-	env, cfgErr = cfg.GetEnv(installEnv)
-	if cfgErr != nil {
-		return cfgErr
-	}
-
-	// Get JWT (cached for token lifetime)
-	// Authentication is required to allow the CLI into the DevOps channel.
-	tenantEnvKey := deploy.TenantEnvKey(cfg.Tenant, installEnv)
-	auth := deploy.NewAuthenticator()
-	jwt, authErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
-	if authErr != nil {
-		return fmt.Errorf("authentication failed: %w", authErr)
-	}
-
-	// === PHASE 2: Connect & Install ===
-	// Establish WebSocket connection to DevOps service.
-	client := deploy.NewClient(deploy.ClientConfig{
-		Endpoint: env.DevOpsEndpoint(),
-		JWT:      jwt,
-		Timeout:  15 * time.Minute,
+	return runInstallWith(ctx, out, installDeps{devops: defaultDevopsDeps(), runner: defaultRunnerDeps()}, installOptions{
+		appID: appID,
+		env:   installEnv,
+		json:  jsonOutput,
+		mode:  mode,
 	})
+}
 
-	if err := client.Connect(); err != nil {
-		var authErr *deploy.AuthFailedError
-		if errors.As(err, &authErr) { // 401/403
-			if !jsonOutput {
-				fmt.Println("🔄 Auth token expired, refreshing...")
+// installOptions are the install command's arguments and flags.
+type installOptions struct {
+	appID, env string
+	json       bool
+	mode       progressMode
+}
+
+// installDeps are install's side effects, replaced in tests.
+type installDeps struct {
+	devops devopsDeps
+	runner runnerDeps
+}
+
+// runInstallWith installs the latest deployed version of opts.appID,
+// showing each step on out, then prints the result, or what a failure or
+// interrupt may have left running.
+func runInstallWith(ctx context.Context, out io.Writer, deps installDeps, opts installOptions) error {
+	start := time.Now()
+	var (
+		// Written by the work; read only after a run that succeeded.
+		result *deploy.InstallResult
+		// Whether an install may be running on the server, for the lines
+		// printed after a failure or an interrupt.
+		installSent atomic.Bool
+	)
+
+	run := stepRun{
+		runner: deps.runner,
+		out:    out,
+		mode:   opts.mode,
+		verb:   "install",
+		header: fmt.Sprintf("📥 Installing %s to %s", opts.appID, opts.env),
+		plan:   installPlan(opts.env),
+	}
+	outcome := run.execute(ctx, func(ctx context.Context, steps ui.StepReporter) error {
+		var target *devopsTarget
+		if err := runStep(ctx, steps, stepConfig, "", func() (string, error) {
+			t, err := loadDevopsTarget(deps.devops, opts.env, steps, configWarning(opts.mode, steps))
+			if err != nil {
+				return "", err
 			}
-
-			// 1. Clear token cache to force fresh prompt/login if needed
-			if err := auth.ClearCache(tenantEnvKey); err != nil {
-				return fmt.Errorf("failed to clear token cache: %w", err)
-			}
-
-			// 2. Get new JWT (force refresh)
-			var newJWTErr error
-			jwt, newJWTErr = auth.GetJWT(ctx, env.IdentityEndpoint(), env.APIKey, tenantEnvKey)
-			if newJWTErr != nil {
-				return fmt.Errorf("re-authentication failed: %w", newJWTErr)
-			}
-
-			// 3. Re-create client with new JWT.
-			// Installs are synchronous server-side and routinely exceed 30s on
-			// record-heavy apps, so the reconnect path must carry the same
-			// timeout as the initial client above.
-			client = deploy.NewClient(deploy.ClientConfig{
-				Endpoint: env.DevOpsEndpoint(),
-				JWT:      jwt,
-				Timeout:  15 * time.Minute,
-			})
-
-			// 4. Retry connection once
-			if err := client.Connect(); err != nil {
-				return fmt.Errorf("connection failed after token refresh: %w", err)
-			}
-		} else {
+			target = t
+			return "tenant " + t.cfg.Tenant, nil
+		}); err != nil {
 			return err
 		}
-	}
-	defer client.Close()
 
-	if err := client.JoinChannel(appID); err != nil {
-		return err
-	}
+		// Authentication is required to allow the CLI into the DevOps channel.
+		if err := runStep(ctx, steps, stepAuth, "", func() (string, error) { return "", target.authenticate(ctx) }); err != nil {
+			return err
+		}
 
-	if !jsonOutput {
-		fmt.Printf("🚀 Installing %s to %s...\n", appID, installEnv)
-	}
+		client, err := connectStep(ctx, steps, target, opts.appID)
+		if err != nil {
+			return err
+		}
+		defer client.Close()
 
-	// Trigger remote install process via WebSocket
-	result, err := client.Install()
-	if err != nil {
-		return err
+		return runStep(ctx, steps, stepInstall, "running on the server (can take minutes)", func() (string, error) {
+			installed, err := trackedInstaller{inner: client, running: installSent.Store}.Install(ctx)
+			if err != nil {
+				return "", err
+			}
+			result = installed
+			return installed.Version, nil
+		})
+	})
+
+	if outcome.err != nil {
+		if !opts.json {
+			for _, line := range installAftermath(opts.appID, opts.env, installSent.Load(), outcome.interrupted, outcome.err) {
+				_, _ = fmt.Fprintln(out, line)
+			}
+		}
+		return outcome.err
 	}
 
 	duration := time.Since(start)
 
-	if jsonOutput {
-		return printJSON(map[string]interface{}{
+	if opts.json {
+		return printJSONTo(out, map[string]interface{}{
 			"status":      "success",
 			"app_id":      result.AppID,
 			"version":     result.Version,
-			"env":         installEnv,
+			"env":         opts.env,
 			"duration_ms": duration.Milliseconds(),
 		})
 	}
 
-	fmt.Printf("✅ Installed %s (Version: %s) to %s in %s\n", result.AppID, result.Version, installEnv, duration.Round(time.Millisecond))
+	_, _ = fmt.Fprintf(out, "✅ Installed %s (Version: %s) to %s in %s\n", result.AppID, result.Version, opts.env, duration.Round(time.Millisecond))
 	return nil
 }

@@ -89,6 +89,11 @@ func (p *DefaultSCLParser) Parse(path string) ([]SCLBlock, error) {
 type Loader struct {
 	Parser     SCLParser
 	FileReader func(path string) ([]byte, error)
+	// Warn receives problems that do not stop the load, such as a .env file
+	// that fails to parse. Nil writes them to stderr. A command drawing a
+	// live progress view sets it: a stray write to the terminal would land
+	// in the middle of the frame and be painted over.
+	Warn func(msg string)
 }
 
 // NewLoader creates a new Loader instance.
@@ -117,7 +122,7 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	envPath := filepath.Join(dir, ".env")
 	if _, err := os.Stat(envPath); err == nil {
 		if err := godotenv.Load(envPath); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to load .env file %s, continuing without it: %v\n", envPath, err)
+			l.warn(fmt.Sprintf("warning: failed to load .env file %s, continuing without it: %v", envPath, err))
 		}
 	}
 
@@ -130,30 +135,49 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	return extractConfig(blocks)
 }
 
+func (l *Loader) warn(msg string) {
+	if l.Warn != nil {
+		l.Warn(msg)
+		return
+	}
+	fmt.Fprintln(os.Stderr, msg)
+}
+
 // GetEnv retrieves the configuration for a named environment.
-// It resolves any environment variables references (starting with $) in values.
+// It resolves any environment variables references (starting with $) in values,
+// and fails when the API key resolves to nothing.
 func (s *SimpleSCL) GetEnv(name string) (*Environment, error) {
+	resolved, err := s.LookupEnv(name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Validate API key availability after resolution
+	if resolved.APIKey == "" {
+		if raw := s.Environments[name].APIKey; strings.HasPrefix(raw, "$") {
+			return nil, fmt.Errorf("environment variable %s not set", strings.TrimPrefix(raw, "$"))
+		}
+		return nil, fmt.Errorf("API key not configured for environment '%s'", name)
+	}
+
+	return resolved, nil
+}
+
+// LookupEnv is GetEnv without the API key check, for work that never signs
+// in, such as a deploy dry run: the key may be unset, and then resolves to
+// an empty APIKey.
+func (s *SimpleSCL) LookupEnv(name string) (*Environment, error) {
 	env, ok := s.Environments[name]
 	if !ok {
 		return nil, fmt.Errorf("environment '%s' not defined in simple.scl", name)
 	}
 
 	// Create a copy to avoid modifying the original during resolution
-	resolved := &Environment{
+	return &Environment{
 		Name:     env.Name,
 		Endpoint: resolveEnvVar(env.Endpoint),
 		APIKey:   resolveEnvVar(env.APIKey),
-	}
-
-	// Validate API key availability after resolution
-	if resolved.APIKey == "" {
-		if strings.HasPrefix(env.APIKey, "$") {
-			return nil, fmt.Errorf("environment variable %s not set", strings.TrimPrefix(env.APIKey, "$"))
-		}
-		return nil, fmt.Errorf("API key not configured for environment '%s'", name)
-	}
-
-	return resolved, nil
+	}, nil
 }
 
 // resolveEnvVar checks if a value starts with '$' and substitutes it with the OS environment variable.
