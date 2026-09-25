@@ -98,7 +98,10 @@
       "flags": [
         { "name": "--env", "type": "string", "required": true, "description": "Target environment (dev, staging, prod)" },
         { "name": "--bump", "type": "string", "description": "Version bump strategy (patch, minor, major)" },
-        { "name": "--no-install", "type": "boolean", "description": "Skip automatic installation" }
+        { "name": "--no-install", "type": "boolean", "description": "Skip automatic installation" },
+        { "name": "--dry-run", "type": "boolean", "description": "Show the next version and the files to upload; nothing is written or uploaded" },
+        { "name": "--progress", "type": "string", "description": "Progress output: auto, tty or plain (default auto)" },
+        { "name": "--json", "type": "boolean", "description": "Output one JSON document" }
       ]
     },
     "build": {

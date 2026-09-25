@@ -132,6 +132,8 @@ Install a deployed app to an environment (migrations, cache warming).
   - `<app-id>`: App ID to install (must be already deployed).
 - **Flags:**
   - `--env <string>`: **REQUIRED**. Target environment (`dev`, `staging`, `prod`).
+  - `--progress <string>`: `auto` (default), `tty` or `plain`. Use `plain` for one line per step when capturing output.
+  - `--json`: Print one JSON document on stdout; errors go to stderr as `{"error": ...}`.
 
 ### `simple test`
 
@@ -160,7 +162,11 @@ Deploy application artifacts to a remote environment.
 - **Flags:**
   - `--env <string>`: **REQUIRED**. Target environment (`dev`, `staging`, `prod`).
   - `--bump <string>`: Semver bump strategy (`patch`, `minor`, `major`).
-  - `--no-install`: Skip `npm install` before building.
+  - `--no-install`: Publish the version without installing it; install it later with `simple install <app-id> --env <env>`.
+  - `--dry-run`: Show the next version and the files that would be uploaded. Nothing is written or uploaded: no sign-in, no connection, `app.scl` unchanged.
+  - `--progress <string>`: `auto` (default), `tty` or `plain`. Use `plain` for one line per step when capturing output.
+  - `--json`: Print one JSON document on stdout; errors go to stderr as `{"error": ...}`. An install that fails after the publish still exits 1.
+- **Output:** One line per step (`[n/N] ✓ Step: detail (duration)`) when not on a terminal. Success ends with `✅ Deployed <app-id>@<version> (Installed) in <duration>`. After a failure or Ctrl+C, the lines before the error say what was left behind (a bumped `app.scl`, a publish or install the server may still finish) and what to run next.
 
 ### `simple init`
 
