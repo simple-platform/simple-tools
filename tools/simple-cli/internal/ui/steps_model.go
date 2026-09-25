@@ -193,15 +193,7 @@ func (m StepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.KeyMsg:
-		if msg.Type != tea.KeyCtrlC || m.quitting {
-			return m, nil
-		}
-		at := time.Now()
-		m = m.interrupt(at)
-		if m.onInterrupt != nil {
-			m.onInterrupt(at)
-		}
-		return m, tea.Quit
+		return m.handleKey(msg)
 
 	case InterruptMsg:
 		if m.quitting {
@@ -242,6 +234,29 @@ func (m StepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// handleKey handles the keys that raw mode takes over from the terminal:
+// ctrl+c interrupts the run, and ctrl+z suspends the process as SIGTSTP
+// would, handing the terminal back until fg repaints the frame. Every other
+// key is ignored.
+func (m StepsModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.quitting {
+		return m, nil
+	}
+	switch msg.Type {
+	case tea.KeyCtrlZ:
+		return m, tea.Suspend
+	case tea.KeyCtrlC:
+		at := time.Now()
+		m = m.interrupt(at)
+		if m.onInterrupt != nil {
+			m.onInterrupt(at)
+		}
+		return m, tea.Quit
+	default:
+		return m, nil
+	}
 }
 
 // Interrupted reports whether an interrupt stopped the display.

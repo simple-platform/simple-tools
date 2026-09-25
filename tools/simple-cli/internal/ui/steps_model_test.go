@@ -342,6 +342,38 @@ func TestStepsModel_CtrlCInterrupts(t *testing.T) {
 	}
 }
 
+func TestStepsModel_CtrlZSuspends(t *testing.T) {
+	// Raw mode delivers ctrl+z as a key instead of stopping the process, so
+	// the model must ask the program to suspend, and carry on afterwards.
+	called := false
+	m := NewStepsModel(StepsModelConfig{Header: deployHeader, Plan: deployPlan, OnInterrupt: func(time.Time) { called = true }})
+	m = send(t, m, started("install", 1, ""))
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlZ})
+	m = next.(StepsModel)
+	if cmd == nil {
+		t.Fatal("ctrl+z returned no command")
+	}
+	if _, ok := cmd().(tea.SuspendMsg); !ok {
+		t.Errorf("ctrl+z returned %T, want tea.SuspendMsg", cmd())
+	}
+	if called || m.quitting || m.Interrupted() || m.rows[8].state != stateRunning {
+		t.Errorf("ctrl+z interrupted the run: OnInterrupt called %v, row %+v", called, m.rows[8])
+	}
+
+	// After fg the program sends ResumeMsg; the frame just goes on.
+	next, cmd = m.Update(tea.ResumeMsg{})
+	if cmd != nil || next.(StepsModel).quitting {
+		t.Error("resuming changed the model")
+	}
+
+	// Once the display is quitting, there is nothing left to suspend.
+	m = send(t, m, FinishedMsg{})
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlZ}); cmd != nil {
+		t.Error("ctrl+z while quitting returned a command")
+	}
+}
+
 func TestStepsModel_CtrlCWithoutCallback(t *testing.T) {
 	next, cmd := newFixtureModel(80, 24).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if !isQuit(cmd) || !next.(StepsModel).Interrupted() {
