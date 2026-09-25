@@ -89,6 +89,11 @@ func (p *DefaultSCLParser) Parse(path string) ([]SCLBlock, error) {
 type Loader struct {
 	Parser     SCLParser
 	FileReader func(path string) ([]byte, error)
+	// Warn receives problems that do not stop the load, such as a .env file
+	// that fails to parse. Nil writes them to stderr. A command drawing a
+	// live progress view sets it: a stray write to the terminal would land
+	// in the middle of the frame and be painted over.
+	Warn func(msg string)
 }
 
 // NewLoader creates a new Loader instance.
@@ -117,7 +122,7 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	envPath := filepath.Join(dir, ".env")
 	if _, err := os.Stat(envPath); err == nil {
 		if err := godotenv.Load(envPath); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: failed to load .env file %s, continuing without it: %v\n", envPath, err)
+			l.warn(fmt.Sprintf("warning: failed to load .env file %s, continuing without it: %v", envPath, err))
 		}
 	}
 
@@ -128,6 +133,14 @@ func (l *Loader) LoadSimpleSCL(dir string) (*SimpleSCL, error) {
 	}
 
 	return extractConfig(blocks)
+}
+
+func (l *Loader) warn(msg string) {
+	if l.Warn != nil {
+		l.Warn(msg)
+		return
+	}
+	fmt.Fprintln(os.Stderr, msg)
 }
 
 // GetEnv retrieves the configuration for a named environment.

@@ -110,7 +110,7 @@ func runInstallWith(ctx context.Context, out io.Writer, deps installDeps, opts i
 	outcome := run.execute(ctx, func(ctx context.Context, steps ui.StepReporter) error {
 		var target *devopsTarget
 		if err := runStep(ctx, steps, stepConfig, "", func() (string, error) {
-			t, err := loadDevopsTarget(deps.devops, opts.env, steps)
+			t, err := loadDevopsTarget(deps.devops, opts.env, steps, configWarning(opts.mode, steps))
 			if err != nil {
 				return "", err
 			}

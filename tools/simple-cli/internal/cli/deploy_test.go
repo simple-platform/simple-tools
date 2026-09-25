@@ -19,6 +19,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
 
@@ -330,15 +331,16 @@ const (
 // example shows (0.4s to load the config, 41.2s to compare, and so on), so
 // under synctest the plain transcripts read like a real run.
 type deployFixture struct {
-	auth      *fakeAuthenticator
-	client    *fakeDevopsClient
-	versioner *fakeVersioner
-	signals   *fakeSignals
-	files     map[string]deploy.FileInfo
-	collect   func(onProgress func(done, total int)) (map[string]deploy.FileInfo, error)
-	ensure    func(onStatus func(string)) (string, error)
-	dial      func(n int) (devopsClient, error)
-	dials     []string
+	auth       *fakeAuthenticator
+	client     *fakeDevopsClient
+	versioner  *fakeVersioner
+	signals    *fakeSignals
+	files      map[string]deploy.FileInfo
+	collect    func(onProgress func(done, total int)) (map[string]deploy.FileInfo, error)
+	ensure     func(onStatus func(string)) (string, error)
+	loadConfig func(parserPath string, warn func(string)) (*config.SimpleSCL, error)
+	dial       func(n int) (devopsClient, error)
+	dials      []string
 }
 
 func newDeployFixture() *deployFixture {
@@ -396,6 +398,9 @@ func (f *deployFixture) deps() deployDeps {
 			return f.ensure(onStatus)
 		}
 		return "/fake/scl-parser", nil
+	}
+	if f.loadConfig != nil {
+		devops.loadConfig = f.loadConfig
 	}
 	return deployDeps{
 		devops:       devops,
@@ -537,6 +542,26 @@ func TestRunDeployWith(t *testing.T) {
 Nothing was published. app.scl was already bumped to 1.4.3-dev.5 on disk.
 `,
 			wantErr: "manifest rejected: quota",
+		},
+		{
+			name: "a .env that fails to load is noted and the deploy goes on",
+			setup: func(f *deployFixture) {
+				f.loadConfig = func(_ string, warn func(string)) (*config.SimpleSCL, error) {
+					warn("warning: failed to load .env file .env, continuing without it: unterminated quoted value")
+					return testSCL(), nil
+				}
+				f.versioner.bumpErr = errors.New("stop here")
+			},
+			want: `🚀 Deploying apps/com.acme.crm to dev
+[1/9] Load project config
+      warning: failed to load .env file .env, continuing without it: unterminated quoted value
+[1/9] ✓ Load project config: com.acme.crm · tenant acme (0.4s)
+[2/9] Authenticate
+[2/9] ✓ Authenticate (0.9s)
+[3/9] Bump version
+[3/9] ✗ Bump version: stop here (0.2s)
+`,
+			wantErr: "stop here",
 		},
 		{
 			name: "a bad app.scl fails before anything is written or dialled",
@@ -1067,6 +1092,47 @@ func TestRunDeployWith_JSONWriteFailure(t *testing.T) {
 			t.Errorf("err = %v, want the write error", err)
 		}
 	})
+}
+
+func TestRunDeployWith_ConfigWarningDestination(t *testing.T) {
+	// Under --json a .env warning must reach stderr through the loader (a
+	// nil warn), not vanish into the no-op reporter; with a view it is a note.
+	tests := []struct {
+		name     string
+		opts     deployOptions
+		wantNil  bool
+		wantNote bool
+	}{
+		{name: "--json", opts: deployOptions{json: true, mode: progressNone}, wantNil: true},
+		{name: "plain", opts: deployOptions{mode: progressPlain}, wantNote: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeployFixture()
+				var gotNil bool
+				f.loadConfig = func(_ string, warn func(string)) (*config.SimpleSCL, error) {
+					gotNil = warn == nil
+					if warn != nil {
+						warn("warning: bad .env")
+					}
+					return nil, errors.New("stop here")
+				}
+				var out bytes.Buffer
+				opts := tt.opts
+				opts.appPath, opts.env = "apps/com.acme.crm", "dev"
+				if err := runDeployWith(context.Background(), &out, f.deps(), opts); err == nil {
+					t.Fatal("runDeployWith() error = nil, want the config error")
+				}
+				if gotNil != tt.wantNil {
+					t.Errorf("loader got nil warn = %v, want %v", gotNil, tt.wantNil)
+				}
+				if got := strings.Contains(out.String(), "warning: bad .env"); got != tt.wantNote {
+					t.Errorf("note in output = %v, want %v; output:\n%s", got, tt.wantNote, out.String())
+				}
+			})
+		})
+	}
 }
 
 func TestRunDeployWith_BumpsBeforeCollect(t *testing.T) {

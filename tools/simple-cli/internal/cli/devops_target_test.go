@@ -152,7 +152,7 @@ func fakeDevopsDeps(auth *fakeAuthenticator, dials *[]string, dial func(n int) (
 	var mu sync.Mutex
 	return devopsDeps{
 		ensureParser:     func(func(string)) (string, error) { return "/fake/scl-parser", nil },
-		loadConfig:       func(string) (*config.SimpleSCL, error) { return testSCL(), nil },
+		loadConfig:       func(string, func(string)) (*config.SimpleSCL, error) { return testSCL(), nil },
 		newAuthenticator: func() devopsAuthenticator { return auth },
 		dial: func(_ context.Context, endpoint, jwt string) (devopsClient, error) {
 			mu.Lock()
@@ -168,7 +168,7 @@ func TestLoadDevopsTarget(t *testing.T) {
 	tests := []struct {
 		name      string
 		ensure    func(onStatus func(string)) (string, error)
-		load      func(string) (*config.SimpleSCL, error)
+		load      func(string, func(string)) (*config.SimpleSCL, error)
 		env       string
 		wantErr   string
 		wantCalls []string
@@ -195,15 +195,27 @@ func TestLoadDevopsTarget(t *testing.T) {
 			},
 		},
 		{
+			name:   "a .env warning becomes a note",
+			ensure: func(func(string)) (string, error) { return "/bin/scl-parser", nil },
+			load: func(_ string, warn func(string)) (*config.SimpleSCL, error) {
+				warn("warning: failed to load .env file .env, continuing without it: unterminated quoted value")
+				return testSCL(), nil
+			},
+			env:       "dev",
+			wantCalls: []string{"note config warning: failed to load .env file .env, continuing without it: unterminated quoted value"},
+		},
+		{
 			name:    "parser error",
 			ensure:  func(func(string)) (string, error) { return "", errors.New("offline") },
 			env:     "dev",
 			wantErr: "failed to ensure scl-parser: offline",
 		},
 		{
-			name:    "config error",
-			ensure:  func(func(string)) (string, error) { return "/bin/scl-parser", nil },
-			load:    func(string) (*config.SimpleSCL, error) { return nil, errors.New("simple.scl not found in .") },
+			name:   "config error",
+			ensure: func(func(string)) (string, error) { return "/bin/scl-parser", nil },
+			load: func(string, func(string)) (*config.SimpleSCL, error) {
+				return nil, errors.New("simple.scl not found in .")
+			},
 			env:     "dev",
 			wantErr: "failed to load simple.scl: simple.scl not found in .",
 		},
@@ -223,7 +235,7 @@ func TestLoadDevopsTarget(t *testing.T) {
 				newAuthenticator: func() devopsAuthenticator { return auth },
 			}
 			if deps.loadConfig == nil {
-				deps.loadConfig = func(parserPath string) (*config.SimpleSCL, error) {
+				deps.loadConfig = func(parserPath string, _ func(string)) (*config.SimpleSCL, error) {
 					if parserPath != "/bin/scl-parser" {
 						t.Errorf("loadConfig got parser %q", parserPath)
 					}
@@ -232,7 +244,7 @@ func TestLoadDevopsTarget(t *testing.T) {
 			}
 			steps := &recordingReporter{}
 
-			target, err := loadDevopsTarget(deps, tt.env, steps)
+			target, err := loadDevopsTarget(deps, tt.env, steps, configWarning(progressPlain, steps))
 			if tt.wantErr != "" {
 				if err == nil || err.Error() != tt.wantErr {
 					t.Fatalf("err = %v, want %q", err, tt.wantErr)
@@ -255,13 +267,44 @@ func TestLoadDevopsTarget(t *testing.T) {
 	}
 }
 
+func TestConfigWarning(t *testing.T) {
+	// Under --json there is no view to note a warning in, so it must be left
+	// to the loader, which writes it to stderr; with a view it is a note on
+	// the config step, where it cannot tear a live frame.
+	tests := []struct {
+		name      string
+		mode      progressMode
+		wantNil   bool
+		wantCalls []string
+	}{
+		{name: "--json leaves it to the loader", mode: progressNone, wantNil: true},
+		{name: "plain notes it", mode: progressPlain, wantCalls: []string{"note config warning: bad .env"}},
+		{name: "tty notes it", mode: progressTTY, wantCalls: []string{"note config warning: bad .env"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			steps := &recordingReporter{}
+			warn := configWarning(tt.mode, steps)
+			if (warn == nil) != tt.wantNil {
+				t.Fatalf("configWarning() nil = %v, want %v", warn == nil, tt.wantNil)
+			}
+			if warn != nil {
+				warn("warning: bad .env")
+			}
+			if got := steps.got(); !reflect.DeepEqual(got, tt.wantCalls) && len(got)+len(tt.wantCalls) > 0 {
+				t.Errorf("reports = %q, want %q", got, tt.wantCalls)
+			}
+		})
+	}
+}
+
 func TestDevopsTarget_APIKeyIsCheckedWhenSigningIn(t *testing.T) {
 	// A deploy dry run loads the target but never signs in, so a missing
 	// API key must not fail the load, only the sign-in.
 	t.Setenv(unsetKeyVar, "")
 	auth := &fakeAuthenticator{}
 	var dials []string
-	target, err := loadDevopsTarget(fakeDevopsDeps(auth, &dials, nil), "preview", ui.NopReporter{})
+	target, err := loadDevopsTarget(fakeDevopsDeps(auth, &dials, nil), "preview", ui.NopReporter{}, nil)
 	if err != nil {
 		t.Fatalf("loadDevopsTarget() error = %v; the key is not needed yet", err)
 	}
@@ -304,7 +347,7 @@ func TestDevopsTargetAuthenticate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var dials []string
-			target, err := loadDevopsTarget(fakeDevopsDeps(tt.auth, &dials, nil), "dev", ui.NopReporter{})
+			target, err := loadDevopsTarget(fakeDevopsDeps(tt.auth, &dials, nil), "dev", ui.NopReporter{}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -409,7 +452,7 @@ func TestDevopsTargetConnect(t *testing.T) {
 			}
 			var dials []string
 			deps := fakeDevopsDeps(tt.auth, &dials, func(n int) (devopsClient, error) { return tt.dial(n, client) })
-			target, err := loadDevopsTarget(deps, "dev", ui.NopReporter{})
+			target, err := loadDevopsTarget(deps, "dev", ui.NopReporter{}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -458,7 +501,7 @@ func TestDefaultDevopsDeps(t *testing.T) {
 	if _, ok := deps.newAuthenticator().(*deploy.Authenticator); !ok {
 		t.Error("newAuthenticator does not return a *deploy.Authenticator")
 	}
-	if _, err := deps.loadConfig("/nonexistent/scl-parser"); err == nil {
+	if _, err := deps.loadConfig("/nonexistent/scl-parser", nil); err == nil {
 		t.Error("loadConfig found a simple.scl in the package directory")
 	}
 }

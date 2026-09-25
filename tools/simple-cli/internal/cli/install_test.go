@@ -180,7 +180,7 @@ func (f *installFixture) deps() installDeps {
 			}
 			return "/fake/scl-parser", nil
 		},
-		loadConfig:       func(string) (*config.SimpleSCL, error) { return testSCL(), nil },
+		loadConfig:       func(string, func(string)) (*config.SimpleSCL, error) { return testSCL(), nil },
 		newAuthenticator: func() devopsAuthenticator { return f.auth },
 		dial: func(ctx context.Context, _, _ string) (devopsClient, error) {
 			f.dials++

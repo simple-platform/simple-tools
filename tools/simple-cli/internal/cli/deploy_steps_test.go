@@ -300,7 +300,7 @@ func TestConnectStep(t *testing.T) {
 	var dials []string
 	target, err := loadDevopsTarget(fakeDevopsDeps(&fakeAuthenticator{}, &dials, func(int) (devopsClient, error) {
 		return client, nil
-	}), "dev", ui.NopReporter{})
+	}), "dev", ui.NopReporter{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

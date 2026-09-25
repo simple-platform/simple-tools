@@ -205,7 +205,7 @@ func (d *deployRun) work(ctx context.Context, steps ui.StepReporter) error {
 // anything is written or dialled, so a bad simple.scl or app.scl fails
 // first.
 func (d *deployRun) loadConfig(steps ui.StepReporter) (string, error) {
-	target, err := loadDevopsTarget(d.deps.devops, d.opts.env, steps)
+	target, err := loadDevopsTarget(d.deps.devops, d.opts.env, steps, configWarning(d.opts.mode, steps))
 	if err != nil {
 		return "", err
 	}

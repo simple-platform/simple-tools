@@ -35,7 +35,7 @@ type devopsClient interface {
 // Tests replace them; defaultDevopsDeps wires the real ones.
 type devopsDeps struct {
 	ensureParser     func(onStatus func(string)) (string, error)
-	loadConfig       func(parserPath string) (*config.SimpleSCL, error)
+	loadConfig       func(parserPath string, warn func(string)) (*config.SimpleSCL, error)
 	newAuthenticator func() devopsAuthenticator
 	dial             func(ctx context.Context, endpoint, jwt string) (devopsClient, error)
 }
@@ -43,8 +43,10 @@ type devopsDeps struct {
 func defaultDevopsDeps() devopsDeps {
 	return devopsDeps{
 		ensureParser: build.EnsureSCLParserFunc,
-		loadConfig: func(parserPath string) (*config.SimpleSCL, error) {
-			return config.NewLoader(parserPath).LoadSimpleSCL(".")
+		loadConfig: func(parserPath string, warn func(string)) (*config.SimpleSCL, error) {
+			loader := config.NewLoader(parserPath)
+			loader.Warn = warn
+			return loader.LoadSimpleSCL(".")
 		},
 		newAuthenticator: func() devopsAuthenticator { return deploy.NewAuthenticator() },
 		dial:             dialDevops,
@@ -85,8 +87,9 @@ type devopsTarget struct {
 // simple.scl from the working directory and resolves envName in it. The
 // API key is checked only when the target signs in: a deploy dry run loads
 // the target and never does. It reports only details and notes on the
-// config step: the caller owns the step's start and end.
-func loadDevopsTarget(deps devopsDeps, envName string, steps ui.StepReporter) (*devopsTarget, error) {
+// config step: the caller owns the step's start and end. warn receives
+// problems that do not stop the load (see configWarning).
+func loadDevopsTarget(deps devopsDeps, envName string, steps ui.StepReporter, warn func(string)) (*devopsTarget, error) {
 	var downloading sync.Once
 	parserPath, err := deps.ensureParser(func(status string) {
 		// The first status means a download started; that is worth keeping
@@ -98,7 +101,7 @@ func loadDevopsTarget(deps devopsDeps, envName string, steps ui.StepReporter) (*
 		return nil, fmt.Errorf("failed to ensure scl-parser: %w", err)
 	}
 
-	cfg, err := deps.loadConfig(parserPath)
+	cfg, err := deps.loadConfig(parserPath, warn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load simple.scl: %w", err)
 	}
@@ -117,6 +120,19 @@ func loadDevopsTarget(deps devopsDeps, envName string, steps ui.StepReporter) (*
 		env:          env,
 		auth:         deps.newAuthenticator(),
 	}, nil
+}
+
+// configWarning decides where a problem that does not stop the config load
+// goes, such as a .env file that fails to parse. With a progress view it is
+// a note on the config step, because a stray write would land in the middle
+// of a live frame. Under --json there is no view to note it in, so it
+// returns nil and the loader writes the warning to stderr, as it always
+// has: a skipped .env must not go unnoticed just because stdout is JSON.
+func configWarning(mode progressMode, steps ui.StepReporter) func(string) {
+	if mode == progressNone {
+		return nil
+	}
+	return func(msg string) { steps.Note(stepConfig, msg) }
 }
 
 // parserStatus turns the tool installer's "Downloading 43%..." into
