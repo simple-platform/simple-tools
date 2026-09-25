@@ -1570,3 +1570,14 @@ func TestBinaryFilePayload(t *testing.T) {
 		})
 	}
 }
+
+func TestHeartbeatIntervalKeepsTheSocketAlive(t *testing.T) {
+	// The heartbeat is the only traffic while the server works through a long
+	// step, and the load balancer drops a WebSocket idle for
+	// loadBalancerIdleTimeout. Two heartbeats must fit in that window, so one
+	// delayed or lost heartbeat does not cost the connection.
+	if 2*defaultHeartbeatInterval >= loadBalancerIdleTimeout {
+		t.Errorf("heartbeat every %s leaves no margin under the %s load balancer idle timeout",
+			defaultHeartbeatInterval, loadBalancerIdleTimeout)
+	}
+}

@@ -24,8 +24,17 @@ const (
 	// messageQueueLength is the number of messages to queue before blocking
 	messageQueueLength = 1000
 
-	// defaultHeartbeatInterval is the time between heartbeats
-	defaultHeartbeatInterval = 30 * time.Second
+	// defaultHeartbeatInterval is the time between heartbeats. It must stay
+	// well under loadBalancerIdleTimeout: while the server works through a
+	// long manifest, publish or install, the heartbeat and its reply are the
+	// only traffic on the socket. At 30s, every heartbeat raced the idle limit
+	// and a 2-minute manifest check lost the connection on the fourth one.
+	defaultHeartbeatInterval = 10 * time.Second
+
+	// loadBalancerIdleTimeout is how long the devops server's load balancer
+	// (a GKE regional external Application Load Balancer, with the default
+	// backend service timeout) keeps a WebSocket open with no traffic.
+	loadBalancerIdleTimeout = 30 * time.Second
 
 	// defaultConnectTimeout is the handshake timeout
 	defaultConnectTimeout = 10 * time.Second
