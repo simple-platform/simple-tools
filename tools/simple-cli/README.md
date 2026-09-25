@@ -163,6 +163,110 @@ simple test com.mycompany.crm --behavior order
 
 ---
 
+### `simple deploy`
+
+Deploy an application to an environment: bump the version in `app.scl`, upload the files the server does not have yet, publish the version, and install it.
+
+**Usage:**
+
+```bash
+simple deploy <app-path> --env <environment> [flags]
+```
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `app-path` | Yes | Path to the application directory, e.g. `apps/com.mycompany.crm`. |
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--bump` | - | `patch`, `minor` or `major`. Required for the first deploy after a prod release. |
+| `--dry-run` | `false` | Show the version and the files a deploy would upload, and change nothing (see below). |
+| `--no-install` | `false` | Publish the version without installing it. |
+| `--progress` | `auto` | How progress is shown: `auto`, `tty` or `plain` (see below). |
+| `--json` | `false` | Print one JSON document instead of progress (see below). |
+
+**Progress output:**
+
+A deploy runs as a list of steps: load project config, authenticate, bump version, collect files, connect, compare with server, upload files, publish version, install. Progress goes to stdout.
+
+- **On a terminal** the list is drawn live and repainted in place: every step is shown, pending ones included, with a spinner, its duration, and a progress bar while files are collected and uploaded. When the deploy ends, the finished list stays on screen, followed by the result line.
+- **Anywhere else** (a pipe, a file, a CI log) each event is one plain line with no escape sequences: `[n/N] Step` when a step starts, then `✓` done, `✗` failed, `-` skipped or `■` interrupted, with the step's detail and duration. Upload progress is printed at most every 10 seconds, and a step that has printed nothing for 30 seconds prints `still running (<duration>)`, so CI jobs do not time out on silence.
+- `auto` picks the live view only when stdout is a terminal, `TERM` is not `dumb` and `CI` is unset, `false` or `0`. `--progress=tty` or `--progress=plain` overrides that choice. `--json` shows no progress at all.
+- With `CI` set to `false` or `0`, the live view is drawn without colour: the colour library treats any non-empty `CI` as a non-terminal.
+
+```text
+🚀 Deploying apps/com.acme.crm to dev
+[1/9] Load project config
+[1/9] ✓ Load project config: com.acme.crm · tenant acme (0.4s)
+...
+[7/9] Upload files
+      104/312 files · 4.1/12.4 MB (33%)
+      208/312 files · 8.3/12.4 MB (66%)
+[7/9] ✓ Upload files: 312 files · 12.4 MB (28s)
+[8/9] Publish version
+[8/9] ✓ Publish version: com.acme.crm@1.4.3-dev.5 (18.3s)
+[9/9] Install to dev
+      still running (30s)
+      still running (1m00s)
+      still running (1m30s)
+[9/9] ✓ Install to dev: 1.4.3-dev.5 (1m52s)
+✅ Deployed com.acme.crm@1.4.3-dev.5 (Installed) in 3m21.86s
+```
+
+**Failures and interrupts:** when a deploy fails or is interrupted, it says what it left behind before the error: `app.scl` already bumped on disk, or a publish or install the server may still finish after the CLI stopped waiting, and the `simple install` command to run next. Ctrl+C or `SIGTERM` stops the deploy gracefully: the current step gets up to 2 seconds to stop (on a terminal, `Waiting for "<step>" to stop` shows while it does), and the error names where the interrupt stopped it, e.g. `deploy interrupted during "Upload files" after 4.2s`. A second Ctrl+C exits at once. The exit code is 1. On a terminal, Ctrl+Z suspends the deploy as usual.
+
+**Dry run:** `--dry-run` loads `simple.scl` and `app.scl`, computes the version a deploy would bump to, collects the files and lists them, sorted by path. It does not sign in (the environment's API key need not be set), does not connect to the server and does not write `app.scl`, so the listed `app.scl` hash is the file as it is on disk; a real deploy uploads it with the new version.
+
+**JSON output (`--json`):** stdout carries at most one JSON document and nothing else, and no progress is printed. A `.env` file that fails to load is still reported, as a plain `warning: ...` line on stderr. Errors go to stderr as `{"error": "..."}` and the exit code is 1.
+
+| Outcome                           | stdout                                                                                                                                               | Exit code |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Success                           | `{"status":"success","app_id","version","files":{"total","new","cached"},"duration_ms"}`, plus `"installed","install_success"` unless `--no-install` | 0         |
+| Published, install failed         | `{"status":"error","error":"deploy successful but install failed: ...","app_id","version"}`                                                          | 1         |
+| Dry run                           | `{"dry_run":true,"version","files":[{"path","hash","size"}]}`, files sorted by path                                                                  | 0         |
+| Any other failure or an interrupt | nothing                                                                                                                                              | 1         |
+
+When the connection drops or the reply times out during the install, the server may still be installing, and the error reads `deploy successful but the install result is unknown: ...` instead.
+
+**Examples:**
+
+```bash
+# First deploy to dev after a prod release
+simple deploy apps/com.mycompany.crm --env dev --bump patch
+
+# Preview what would be uploaded
+simple deploy apps/com.mycompany.crm --env dev --dry-run
+
+# Plain progress lines, e.g. under a terminal-emulating CI runner
+simple deploy apps/com.mycompany.crm --env staging --progress=plain
+```
+
+---
+
+### `simple install`
+
+Install the latest deployed version of an application in an environment (migrations, service configuration, cache warming). `simple deploy` installs by default; use this after `--no-install`, or to retry an install that failed.
+
+**Usage:**
+
+```bash
+simple install <app-id> --env <environment> [flags]
+```
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--progress` | `auto` | How progress is shown: `auto`, `tty` or `plain`, as for `simple deploy`. |
+| `--json` | `false` | Print `{"status":"success","app_id","version","env","duration_ms"}` on success and nothing else on stdout; errors go to stderr as `{"error": "..."}`. |
+
+The steps are load project config, authenticate, connect, and install. The server does not cancel an install when the CLI disconnects: after an interrupt, or a dropped connection, let it finish before running `simple install` again.
+
+---
+
 ### `simple auth`
 
 Manages Proof-of-Possession (PoP) machine authentication for the Simple Platform.
