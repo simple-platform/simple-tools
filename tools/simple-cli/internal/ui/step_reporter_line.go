@@ -150,17 +150,23 @@ func (r *LineReporter) Fail(id StepID, err error) {
 // Both happen under one hold of the lock: if it were released between
 // them, a report from an abandoned worker already waiting on it could
 // print ✓ under the ■ line.
-func (r *LineReporter) Interrupt() {
+//
+// at is when the interrupt arrived, and each ■ line says how long its step
+// had run by then. The caller may only get here after waiting for the work
+// to stop, and that wait is not part of the step: the same interrupt then
+// reads the same in a log as on a terminal.
+func (r *LineReporter) Interrupt(at time.Time) {
 	r.mu.Lock()
 	if !r.closed {
 		r.closeLocked()
-		now := time.Now()
 		for i, step := range r.plan {
 			s, running := r.running[step.ID]
 			if !running || r.index[step.ID] != i {
 				continue
 			}
-			r.printf("%s ■ %s: %s (%s)\n", r.prefix(i), step.Title, interruptedText, FormatDuration(now.Sub(s.started)))
+			// A step that started after the interrupt was cut short at once.
+			elapsed := max(at.Sub(s.started), 0)
+			r.printf("%s ■ %s: %s (%s)\n", r.prefix(i), step.Title, interruptedText, FormatDuration(elapsed))
 		}
 		clear(r.running)
 	}

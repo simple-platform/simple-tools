@@ -347,12 +347,12 @@ func TestLineReporter_Interrupt(t *testing.T) {
 		r.Done("publish", "com.acme.crm@1.4.3-dev.5")
 		r.Start("install", "")
 		sleep(48200 * time.Millisecond)
-		r.Interrupt()
+		r.Interrupt(time.Now())
 
 		// The abandoned worker keeps reporting; none of it may print.
 		r.Done("install", "1.4.3-dev.5")
 		r.Note("install", "late")
-		r.Interrupt()
+		r.Interrupt(time.Now())
 		sleep(time.Minute)
 
 		want := []string{
@@ -368,13 +368,41 @@ func TestLineReporter_Interrupt(t *testing.T) {
 	})
 }
 
+func TestLineReporter_InterruptIsTimedFromTheInterrupt(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// The runner calls Interrupt only once the work has stopped, up to
+		// its grace period later. The ■ line must say when the interrupt
+		// came, as the live view and the error do.
+		var out syncBuffer
+		r := NewLineReporter(&out, deployPlan)
+		r.Start("collect", "")
+		sleep(300 * time.Millisecond)
+		interruptedAt := time.Now()
+		sleep(1500 * time.Millisecond)
+		// A step that starts after the interrupt ran for no time at all.
+		r.Start("connect", "")
+		sleep(500 * time.Millisecond)
+		r.Interrupt(interruptedAt)
+
+		want := []string{
+			"[4/9] Collect files",
+			"[5/9] Connect",
+			"[4/9] ■ Collect files: interrupted (0.3s)",
+			"[5/9] ■ Connect: interrupted (0s)",
+		}
+		if got := out.lines(); !slices.Equal(got, want) {
+			t.Errorf("lines:\n%s\nwant:\n%s", out.String(), strings.Join(want, "\n"))
+		}
+	})
+}
+
 func TestLineReporter_InterruptBetweenSteps(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var out syncBuffer
 		r := NewLineReporter(&out, deployPlan)
 		r.Start("auth", "")
 		r.Done("auth", "")
-		r.Interrupt()
+		r.Interrupt(time.Now())
 		want := []string{"[2/9] Authenticate", "[2/9] ✓ Authenticate (0s)"}
 		if got := out.lines(); !slices.Equal(got, want) {
 			t.Errorf("lines:\n%s", out.String())
@@ -410,7 +438,7 @@ func TestLineReporter_InterruptClosesBeforeUnlocking(t *testing.T) {
 		}}
 		r = NewLineReporter(out, deployPlan)
 		r.Start("install", "")
-		r.Interrupt()
+		r.Interrupt(time.Now())
 		if !sawMark {
 			t.Fatalf("no ■ line was written:\n%s", out.String())
 		}
@@ -436,7 +464,7 @@ func TestLineReporter_NothingPrintsAfterInterrupt(t *testing.T) {
 				r.Done("install", "1.4.3-dev.5")
 			})
 		}
-		r.Interrupt()
+		r.Interrupt(time.Now())
 		wg.Wait()
 
 		lines := out.lines()
@@ -475,7 +503,7 @@ func TestLineReporter_CallsAfterCloseAreNoOps(t *testing.T) {
 			func() { r.Done("config", "x") },
 			func() { r.Skip("config", "x") },
 			func() { r.Fail("config", errors.New("x")) },
-			r.Interrupt,
+			func() { r.Interrupt(time.Now()) },
 			r.Close,
 		}
 		for _, call := range calls {
@@ -566,7 +594,7 @@ func TestLineReporter_DuplicateIDsUseTheFirstStep(t *testing.T) {
 		r := NewLineReporter(&out, []Step{{ID: "a", Title: "First"}, {ID: "a", Title: "Second"}})
 		r.Start("a", "")
 		sleep(31500 * time.Millisecond)
-		r.Interrupt()
+		r.Interrupt(time.Now())
 		want := []string{"[1/2] First", "      still running (30s)", "[1/2] ■ First: interrupted (31.5s)"}
 		if got := out.lines(); !slices.Equal(got, want) {
 			t.Errorf("lines:\n%s\nwant:\n%s", out.String(), strings.Join(want, "\n"))
