@@ -305,13 +305,22 @@ func TestStepsModel_IgnoresProgressForIdleSteps(t *testing.T) {
 
 func TestStepsModel_CtrlCInterrupts(t *testing.T) {
 	var calls atomic.Int32
-	m := NewStepsModel(StepsModelConfig{Header: deployHeader, Plan: deployPlan, OnInterrupt: func() { calls.Add(1) }})
+	var interruptedAt time.Time
+	m := NewStepsModel(StepsModelConfig{Header: deployHeader, Plan: deployPlan, OnInterrupt: func(at time.Time) {
+		calls.Add(1)
+		interruptedAt = at
+	}})
 	m = send(t, m, stepStartedMsg{stepEvent{"config", time.Now()}, ""})
 
 	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = next.(StepsModel)
 	if calls.Load() != 1 {
 		t.Fatalf("OnInterrupt called %d times, want 1", calls.Load())
+	}
+	// The runner times its error from this moment, so it must be the one
+	// the row ended with, not a second reading of the clock.
+	if !interruptedAt.Equal(m.rows[0].ended) {
+		t.Errorf("OnInterrupt got %v, the row ended at %v", interruptedAt, m.rows[0].ended)
 	}
 	if !isQuit(cmd) {
 		t.Error("ctrl+c did not return tea.Quit")
@@ -353,7 +362,7 @@ func TestStepsModel_InterruptMsg(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			called := false
 			m := newFixtureModel(80, 24)
-			m.onInterrupt = func() { called = true }
+			m.onInterrupt = func(time.Time) { called = true }
 			m = send(t, m, started("install", 0, ""), spinner.TickMsg{Time: at(10)})
 
 			next, cmd := m.Update(InterruptMsg{At: tt.at})

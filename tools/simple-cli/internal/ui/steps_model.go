@@ -103,8 +103,9 @@ type StepsModelConfig struct {
 	Start tea.Cmd
 	// OnInterrupt is called from Update when ctrl+c arrives as a key in raw
 	// mode, before the program quits, so the work is cancelled even though
-	// no signal was raised.
-	OnInterrupt func()
+	// no signal was raised. at is the moment the model ended the running
+	// step with, so the runner can report the same duration.
+	OnInterrupt func(at time.Time)
 }
 
 // StepsModel draws a plan as one row per step, pending steps included. It is
@@ -119,7 +120,7 @@ type StepsModel struct {
 	height      int
 	spinner     spinner.Model
 	start       tea.Cmd
-	onInterrupt func()
+	onInterrupt func(at time.Time)
 	began       time.Time
 	// now advances from spinner ticks and message timestamps; View never
 	// reads the wall clock, so a frame is reproducible from the model alone.
@@ -195,9 +196,10 @@ func (m StepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Type != tea.KeyCtrlC || m.quitting {
 			return m, nil
 		}
-		m = m.interrupt(time.Now())
+		at := time.Now()
+		m = m.interrupt(at)
 		if m.onInterrupt != nil {
-			m.onInterrupt()
+			m.onInterrupt(at)
 		}
 		return m, tea.Quit
 
