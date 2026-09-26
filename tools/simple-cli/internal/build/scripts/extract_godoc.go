@@ -676,7 +676,7 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 	// the boolean this tag used to take, whose `false` no longer says anything.
 	if value != "" {
 		return nil, annotationError(action,
-			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries %q. Leave it bare to expose the action, or delete it to leave the action unexposed",
+			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries \"%s\". Leave it bare to expose the action, or delete it to leave the action unexposed",
 				toolTag, value), nil)
 	}
 
@@ -685,7 +685,7 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 	// has no qualified form: a tool either may run beside the others or may not.
 	if parallelSafe && parallelValue != "" {
 		return nil, annotationError(action,
-			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries %q. Leave it bare to let the tool run beside other parallel-safe calls, or delete it to run it alone",
+			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries \"%s\". Leave it bare to let the tool run beside other parallel-safe calls, or delete it to run it alone",
 				parallelSafeTag, parallelValue), nil)
 	}
 

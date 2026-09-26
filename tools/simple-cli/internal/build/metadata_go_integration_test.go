@@ -402,6 +402,13 @@ func malformedStatementCases(prefix string) []malformedStatement {
 			want:      []string{"@parallelsafe is a modifier tag and takes no value", `"reads only"`},
 		},
 		{
+			// Quoted the same way in every language: between plain quotes, with
+			// nothing inside escaped. The Go program used to escape it.
+			name:      "a quoted value written after the dispatch claim",
+			statement: lines("@tool", "@shortdesc Reads things by name.", `@parallelsafe "yes"`),
+			want:      []string{"@parallelsafe is a modifier tag and takes no value", `carries ""yes""`},
+		},
+		{
 			name:      "a dispatch claim written twice",
 			statement: lines("@tool", "@shortdesc Reads things by name.", "@parallelsafe", "@parallelsafe"),
 			want:      []string{"@parallelsafe is declared more than once"},
