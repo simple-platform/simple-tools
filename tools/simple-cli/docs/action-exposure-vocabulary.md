@@ -32,7 +32,7 @@ export interface Payload { site_id: string }
 | `@tool`         | modifier | —                           | nothing: the tag carries no value                                   |
 | `@shortdesc`    | block    | when `@tool` is present     | the one line a tool listing shows, at most 300 characters           |
 | `@usewhen`      | block    | optional, repeatable        | when to reach for the tool, at most 10 lines of 100 characters each |
-| `@parallelsafe` | modifier | optional, only with `@tool` | nothing: the tool only reads, so it may run beside other reads      |
+| `@parallelsafe` | modifier | optional, only with `@tool` | nothing: the tool only reads, so it may overlap parallel-safe calls |
 | `@Payload`      | block    | optional                    | the name of the type the input schema is read from                  |
 
 `@shortdesc` and `@usewhen` are written for the **model**: the listing an agent
@@ -133,8 +133,8 @@ the old spelling is one nobody finishes migrating — with `@tool false` reading
 an exposed action.
 
 `@parallelsafe` is a modifier for the same reason. A tool either may run beside
-other reads or may not; `@parallelsafe reads only` qualifies a claim that has no
-qualified form, so a value on it is refused too.
+the other parallel-safe calls next to it or may not; `@parallelsafe reads only`
+qualifies a claim that has no qualified form, so a value on it is refused too.
 
 ## `tsdoc.json`, and what is standards-aligned here
 
