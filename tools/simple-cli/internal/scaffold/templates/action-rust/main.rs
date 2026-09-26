@@ -54,6 +54,13 @@ fn main() {
 /// the payload. A tag written anywhere here counts, and a tag written twice is
 /// still written twice.
 ///
+/// A fourth tag, `@parallelsafe`, is read by the host rather than the caller.
+/// Write it on a line of its own when this action only reads — it changes no
+/// stored data and sends nothing outward — and the host may run it beside the
+/// other parallel-safe calls of one batch. It is left off here because that
+/// claim is about what this action becomes, and it is yours to make: nothing
+/// checks it, and it never makes a failed call safe to repeat.
+///
 /// @tool
 /// @shortdesc Greet whoever the caller names, and answer with the greeting.
 /// @usewhen A greeting is wanted for a named person.

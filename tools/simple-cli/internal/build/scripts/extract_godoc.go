@@ -12,13 +12,14 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
-// THE AUTHOR-FACING EXPOSURE VOCABULARY.
+// THE AUTHOR-FACING VOCABULARY, AND IT IS ONE VOCABULARY FOR EVERY LANGUAGE.
 //
 // An action becomes callable by an agent because its own source says so, one
-// tag per line, anywhere in a comment in the action's main file, once. Carrying
-// it in the source is what lets regeneration keep it: this generator rewrites
+// tag per line, anywhere in a comment in the action's main file. Carrying it in
+// the source is what lets regeneration keep it: this generator rewrites
 // action.json wholesale, so anything added to that file by hand is deleted the
 // next time an author touches the action.
 //
@@ -34,44 +35,93 @@ import (
 // is unmarked until its author marks it, the way a symbol is not `@public` until
 // it says so.
 //
-// Only these four names are claimed as annotations. Every other `@` line is
-// description, because this vocabulary shares a doc comment with `@Payload` here
-// and with `@param`, `@remarks` and the rest of TSDoc on the other generator,
-// and one that lifted every tag out of the description would delete an author's
-// prose to protect its own.
+// `@shortdesc` and `@usewhen` are written for the MODEL rather than for the
+// host: the first is the one line a tool listing shows and is REQUIRED wherever
+// `@tool` is, and the second is repeatable and says when to reach for the tool.
+// The doc comment's own prose is neither, and it is not touched: it is the full
+// contract, and it arrives when the tool is selected rather than in the listing.
+//
+// `@parallelsafe` is the one name written for the HOST. It is a modifier tag
+// like `@tool`, it is valid only where `@tool` is, and it says one thing: this
+// tool only reads — it changes no stored data and sends nothing outward — so
+// the host may run it at the same time as the other parallel-safe calls of one
+// batch. It governs concurrency and nothing else. It never makes a call
+// retryable and it never states what a call did to stored data. Nothing
+// verifies the claim: the author owns it. Written without `@tool` it is refused
+// rather than dropped, because a dispatch statement on an action that is not a
+// tool is one nobody acts on, and an author who lost `@tool` is otherwise told
+// nothing.
+//
+// `@Payload` states nothing about exposure and is claimed all the same: it names
+// the struct the schema is read from, so a directive to this program that stayed
+// in the prose would be shipped to a model as a sentence about what the action
+// does — and `@Payloud` would otherwise fall back in silence to a struct of the
+// other name, describing the wrong type.
+//
+// WHAT CALLING A TOOL DOES IS NOT IN THIS VOCABULARY, AND IT IS NOT ANYWHERE
+// ELSE EITHER. `@effects`, `@retry` and `@discloses` are deleted outright. They
+// were not relocated: a host-side table holding effects, retry safety and
+// disclosure origin was designed, built, and deleted the same day, so nothing
+// downstream states these about a tool and no action has a way to declare them.
+// `@parallelsafe` does not reopen that: it lets reads overlap, and it changes
+// neither what a failed call is taken to have done to stored data nor whether a
+// call may be tried again. This list does not name the three, and no list of
+// retired names sits beside it either. An action that writes one is writing
+// prose, and the line stays exactly where its author put it — the same answer
+// this program gives any other name it does not claim.
+//
+// Only these five names are claimed as annotations. Every other `@` line is
+// description, because this vocabulary shares a doc comment with `@param`,
+// `@remarks` and the rest of TSDoc on the other generator, and one that lifted
+// every tag out of the description would delete an author's prose to protect its
+// own.
 //
 // A NAME ONE EDIT AWAY FROM A CLAIMED ONE IS REFUSED RATHER THAN LEFT AS PROSE.
 // Nothing else can catch it here: a Go doc comment has no editor lint behind it,
-// so `@dicloses secret_field` was read as a sentence, the class it was written to
-// tighten fell back to the loosest one, and the line itself travelled into the
-// description a model reads. Both halves of that are silent, and the tag an
-// author most wants heard is the one that says what calling the tool discloses.
+// so `@shortdes Reads things.` is read as a sentence, the tool is offered to a
+// model as a name and nothing else, and the line itself travels into the
+// description that model reads. Both halves of that are silent.
 //
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
 const (
-	payloadAnnotation = "@Payload"
+	toolTag         = "tool"
+	shortDescTag    = "shortdesc"
+	useWhenTag      = "usewhen"
+	parallelSafeTag = "parallelsafe"
+	payloadTag      = "Payload"
+)
 
-	toolTag      = "tool"
-	effectsTag   = "effects"
-	retryTag     = "retry"
-	disclosesTag = "discloses"
-
-	defaultDiscloses = "tenant_record"
+// A LISTING HAS TO STAY SMALL, SO WHAT DOES NOT FIT IS REFUSED, NEVER DROPPED.
+//
+// Every `@shortdesc` and `@usewhen` an action writes is carried into the listing
+// an agent chooses from, and that listing is read in full on every turn. Keeping
+// the first few and discarding the rest would be a cap nobody was told about:
+// the author reads the line in the source, the model never sees it, and the
+// build that decided so exited zero.
+//
+// The widths are the ruled ones, and they are the same numbers the other
+// generator holds, because an action's listing entry costs the same whichever
+// language wrote it.
+const (
+	useWhenLimit   = 10
+	shortDescChars = 300
+	useWhenChars   = 100
 )
 
 var (
-	exposureTags = []string{toolTag, effectsTag, retryTag, disclosesTag}
+	// Every name this program claims, which is also the net the misspelling rule
+	// casts. `@Payload` is in it for both jobs: it is lifted out of the prose
+	// where it is written, and a name one edit from it is refused.
+	actionTags = []string{toolTag, shortDescTag, useWhenTag, parallelSafeTag, payloadTag}
 
-	// The tags that say what CALLING a tool does. Each one qualifies `@tool`, so
-	// any of them written without it is a statement about nothing.
-	qualifyingTags = []string{effectsTag, retryTag, disclosesTag}
+	// The names that make up the STATEMENT, which is every claimed name except
+	// the one that only says where to read the schema from.
+	statementTags = []string{toolTag, shortDescTag, useWhenTag, parallelSafeTag}
 
-	effectValues = []string{"read", "orchestration", "write", "destructive", "external", "credential"}
-
-	retryValues = []string{"safe", "keyed", "verify-first", "never"}
-
-	disclosesValues = []string{"tenant_record", "settings_field", "credential_field", "secret_field"}
+	// The tags that qualify `@tool`. Either one written without it is a statement
+	// about nothing.
+	qualifyingTags = []string{shortDescTag, useWhenTag}
 )
 
 type exposureTag struct {
@@ -100,11 +150,18 @@ type docContent struct {
 // where this object exists at all — it is how the artifact renders the presence
 // of a modifier tag, so a reader of action.json alone sees the same statement
 // the source makes.
+//
+// The member order is the file format rather than a style choice, and it is the
+// order the other generator writes too. `usewhen` is absent rather than empty
+// when the author wrote none, so a reader is never handed an empty list to tell
+// apart from an unstated one; `shortdesc` is never absent, because a statement
+// without one is refused. `parallelsafe` is present only when written and never
+// `false`: an unmarked tool is simply not parallel-safe.
 type aiMetadata struct {
-	Tool      bool     `json:"tool"`
-	Effects   []string `json:"effects,omitempty"`
-	Retry     string   `json:"retry,omitempty"`
-	Discloses string   `json:"discloses,omitempty"`
+	Tool         bool     `json:"tool"`
+	ShortDesc    string   `json:"shortdesc"`
+	UseWhen      []string `json:"usewhen,omitempty"`
+	ParallelSafe bool     `json:"parallelsafe,omitempty"`
 }
 
 type Schema struct {
@@ -406,7 +463,11 @@ func splitDoc(text string) docContent {
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 
-		if strings.HasPrefix(trimmed, payloadAnnotation) {
+		// Matched as the whole name rather than as a prefix. `@Payloadd` starts
+		// with `@Payload`, so a prefix test read it as this annotation and took
+		// the struct name from a line whose author had mistyped the tag — which
+		// is the one line the misspelling rule below exists to refuse.
+		if name, tagged := docLineTagName(trimmed); tagged && name == payloadTag {
 			if parts := strings.Fields(trimmed); len(parts) >= 2 {
 				content.payloadStruct = parts[1]
 			}
@@ -433,11 +494,11 @@ func splitDoc(text string) docContent {
 	return content
 }
 
-// One doc-comment line read as an exposure annotation, or left to the
+// One doc-comment line read as part of the exposure statement, or left to the
 // description.
 func exposureTagFromDocLine(line string) (exposureTag, bool) {
 	name, tagged := docLineTagName(line)
-	if !tagged || !contains(exposureTags, name) {
+	if !tagged || !contains(statementTags, name) {
 		return exposureTag{}, false
 	}
 
@@ -449,18 +510,17 @@ func exposureTagFromDocLine(line string) (exposureTag, bool) {
 
 // One doc-comment line read as a claimed name its author mistyped.
 //
-// Only a name NOTHING claims is a candidate: `@Payload` is this generator's, and
-// a tag some other reader of the comment claims is that reader's business. What
-// is left is a line an author wrote as an annotation that no reader will ever
-// hear, and the whole point of the vocabulary is that such a line cannot pass
-// silently.
+// Only a name NOTHING claims is a candidate: a tag some other reader of the
+// comment claims is that reader's business. What is left is a line an author
+// wrote as an annotation that no reader will ever hear, and the whole point of
+// the vocabulary is that such a line cannot pass silently.
 func misspelledTagFromDocLine(line string) (misspelledTag, bool) {
 	name, tagged := docLineTagName(line)
-	if !tagged || name == strings.TrimPrefix(payloadAnnotation, "@") || contains(exposureTags, name) {
+	if !tagged || contains(actionTags, name) {
 		return misspelledTag{}, false
 	}
 
-	for _, claimed := range exposureTags {
+	for _, claimed := range actionTags {
 		if withinOneEdit(name, claimed) {
 			return misspelledTag{written: name, meant: claimed}, true
 		}
@@ -534,9 +594,9 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 	// to add a tag they have already written.
 	//
 	// Refused even where the action declares nothing else, which is the case
-	// that shipped. A lone mistyped `@discloses` left the action carrying the
-	// loosest class by default and the line itself in the description, and
-	// nothing anywhere said so.
+	// that shipped. A lone mistyped tag left the line itself in the description
+	// and nothing anywhere said so.
+	//
 	// The first one written, so fixing it and running again surfaces the next
 	// rather than a list an author has to work through in one pass.
 	if len(statement.misspelled) > 0 {
@@ -544,16 +604,30 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 
 		return nil, annotationError(action,
 			fmt.Sprintf("writes @%s, which nothing claims and which is one edit from @%s",
-				near.written, near.meant), prefixed(exposureTags))
+				near.written, near.meant), prefixed(actionTags))
 	}
 
 	if len(statement.tags) == 0 {
 		return nil, nil
 	}
 
+	present := map[string]bool{}
 	declared := map[string]string{}
 
+	var useWhen []string
+
+	// `@usewhen` is the one repeatable name, so it is collected rather than
+	// refused. Everything else may be written once: a second `@shortdesc` is two
+	// answers to one question, and picking either is deciding on the author's
+	// behalf which sentence they meant.
 	for _, tag := range statement.tags {
+		present[tag.name] = true
+
+		if tag.name == useWhenTag {
+			useWhen = append(useWhen, tag.value)
+			continue
+		}
+
 		if _, seen := declared[tag.name]; seen {
 			return nil, annotationError(action,
 				fmt.Sprintf("@%s is declared more than once", tag.name), nil)
@@ -562,21 +636,39 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 		declared[tag.name] = tag.value
 	}
 
+	// `@parallelsafe` IS THE ONE STATEMENT REFUSED WITHOUT `@tool`.
+	//
+	// It says how the host may dispatch a tool, so on an action that is not one
+	// it says something nobody will act on. Dropping it the way the listing tags
+	// are dropped would also hide the likeliest cause: an author who wrote both
+	// tags and lost `@tool` has an action that quietly stopped being callable.
+	parallelValue, parallelSafe := declared[parallelSafeTag]
+	if _, marked := declared[toolTag]; parallelSafe && !marked {
+		return nil, annotationError(action,
+			fmt.Sprintf("@%s says how a tool may be dispatched, and this action is not a tool. Write @%s to expose it, or delete @%s",
+				parallelSafeTag, toolTag, parallelSafeTag), nil)
+	}
+
+	// NOTHING ELSE IS ASKED OF AN ACTION THAT IS NOT A TOOL.
+	//
+	// `@shortdesc` and `@usewhen` describe a tool to a model choosing between
+	// tools. An action that never enters that listing has no use for either, so
+	// writing one without `@tool` is not an error to refuse — it is a statement
+	// about nothing, and the action simply gets no exposure block.
+	//
+	// The lines themselves do not reach the description. They are claimed names,
+	// so they were already lifted out of the prose before this ran, and they are
+	// dropped here rather than written anywhere. An author who wrote them and
+	// omitted `@tool` gets a clean description and an action that is not a tool —
+	// which is what they said, if not what they meant.
+	//
+	// That is the trade, and it is deliberate. Refusing here used to catch a
+	// dropped `@tool` as a side effect; nothing catches it now unless the action
+	// also wrote `@parallelsafe`. The near-miss rule still refuses `@toool`, but
+	// no rule can refuse an absence.
 	value, marked := declared[toolTag]
 	if !marked {
-		// Named in vocabulary order rather than in the order they were declared,
-		// so the same source is refused with the same sentence every time.
-		var written []string
-
-		for _, tag := range qualifyingTags {
-			if _, qualified := declared[tag]; qualified {
-				written = append(written, tag)
-			}
-		}
-
-		return nil, annotationError(action,
-			fmt.Sprintf("declares %s without @%s, so it is not a tool and the rest says nothing",
-				strings.Join(prefixed(written), ", "), toolTag), nil)
+		return nil, nil
 	}
 
 	// A modifier tag is its own statement. A value written after one is an
@@ -584,76 +676,72 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 	// the boolean this tag used to take, whose `false` no longer says anything.
 	if value != "" {
 		return nil, annotationError(action,
-			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries %q. Leave it bare to expose the action, or delete it to leave the action unexposed",
+			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries \"%s\". Leave it bare to expose the action, or delete it to leave the action unexposed",
 				toolTag, value), nil)
 	}
 
-	rawEffects, stated := declared[effectsTag]
+	// The same rule for the other modifier tag. A value here is most likely an
+	// author qualifying the claim — `@parallelsafe reads only` — and the claim
+	// has no qualified form: a tool either may run beside the others or may not.
+	if parallelSafe && parallelValue != "" {
+		return nil, annotationError(action,
+			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries \"%s\". Leave it bare to let the tool run beside other parallel-safe calls, or delete it to run it alone",
+				parallelSafeTag, parallelValue), nil)
+	}
+
+	// Required, and with no default to fall back to. The listing an agent chooses
+	// from carries this line and the prose arrives only after it has chosen, so a
+	// tool without one is offered as a name and nothing else — and a default
+	// written here would be this program describing an action it has not read.
+	shortDesc, stated := declared[shortDescTag]
 	if !stated {
 		return nil, annotationError(action,
-			fmt.Sprintf("is a tool and must declare @%s", effectsTag), effectValues)
+			fmt.Sprintf("is a tool and must declare @%s", shortDescTag), nil)
 	}
 
-	effects, err := parseEffects(action, rawEffects)
-	if err != nil {
-		return nil, err
-	}
-
-	retry, stated := declared[retryTag]
-	if !stated {
+	if shortDesc == "" {
 		return nil, annotationError(action,
-			fmt.Sprintf("is a tool and must declare @%s", retryTag), retryValues)
+			fmt.Sprintf("@%s is written with nothing after it", shortDescTag), nil)
 	}
 
-	if !contains(retryValues, retry) {
+	for _, line := range useWhen {
+		if line == "" {
+			return nil, annotationError(action,
+				fmt.Sprintf("@%s is written with nothing after it", useWhenTag), nil)
+		}
+	}
+
+	// COUNTED IN CHARACTERS, WHICH IS WHAT THE REFUSAL SAYS AND WHAT THE OTHER
+	// GENERATOR COUNTS. A byte count would refuse a shorter line for carrying an
+	// accent or an em dash, and the two generators would then disagree about the
+	// same sentence — in the direction where the Go author is told a number they
+	// cannot see in their own source.
+	if utf8.RuneCountInString(shortDesc) > shortDescChars {
 		return nil, annotationError(action,
-			fmt.Sprintf("@%s takes %q", retryTag, retry), retryValues)
+			fmt.Sprintf("writes a @%s of %d characters and a listing carries at most %d. Say the rest in the prose, which is read once the tool is chosen",
+				shortDescTag, utf8.RuneCountInString(shortDesc), shortDescChars), nil)
 	}
 
-	discloses, stated := declared[disclosesTag]
-	if !stated {
-		discloses = defaultDiscloses
-	}
-
-	if !contains(disclosesValues, discloses) {
+	if len(useWhen) > useWhenLimit {
 		return nil, annotationError(action,
-			fmt.Sprintf("@%s takes %q", disclosesTag, discloses), disclosesValues)
+			fmt.Sprintf("declares %d @%s lines and a listing carries at most %d. Say the rest in the prose, which is read once the tool is chosen",
+				len(useWhen), useWhenTag, useWhenLimit), nil)
+	}
+
+	for _, line := range useWhen {
+		if utf8.RuneCountInString(line) > useWhenChars {
+			return nil, annotationError(action,
+				fmt.Sprintf("writes a @%s of %d characters and each carries at most %d. A trigger is one line; the prose holds what it does",
+					useWhenTag, utf8.RuneCountInString(line), useWhenChars), nil)
+		}
 	}
 
 	return &aiMetadata{
-		Tool:      true,
-		Effects:   effects,
-		Retry:     retry,
-		Discloses: discloses,
+		Tool:         true,
+		ShortDesc:    shortDesc,
+		UseWhen:      useWhen,
+		ParallelSafe: parallelSafe,
 	}, nil
-}
-
-func parseEffects(action, raw string) ([]string, error) {
-	effects := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t'
-	})
-
-	if len(effects) == 0 {
-		return nil, annotationError(action, fmt.Sprintf("@%s names no effect", effectsTag), effectValues)
-	}
-
-	seen := map[string]bool{}
-
-	for _, effect := range effects {
-		if !contains(effectValues, effect) {
-			return nil, annotationError(action,
-				fmt.Sprintf("@%s names an unknown effect %q", effectsTag, effect), effectValues)
-		}
-
-		if seen[effect] {
-			return nil, annotationError(action,
-				fmt.Sprintf("@%s names %q twice", effectsTag, effect), effectValues)
-		}
-
-		seen[effect] = true
-	}
-
-	return effects, nil
 }
 
 // The status a refused exposure statement exits with, told apart from every
@@ -898,8 +986,8 @@ func (p *schemaParser) parseStruct(st *ast.StructType) Schema {
 
 		// Split like every other description, rather than trimmed and kept whole.
 		// The grammar's lines are removed in the one place that knows the
-		// grammar, and a description that skipped it shipped `@effects
-		// destructive` to a model as a sentence about what the field means.
+		// grammar, and a description that skipped it shipped `@usewhen the user
+		// asks` to a model as a sentence about what the field means.
 		if field.Doc != nil {
 			propSchema.Description = splitDoc(field.Doc.Text()).description
 		} else if field.Comment != nil {

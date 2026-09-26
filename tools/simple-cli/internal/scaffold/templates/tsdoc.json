@@ -4,6 +4,7 @@
     { "tagName": "@tool", "syntaxKind": "modifier" },
     { "tagName": "@shortdesc", "syntaxKind": "block" },
     { "tagName": "@usewhen", "syntaxKind": "block", "allowMultiple": true },
+    { "tagName": "@parallelsafe", "syntaxKind": "modifier" },
     { "tagName": "@Payload", "syntaxKind": "block" }
   ]
 }

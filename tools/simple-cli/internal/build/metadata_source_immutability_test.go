@@ -59,8 +59,7 @@ export interface Payload {
 			"// Writes things.\n" +
 			"//\n" +
 			"// @tool\n" +
-			"// @effects write, destructive\n" +
-			"// @retry never\n" +
+			"// @shortdesc Writes things by name.\n" +
 			"//\n" +
 			"// @Payload Input\n" +
 			"func handler() {}\n\n" +

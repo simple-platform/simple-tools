@@ -458,3 +458,111 @@ simple.Handle(() => ({ ok: true }))
 			described, metadata.description())
 	}
 }
+
+// writeTSAction is an action directory holding one TypeScript source.
+func writeTSAction(t *testing.T, name, source string) string {
+	t.Helper()
+
+	actionDir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(actionDir, 0755); err != nil {
+		t.Fatalf("failed to create the action directory: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(actionDir, "index.ts"), []byte(source), 0644); err != nil {
+		t.Fatalf("failed to write the action source: %v", err)
+	}
+
+	return actionDir
+}
+
+// tsActionStating is a TypeScript action whose doc comment carries these lines.
+func tsActionStating(statement string) string {
+	return `/**
+ * Reads things.
+ *
+` + statement + `
+ */
+export interface Payload {
+  name: string;
+}
+`
+}
+
+// THE SAME REFUSALS, THROUGH THE TYPESCRIPT PATH.
+//
+// Every language is refused by one list of cases, because there is one
+// vocabulary. This path had no refusal pinned at all, which is how its copy of
+// the generator came to refuse what the platform's accepts without any test
+// here noticing.
+func TestExtractTypeScriptMetadataRefusesAMalformedExposureStatement(t *testing.T) {
+	requireGenerator(t)
+
+	for _, testCase := range malformedStatementCases(" * ") {
+		t.Run(testCase.name, func(t *testing.T) {
+			actionDir := writeTSAction(t, "query-things", tsActionStating(testCase.statement))
+
+			assertRefused(t, ExtractMetadata(fsx.OSFileSystem{}, actionDir), append([]string{"query-things"}, testCase.want...))
+		})
+	}
+}
+
+// THE LISTING TAGS WITHOUT `@tool` ARE DROPPED, NOT REFUSED.
+//
+// This copy of the generator refused them and the platform's dropped them, so
+// the same source failed `simple build` and built on the platform. It runs the
+// platform's generator now, and answers the way that one does.
+func TestExtractTypeScriptMetadataDropsListingTagsWrittenWithoutTool(t *testing.T) {
+	requireGenerator(t)
+
+	actionDir := writeTSAction(t, "query-things", tsActionStating(
+		" * @shortdesc Reads things by name.\n * @usewhen A caller names one thing and wants the row behind it."))
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if _, exposed := metadata["ai"]; exposed {
+		t.Fatalf("an action that is not a tool carried an exposure block: %#v", metadata.object("ai"))
+	}
+
+	if strings.Contains(metadata.description(), "@") {
+		t.Fatalf("the dropped listing tags leaked into the description, got %q", metadata.description())
+	}
+}
+
+// A RETIRED TAG IS PROSE IN TYPESCRIPT TOO.
+func TestExtractTypeScriptMetadataReadsARetiredTagAsProse(t *testing.T) {
+	requireGenerator(t)
+
+	actionDir := writeTSAction(t, "query-things", tsActionStating(
+		" * @tool\n * @shortdesc Reads things by name.\n * @retry safe"))
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected a retired tag not to stop the build, got %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if _, carried := metadata.object("ai")["retry"]; carried {
+		t.Fatalf("a retired tag reached the exposure block: %#v", metadata.object("ai"))
+	}
+
+	if !strings.Contains(metadata.description(), "@retry safe") {
+		t.Fatalf("a line nothing claims was taken out of the author's prose, got %q", metadata.description())
+	}
+}
+
+// THE DISPATCH CLAIM, THROUGH THE TYPESCRIPT PATH.
+func TestExtractTypeScriptMetadataCarriesTheParallelSafeClaimLast(t *testing.T) {
+	requireGenerator(t)
+
+	actionDir := writeTSAction(t, "query-things", tsActionStating(parallelSafeStatement(" * ")))
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	assertParallelSafeClaimCarried(t, actionDir)
+}

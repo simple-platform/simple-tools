@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
@@ -675,11 +676,12 @@ func TestScaffoldedSpaceDeclaresTheExposureVocabulary(t *testing.T) {
 	}
 
 	for _, name := range build.ActionTagNames() {
-		// `@tool` carries no value, so it is a modifier tag; every other name in
-		// the vocabulary carries one, so they are block tags. Declaring a
-		// modifier as a block tag makes TSDoc read the next line as its content.
+		// `@tool` and `@parallelsafe` carry no value, so they are modifier tags;
+		// every other name in the vocabulary carries one, so they are block
+		// tags. Declaring a modifier as a block tag makes TSDoc read the next
+		// line as its content.
 		want := "block"
-		if name == "tool" {
+		if name == "tool" || name == "parallelsafe" {
 			want = "modifier"
 		}
 
@@ -808,5 +810,73 @@ func TestTheScaffoldedRustActionDeclaresThePayloadTheGeneratorLooksFor(t *testin
 	// advertise nothing, which is the failure they exist to catch.
 	if !strings.Contains(string(source), "name: String,") {
 		t.Fatal("a scaffolded Rust action's payload declares no member, so it advertises no input whatever it is called")
+	}
+}
+
+// THE SCAFFOLDED RUST ACTION BUILDS INTO THE STATEMENT ITS TEMPLATE MAKES.
+//
+// The template's comments name every tag an author may write, including the one
+// it deliberately leaves off. A mention is prose only while it is not read as a
+// tag: written at the start of a line it would be a claim no author made, and a
+// near spelling of one would refuse every action scaffolded from here. So the
+// template is put through the generator this binary embeds, exactly as the
+// first `simple build` after `simple new action --lang rust` would.
+func TestTheScaffoldedRustActionIsDescribedAsItsTemplateSays(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	if _, err := build.EnsureCargo(); err != nil {
+		t.Skip("cargo not available, skipping integration test")
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "apps", "com.test"), 0755); err != nil {
+		t.Fatalf("failed to create the app: %v", err)
+	}
+
+	cfg := ActionConfig{
+		AppID:        "com.test",
+		ActionName:   "greet-user",
+		DisplayName:  "Greet User",
+		ExecutionEnv: "server",
+		Language:     LanguageRust,
+	}
+
+	if err := CreateActionStructure(fsx.OSFileSystem{}, TemplatesFS, root, cfg); err != nil {
+		t.Fatalf("failed to scaffold the action: %v", err)
+	}
+
+	actionDir := filepath.Join(root, "apps", "com.test", "actions", "greet-user")
+	if err := build.ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("a freshly scaffolded Rust action does not build: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("failed to read action.json: %v", err)
+	}
+
+	var described struct {
+		Description string         `json:"description"`
+		AI          map[string]any `json:"ai"`
+	}
+
+	if err := json.Unmarshal(raw, &described); err != nil {
+		t.Fatalf("action.json is not JSON: %v", err)
+	}
+
+	if described.AI["tool"] != true {
+		t.Fatalf("the template's @tool did not reach the artifact: %#v", described.AI)
+	}
+
+	// The template leaves the claim to the author, so the action it scaffolds
+	// makes none; the mention in its comment is not read as one.
+	if _, claimed := described.AI["parallelsafe"]; claimed {
+		t.Fatalf("a scaffolded action claims @parallelsafe that its author never wrote: %#v", described.AI)
+	}
+
+	if strings.Contains(described.Description, "@") {
+		t.Fatalf("a tag reached a scaffolded action's description: %q", described.Description)
 	}
 }

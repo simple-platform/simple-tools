@@ -236,39 +236,7 @@ fn handler(request: Request<Payload>) -> Result<Output, Error> {
 func TestRustActionRefusesAMalformedExposureStatement(t *testing.T) {
 	requireRustGenerator(t)
 
-	cases := []struct {
-		name      string
-		statement string
-		want      []string
-	}{
-		{
-			name:      "a qualifier without the modifier it qualifies",
-			statement: "/// @shortdesc Reads things by name.",
-			want:      []string{"query-things", "@shortdesc", "@tool", "says nothing"},
-		},
-		{
-			name:      "a value written after the modifier tag",
-			statement: "/// @tool true\n/// @shortdesc Reads things by name.",
-			want:      []string{"query-things", "modifier tag and takes no value", `"true"`},
-		},
-		{
-			name:      "a tool with no line for the listing to carry",
-			statement: "/// @tool",
-			want:      []string{"query-things", "must declare @shortdesc"},
-		},
-		{
-			name:      "a name one edit from a claimed one",
-			statement: "/// @tool\n/// @shortdes Reads things by name.",
-			want:      []string{"query-things", "@shortdes", "one edit from @shortdesc"},
-		},
-		{
-			name:      "a listing line longer than a listing carries",
-			statement: "/// @tool\n/// @shortdesc Reads things by name.\n/// @usewhen " + strings.Repeat("x", 101),
-			want:      []string{"query-things", "101 characters", "at most 100"},
-		},
-	}
-
-	for _, testCase := range cases {
+	for _, testCase := range malformedStatementCases("/// ") {
 		t.Run(testCase.name, func(t *testing.T) {
 			actionDir := writeRustAction(t, "query-things", `use simpleplatform_sdk::prelude::*;
 `+rustPayloadSource+`
@@ -281,17 +249,68 @@ fn handler(request: Request<Input>) -> Result<Output, Error> {
 }
 `)
 
-			err := ExtractMetadata(fsx.OSFileSystem{}, actionDir)
-			if err == nil {
-				t.Fatal("expected a refusal")
-			}
-
-			for _, want := range testCase.want {
-				if !strings.Contains(err.Error(), want) {
-					t.Fatalf("expected the refusal to mention %q, got %q", want, err.Error())
-				}
-			}
+			assertRefused(t, ExtractMetadata(fsx.OSFileSystem{}, actionDir), append([]string{"query-things"}, testCase.want...))
 		})
+	}
+}
+
+// THE DISPATCH CLAIM, THROUGH THE RUST PATH.
+//
+// The Rust companion hands the claim to the script verbatim and states no
+// opinion about it, so this is where a sync that left the two halves disagreeing
+// about the name would show.
+func TestRustActionCarriesTheParallelSafeClaimLast(t *testing.T) {
+	requireRustGenerator(t)
+
+	actionDir := writeRustAction(t, "query-things", `use simpleplatform_sdk::prelude::*;
+`+rustPayloadSource+`
+/// Reads things.
+///
+`+parallelSafeStatement("/// ")+`
+/// @Payload Input
+fn handler(request: Request<Input>) -> Result<Output, Error> {
+    Ok(Output {})
+}
+`)
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	assertParallelSafeClaimCarried(t, actionDir)
+}
+
+// THE LISTING TAGS WITHOUT `@tool` ARE DROPPED IN RUST AS THEY ARE IN GO.
+//
+// This copy of the generator used to refuse them in Rust while the platform's
+// dropped them, so one source built on one machine and failed on the other.
+func TestRustActionDropsListingTagsWrittenWithoutTool(t *testing.T) {
+	requireRustGenerator(t)
+
+	actionDir := writeRustAction(t, "query-things", `use simpleplatform_sdk::prelude::*;
+`+rustPayloadSource+`
+/// Reads things.
+///
+/// @shortdesc Reads things by name.
+/// @usewhen A caller names one thing and wants the row behind it.
+/// @Payload Input
+fn handler(request: Request<Input>) -> Result<Output, Error> {
+    Ok(Output {})
+}
+`)
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	metadata := generatedActionMetadata(t, actionDir)
+
+	if _, exposed := metadata["ai"]; exposed {
+		t.Fatalf("an action that is not a tool carried an exposure block: %#v", metadata.object("ai"))
+	}
+
+	if strings.Contains(metadata.description(), "@") {
+		t.Fatalf("the dropped listing tags leaked into the description, got %q", metadata.description())
 	}
 }
 

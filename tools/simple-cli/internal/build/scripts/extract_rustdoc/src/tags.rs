@@ -1,13 +1,13 @@
 //! THE ANNOTATIONS THIS GENERATOR READS, AND NONE OF THEM IS THE EXPOSURE
 //! VOCABULARY.
 //!
-//! `@tool`, `@shortdesc` and `@usewhen` are claimed, validated and refused by
-//! the caller that writes `action.json`. They are not claimed here and they are
-//! not refused here. A second copy of a vocabulary is a rule two programs get to
-//! disagree about, and the disagreement is silent — both exit zero, and the
-//! artifact carries whichever answer the last writer produced. So this program
-//! hands over every comment in the file verbatim and states no opinion about
-//! what any of them mean.
+//! `@tool`, `@shortdesc`, `@usewhen` and `@parallelsafe` are claimed, validated
+//! and refused by the caller that writes `action.json`. They are not claimed
+//! here and they are not refused here. A second copy of a vocabulary is a
+//! rule two programs get to disagree about, and the disagreement is silent —
+//! both exit zero, and the artifact carries whichever answer the last writer
+//! produced. So this program hands over every comment in the file verbatim and
+//! states no opinion about what any of them mean.
 //!
 //! WHAT IS LEFT HERE IS WHAT READING RUST REQUIRES, and the caller cannot do it
 //! because it does not parse Rust.
