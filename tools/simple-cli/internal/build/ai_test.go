@@ -60,7 +60,7 @@ func goExtractorActionTags() []string {
 		values[declaration[1]] = declaration[2]
 	}
 
-	names := make([]string, 0, 4)
+	names := make([]string, 0, len(goActionTags))
 
 	for _, member := range strings.Split(vocabulary[1], ",") {
 		member = strings.TrimSpace(member)
@@ -99,7 +99,7 @@ func goExtractorActionTags() []string {
 // Pinning each to its own list is what makes a sync visible: a file arriving
 // with a vocabulary this package was not told about fails here, naming the file,
 // instead of changing what an author may write in silence.
-var goActionTags = []string{"tool", "shortdesc", "usewhen", "Payload"}
+var goActionTags = []string{"tool", "shortdesc", "usewhen", "parallelsafe", "Payload"}
 
 func TestTheGoExtractorClaimsTheVocabularyItOwns(t *testing.T) {
 	claimed := goExtractorActionTags()

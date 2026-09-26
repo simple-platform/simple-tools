@@ -25,12 +25,18 @@ import (
 // an unknown one, which teaches an author the annotation is a mistake at the
 // moment they write the single line that makes their action reachable.
 //
+// `parallelsafe` is the one name written for the host rather than the model: a
+// bare modifier, like `tool`, saying the tool only reads and may run beside the
+// other parallel-safe calls of one batch. It is declared to the editor as a
+// modifier for the same reason `tool` is — TSDoc reads the line after a block
+// tag as that tag's content.
+//
 // `Payload` is one of them although it says nothing about exposure. The
 // generator CLAIMS it — a line writing it is lifted out of the description
 // rather than shipped to a model as prose — and the editor has to be told every
 // name the build claims, or the one place the two disagree is a squiggle under a
 // line the build was perfectly happy with.
-var actionTags = []string{"tool", "shortdesc", "usewhen", "Payload"}
+var actionTags = []string{"tool", "shortdesc", "usewhen", "parallelsafe", "Payload"}
 
 // ActionTagNames is the vocabulary the generator claims, in the order it is
 // documented and without the leading `@`.
@@ -129,7 +135,7 @@ func generatorActionTags() []string {
 		values[declaration[1]] = declaration[2]
 	}
 
-	names := make([]string, 0, 4)
+	names := make([]string, 0, len(actionTags))
 
 	for _, member := range strings.Split(vocabulary[1], ",") {
 		member = strings.TrimSpace(member)

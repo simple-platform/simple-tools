@@ -254,6 +254,32 @@ fn handler(request: Request<Input>) -> Result<Output, Error> {
 	}
 }
 
+// THE DISPATCH CLAIM, THROUGH THE RUST PATH.
+//
+// The Rust companion hands the claim to the script verbatim and states no
+// opinion about it, so this is where a sync that left the two halves disagreeing
+// about the name would show.
+func TestRustActionCarriesTheParallelSafeClaimLast(t *testing.T) {
+	requireRustGenerator(t)
+
+	actionDir := writeRustAction(t, "query-things", `use simpleplatform_sdk::prelude::*;
+`+rustPayloadSource+`
+/// Reads things.
+///
+`+parallelSafeStatement("/// ")+`
+/// @Payload Input
+fn handler(request: Request<Input>) -> Result<Output, Error> {
+    Ok(Output {})
+}
+`)
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	assertParallelSafeClaimCarried(t, actionDir)
+}
+
 // THE LISTING TAGS WITHOUT `@tool` ARE DROPPED IN RUST AS THEY ARE IN GO.
 //
 // This copy of the generator used to refuse them in Rust while the platform's

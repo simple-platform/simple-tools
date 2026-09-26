@@ -388,7 +388,107 @@ func malformedStatementCases(prefix string) []malformedStatement {
 			statement: lines("@tool", "@shortdesc Reads things by name.", "@usewhen "+strings.Repeat("x", 101)),
 			want:      []string{"101 characters", "at most 100"},
 		},
+		{
+			// Refused rather than dropped, unlike the listing tags: an author who
+			// wrote both and lost `@tool` has an action that quietly stopped
+			// being callable, and this is the one line left that says so.
+			name:      "a dispatch claim on an action that is not a tool",
+			statement: lines("@parallelsafe", "@shortdesc Reads things by name."),
+			want:      []string{"@parallelsafe says how a tool may be dispatched", "Write @tool"},
+		},
+		{
+			name:      "a value written after the dispatch claim",
+			statement: lines("@tool", "@shortdesc Reads things by name.", "@parallelsafe reads only"),
+			want:      []string{"@parallelsafe is a modifier tag and takes no value", `"reads only"`},
+		},
+		{
+			name:      "a dispatch claim written twice",
+			statement: lines("@tool", "@shortdesc Reads things by name.", "@parallelsafe", "@parallelsafe"),
+			want:      []string{"@parallelsafe is declared more than once"},
+		},
+		{
+			name:      "the dispatch claim with an underscore",
+			statement: lines("@tool", "@shortdesc Reads things by name.", "@parallel_safe"),
+			want:      []string{"@parallel_safe", "one edit from @parallelsafe"},
+		},
+		{
+			name:      "the dispatch claim with a hyphen",
+			statement: lines("@tool", "@shortdesc Reads things by name.", "@parallel-safe"),
+			want:      []string{"@parallel-safe", "one edit from @parallelsafe"},
+		},
+		{
+			name:      "the dispatch claim in camel case",
+			statement: lines("@tool", "@shortdesc Reads things by name.", "@parallelSafe"),
+			want:      []string{"@parallelSafe", "one edit from @parallelsafe"},
+		},
+		{
+			name:      "the dispatch claim missing a letter",
+			statement: lines("@tool", "@shortdesc Reads things by name.", "@parallelsaf"),
+			want:      []string{"@parallelsaf", "one edit from @parallelsafe"},
+		},
 	}
+}
+
+// parallelSafeStatement is a complete statement carrying the dispatch claim,
+// written FIRST so the position the claim lands in is the file format's and
+// not an echo of the source.
+func parallelSafeStatement(prefix string) string {
+	return prefix + strings.Join([]string{
+		"@parallelsafe",
+		"@usewhen A caller names one thing and wants the row behind it.",
+		"@shortdesc Reads things by name.",
+		"@tool",
+	}, "\n"+prefix)
+}
+
+// wantParallelSafeBlock is the `ai` block every language writes for
+// parallelSafeStatement, byte for byte: `parallelsafe` is the last member, and
+// it is `true` because it is present at all.
+const wantParallelSafeBlock = "\"ai\": {\n    \"tool\": true,\n    \"shortdesc\": \"Reads things by name.\",\n    \"usewhen\": [\n      \"A caller names one thing and wants the row behind it.\"\n    ],\n    \"parallelsafe\": true\n  }"
+
+// assertParallelSafeClaimCarried holds an action.json to the dispatch claim its
+// source made.
+func assertParallelSafeClaimCarried(t *testing.T, actionDir string) {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("failed to read action.json: %v", err)
+	}
+
+	if !strings.Contains(string(data), wantParallelSafeBlock) {
+		t.Fatalf("expected the exposure statement written as\n%s\ngot\n%s", wantParallelSafeBlock, data)
+	}
+
+	if description := generatedActionMetadata(t, actionDir).description(); strings.Contains(description, "@") {
+		t.Fatalf("expected the claim to be lifted out of the description, got %q", description)
+	}
+}
+
+// THE DISPATCH CLAIM REACHES THE ARTIFACT AS THE HOST READS IT.
+//
+// `@parallelsafe` is the one tag written for the host rather than the model:
+// it says the tool only reads and may run beside the other parallel-safe calls
+// of one batch. The host honours it only when the member is exactly `true`, so
+// the shape is the contract — last in the block, present only when written.
+func TestGoActionCarriesTheParallelSafeClaimLast(t *testing.T) {
+	requireGenerator(t)
+
+	actionDir := writeGoAction(t, "query-things", `package main
+
+// Reads things.
+//
+`+parallelSafeStatement("// ")+`
+//
+// @Payload Input
+func handler() {}
+`+payloadStructSource)
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	assertParallelSafeClaimCarried(t, actionDir)
 }
 
 // assertRefused holds a refusal to every word an author needs from it.

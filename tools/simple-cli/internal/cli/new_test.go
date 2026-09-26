@@ -446,6 +446,7 @@ func TestNewActionCmd_Rust(t *testing.T) {
 		"@tool",
 		"@shortdesc",
 		"@usewhen",
+		"`@parallelsafe`",
 		"simple::run(handler)",
 		"#[cfg(test)]",
 		"/// Greets a person by name",

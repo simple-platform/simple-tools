@@ -27,12 +27,13 @@ does on the platform.
 export interface Payload { site_id: string }
 ```
 
-| tag          | kind     | required                | what it carries                                                     |
-| ------------ | -------- | ----------------------- | ------------------------------------------------------------------- |
-| `@tool`      | modifier | —                       | nothing: the tag carries no value                                   |
-| `@shortdesc` | block    | when `@tool` is present | the one line a tool listing shows, at most 300 characters           |
-| `@usewhen`   | block    | optional, repeatable    | when to reach for the tool, at most 10 lines of 100 characters each |
-| `@Payload`   | block    | optional                | the name of the type the input schema is read from                  |
+| tag             | kind     | required                    | what it carries                                                     |
+| --------------- | -------- | --------------------------- | ------------------------------------------------------------------- |
+| `@tool`         | modifier | —                           | nothing: the tag carries no value                                   |
+| `@shortdesc`    | block    | when `@tool` is present     | the one line a tool listing shows, at most 300 characters           |
+| `@usewhen`      | block    | optional, repeatable        | when to reach for the tool, at most 10 lines of 100 characters each |
+| `@parallelsafe` | modifier | optional, only with `@tool` | nothing: the tool only reads, so it may run beside other reads      |
+| `@Payload`      | block    | optional                    | the name of the type the input schema is read from                  |
 
 `@shortdesc` and `@usewhen` are written for the **model**: the listing an agent
 chooses from carries them on every turn, and the doc comment's own prose arrives
@@ -48,6 +49,51 @@ a sentence about what the action does.
 
 A tool's revision is **not** in this vocabulary. The host pins it, so there is
 nothing here for an author to get wrong about it.
+
+### `@parallelsafe`: a claim about concurrency and nothing else
+
+Write `@parallelsafe` when the tool **only reads**: it changes no stored data,
+sends nothing outward, and starts no other action that does. It is the one tag
+written for the **host** rather than the model — the listing a model chooses
+from does not show it — and it lets the host run the call at the same time as
+the other parallel-safe calls of the same batch.
+
+```ts
+/**
+ * Reads the risk register for a site.
+ *
+ * @tool
+ * @shortdesc Read the risk register for one site.
+ * @parallelsafe
+ */
+```
+
+The same line works in every language: ` * @parallelsafe` in a TypeScript JSDoc
+block, `// @parallelsafe` in a Go comment, `/// @parallelsafe` in a Rust doc
+comment. In Rust it belongs to the action, not to a payload member:
+`#[simple(parallelsafe)]` is refused by the SDK macro, as `tool`, `shortdesc`
+and `usewhen` are.
+
+**What it controls:** only whether a call may overlap others. Consecutive
+parallel-safe calls in a batch form one group that runs together, and their
+results come back in the order the model asked for them. Every other call runs
+alone, in the place the model put it; reads are never moved ahead of a write.
+
+**What it never controls:** retry and effects. A parallel-safe call is still one
+whose effect the host does not know, so what a model is told a failed call did
+to stored data is unchanged, and a failed call is never retried because it
+carries the tag.
+
+**Nothing checks it, and a wrong claim is the author's.** The build cannot tell
+whether a tool only reads, and the platform does not try. A tool that writes
+while claiming `@parallelsafe` can overlap another call of its group, so a read
+beside it may see the data before or after the write. That is a defect in the
+action, not a broken platform guarantee.
+
+It is admitted knowing why the three retired tags below were removed: an author
+claim that let a host **repeat** an effect was a hole. `@parallelsafe` is a
+claim of the same unverifiable kind, bounded so that hole stays closed — it
+governs overlap only.
 
 ### What an author no longer writes
 
@@ -86,6 +132,10 @@ always the boolean this tag used to take, and a vocabulary that quietly accepts
 the old spelling is one nobody finishes migrating — with `@tool false` reading as
 an exposed action.
 
+`@parallelsafe` is a modifier for the same reason. A tool either may run beside
+other reads or may not; `@parallelsafe reads only` qualifies a claim that has no
+qualified form, so a value on it is refused too.
+
 ## `tsdoc.json`, and what is standards-aligned here
 
 TypeScript has a documentation-comment standard, and these tags are declared to
@@ -98,6 +148,7 @@ it. A space carries a `tsdoc.json` at its root, written by `simple init`:
     { "tagName": "@tool", "syntaxKind": "modifier" },
     { "tagName": "@shortdesc", "syntaxKind": "block" },
     { "tagName": "@usewhen", "syntaxKind": "block", "allowMultiple": true },
+    { "tagName": "@parallelsafe", "syntaxKind": "modifier" },
     { "tagName": "@Payload", "syntaxKind": "block" }
   ]
 }
@@ -182,6 +233,8 @@ which state the same text.
 
 ## What the build writes
 
+For the risk-register tool above, also marked `@parallelsafe`:
+
 ```json
 {
   "description": "Reads the risk register for a site.",
@@ -192,13 +245,17 @@ which state the same text.
     "usewhen": [
       "The user asks which risks a site carries.",
       "A plan needs the open risks before it schedules work."
-    ]
+    ],
+    "parallelsafe": true
   }
 }
 ```
 
-The member order is the file format: `tool`, `shortdesc`, `usewhen`. `usewhen`
-is absent rather than empty when none is written. An action that is not a tool
+The member order is the file format: `tool`, `shortdesc`, `usewhen`,
+`parallelsafe`. `usewhen` is absent rather than empty when none is written, and
+`parallelsafe` is present only when written — never `false`, because an unmarked
+tool is simply not parallel-safe. The host honours it only when it is exactly
+`true`. An action that is not a tool
 carries no `ai` key at all — including one that writes `@shortdesc` or
 `@usewhen` without `@tool`: those describe a tool to a model, an action that is
 not one never enters the listing, and the lines are dropped rather than refused.
@@ -211,13 +268,18 @@ host reading `action.json` alone sees the same statement the source makes.
 Anything short of a complete, well-formed statement fails the build, because a
 half-read annotation is how an action ends up advertised as something it is not:
 
-- `@tool` carrying a value
+- `@tool` or `@parallelsafe` carrying a value
+- `@parallelsafe` without `@tool` — unlike the listing tags it is refused rather
+  than dropped, because a dispatch claim on an action that is not a tool is one
+  nobody acts on, and an author who wrote both and lost `@tool` is otherwise told
+  nothing
 - `@tool` without a `@shortdesc`, or a `@shortdesc` or `@usewhen` with nothing
   after it
 - a `@shortdesc` over 300 characters, more than 10 `@usewhen` lines, or one over
   100 characters
 - the same tag declared twice, except `@usewhen`
-- a name one edit away from a tag above — `@toool`, `@shortdes`, `@Payloud` —
+- a name one edit away from a tag above — `@toool`, `@shortdes`, `@Payloud`,
+  `@parallel_safe`, `@parallelSafe` —
   which no reader would ever hear, and which the author plainly wrote to be
   heard
 

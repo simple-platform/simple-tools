@@ -5,9 +5,9 @@
 //! read off the payload type, every comment in the file, and the things the
 //! schema could not say. Four members, and no fifth.
 //!
-//! IT STATES NOTHING ABOUT THE TAG VOCABULARY. `@tool`, `@shortdesc` and
-//! `@usewhen` are claimed, validated and refused by the caller, which is the
-//! program that writes `action.json`. That is why the comments travel out
+//! IT STATES NOTHING ABOUT THE TAG VOCABULARY. `@tool`, `@shortdesc`,
+//! `@usewhen` and `@parallelsafe` are claimed, validated and refused by the
+//! caller, which is the program that writes `action.json`. That is why the comments travel out
 //! whole and the description travels out RAW, with every annotation line still
 //! where its author wrote it: the caller lifts its own lines out, once. A
 //! second copy of the vocabulary here would be a rule two programs get to

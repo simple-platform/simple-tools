@@ -35,9 +35,24 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // The doc comment's own prose is neither, and it is not touched: it is the full
 // contract, and it arrives when the tool is selected rather than in the listing.
 //
+// `@parallelsafe` is the one name written for the HOST. It is a modifier tag
+// like `@tool`, it is valid only where `@tool` is, and it says one thing: this
+// tool only reads — it changes no stored data and sends nothing outward — so
+// the host may run it at the same time as the other parallel-safe calls of one
+// batch. It governs concurrency and nothing else. It never makes a call
+// retryable and it never states what a call did to stored data; the host still
+// treats every call as one whose effect it does not know. Nothing verifies the
+// claim: the author owns it, and a tool that writes while claiming it is the
+// author's defect, not something this generator can see.
+//
+// It is refused rather than dropped when `@tool` is absent, unlike the two
+// listing tags. A dispatch statement on an action that is not a tool is a
+// statement nobody acts on, and an author who wrote both and lost `@tool` is
+// otherwise told nothing.
+//
 // `@Payload` is claimed too, though it states nothing about exposure: it names
 // the type the schema is read from, so an author may point at a type not called
-// `Payload`. It is claimed for the same reason the other three are — this
+// `Payload`. It is claimed for the same reason the other four are — this
 // generator READS it, and a directive to this generator that stayed in the
 // prose would be shipped to a model as a sentence about what the action does.
 // Claiming it also puts `@Payloud` in front of the misspelling rule below, where
@@ -49,10 +64,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // were not relocated: a host-side table holding effects, retry safety and
 // disclosure origin was designed, built, and deleted the same day, so nothing
 // downstream states these about a tool and no action in any language has a way
-// to declare them. This list does not name them, and no list of retired names
-// sits beside it either. An action that writes one is writing prose, and the
-// line stays exactly where its author put it — the same answer this generator
-// gives `@param` or any other name it does not claim.
+// to declare them. `@parallelsafe` does not reopen that: it lets reads overlap,
+// and it changes neither what a failed call is taken to have done to stored
+// data nor whether a call may be tried again. This list does not name the
+// three, and no list of retired names sits beside it either. An action that
+// writes one is writing prose, and the line stays exactly where its author put
+// it — the same answer this generator gives `@param` or any other name it does
+// not claim.
 //
 // That is a smaller net than the one the misspelling rule casts, and the two are
 // worth telling apart, because the retired spellings do not land the same way.
@@ -78,9 +96,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TOOL_TAG = 'tool'
 const SHORTDESC_TAG = 'shortdesc'
 const USEWHEN_TAG = 'usewhen'
+const PARALLELSAFE_TAG = 'parallelsafe'
 const PAYLOAD_TAG = 'Payload'
 
-const ACTION_TAGS = [TOOL_TAG, SHORTDESC_TAG, USEWHEN_TAG, PAYLOAD_TAG]
+const ACTION_TAGS = [TOOL_TAG, SHORTDESC_TAG, USEWHEN_TAG, PARALLELSAFE_TAG, PAYLOAD_TAG]
 
 // The type a schema is read from when the source names none.
 const DEFAULT_PAYLOAD_TYPE = 'Payload'
@@ -236,7 +255,7 @@ function applySourceDescriptions(schema, description, type) {
 // Rust action did not, and the two were told apart by nothing an author could
 // see: the same doc comment was refused in one language and advertised in
 // another, both at exit 0. With the three host-facing tags gone, what is left is
-// the same four names, the same widths and the same refusals in the same order,
+// the same five names, the same widths and the same refusals in the same order,
 // so keeping two copies of them would only be keeping somewhere for the
 // languages to drift apart.
 //
@@ -297,7 +316,21 @@ function buildAiMetadata(action, tags, misspellings) {
     declared.set(tag.name, tag.value)
   }
 
-  // NOTHING IS ASKED OF AN ACTION THAT IS NOT A TOOL.
+  // `@parallelsafe` IS THE ONE STATEMENT REFUSED WITHOUT `@tool`.
+  //
+  // It says how the host may dispatch a tool, so on an action that is not one
+  // it says something nobody will act on. Dropping it the way the listing tags
+  // are dropped would also hide the likeliest cause: an author who wrote both
+  // tags and lost `@tool` has an action that quietly stopped being callable.
+  if (declared.has(PARALLELSAFE_TAG) && !declared.has(TOOL_TAG)) {
+    throw annotationError(
+      action,
+      `@${PARALLELSAFE_TAG} says how a tool may be dispatched, and this action is not a tool. `
+      + `Write @${TOOL_TAG} to expose it, or delete @${PARALLELSAFE_TAG}`,
+    )
+  }
+
+  // NOTHING ELSE IS ASKED OF AN ACTION THAT IS NOT A TOOL.
   //
   // `@shortdesc` and `@usewhen` describe a tool to a model choosing between
   // tools. An action that never enters that listing has no use for either, so
@@ -311,8 +344,9 @@ function buildAiMetadata(action, tags, misspellings) {
   // which is what they said, if not what they meant.
   //
   // That is the trade, and it is deliberate. Refusing here used to catch a
-  // dropped `@tool` as a side effect; nothing catches it now. The near-miss rule
-  // still refuses `@toool`, but no rule can refuse an absence.
+  // dropped `@tool` as a side effect; nothing catches it now unless the action
+  // also wrote `@parallelsafe`. The near-miss rule still refuses `@toool`, but
+  // no rule can refuse an absence.
   if (!declared.has(TOOL_TAG)) {
     return undefined
   }
@@ -327,6 +361,20 @@ function buildAiMetadata(action, tags, misspellings) {
       action,
       `@${TOOL_TAG} is a modifier tag and takes no value, and this one carries "${value}". `
       + 'Leave it bare to expose the action, or delete it to leave the action unexposed',
+    )
+  }
+
+  // The same rule for the other modifier tag. A value here is most likely an
+  // author qualifying the claim — `@parallelsafe reads only` — and the claim
+  // has no qualified form: a tool either may run beside the others or may not.
+  const parallelSafe = declared.has(PARALLELSAFE_TAG)
+  const parallelValue = declared.get(PARALLELSAFE_TAG)
+
+  if (parallelSafe && parallelValue !== '') {
+    throw annotationError(
+      action,
+      `@${PARALLELSAFE_TAG} is a modifier tag and takes no value, and this one carries "${parallelValue}". `
+      + 'Leave it bare to let the tool run beside other parallel-safe calls, or delete it to run it alone',
     )
   }
 
@@ -386,6 +434,12 @@ function buildAiMetadata(action, tags, misspellings) {
     ai.usewhen = whenUse
   }
 
+  // Present only when written, and never `false`: an unmarked tool is simply
+  // not parallel-safe, the same way an unmarked action is not a tool.
+  if (parallelSafe) {
+    ai.parallelsafe = true
+  }
+
   return ai
 }
 
@@ -400,8 +454,8 @@ function buildAiMetadata(action, tags, misspellings) {
 // parser found, heard both. One vocabulary answering differently in two
 // languages is two vocabularies wearing one name.
 //
-// Only the four names are claimed, so reading more comments cannot make an
-// author's prose mean something: a line either is one of the four or is left
+// Only the five names are claimed, so reading more comments cannot make an
+// author's prose mean something: a line either is one of the five or is left
 // exactly where it was written.
 function commentsIn(sourceText) {
   const scanner = ts.createScanner(ts.ScriptTarget.Latest, false)
@@ -718,7 +772,7 @@ function rustCompanionOutput(actionDir, rustPath) {
 // This is the same line-wise rule the Go extractor applies, so one authoring
 // pattern is described identically by both generators.
 //
-// Two vocabularies are claimed and only one is returned. The four names above
+// Two vocabularies are claimed and only one is returned. The five names above
 // are this file's own and are what a caller asks for; the schema generator's
 // tags are removed because it has already turned them into CONSTRAINTS, and a
 // constraint stated twice — once as a keyword and once as English — is a member

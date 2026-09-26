@@ -553,3 +553,16 @@ func TestExtractTypeScriptMetadataReadsARetiredTagAsProse(t *testing.T) {
 		t.Fatalf("a line nothing claims was taken out of the author's prose, got %q", metadata.description())
 	}
 }
+
+// THE DISPATCH CLAIM, THROUGH THE TYPESCRIPT PATH.
+func TestExtractTypeScriptMetadataCarriesTheParallelSafeClaimLast(t *testing.T) {
+	requireGenerator(t)
+
+	actionDir := writeTSAction(t, "query-things", tsActionStating(parallelSafeStatement(" * ")))
+
+	if err := ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("expected the action to be described, got %v", err)
+	}
+
+	assertParallelSafeClaimCarried(t, actionDir)
+}

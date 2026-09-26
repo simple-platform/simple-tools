@@ -41,6 +41,17 @@ import (
 // The doc comment's own prose is neither, and it is not touched: it is the full
 // contract, and it arrives when the tool is selected rather than in the listing.
 //
+// `@parallelsafe` is the one name written for the HOST. It is a modifier tag
+// like `@tool`, it is valid only where `@tool` is, and it says one thing: this
+// tool only reads — it changes no stored data and sends nothing outward — so
+// the host may run it at the same time as the other parallel-safe calls of one
+// batch. It governs concurrency and nothing else. It never makes a call
+// retryable and it never states what a call did to stored data. Nothing
+// verifies the claim: the author owns it. Written without `@tool` it is refused
+// rather than dropped, because a dispatch statement on an action that is not a
+// tool is one nobody acts on, and an author who lost `@tool` is otherwise told
+// nothing.
+//
 // `@Payload` states nothing about exposure and is claimed all the same: it names
 // the struct the schema is read from, so a directive to this program that stayed
 // in the prose would be shipped to a model as a sentence about what the action
@@ -52,12 +63,14 @@ import (
 // were not relocated: a host-side table holding effects, retry safety and
 // disclosure origin was designed, built, and deleted the same day, so nothing
 // downstream states these about a tool and no action has a way to declare them.
-// This list does not name them, and no list of retired names sits beside it
-// either. An action that writes one is writing prose, and the line stays exactly
+// `@parallelsafe` does not reopen that: it lets reads overlap, and it changes
+// neither what a failed call is taken to have done to stored data nor whether a
+// call may be tried again. This list does not name the three, and no list of
+// retired names sits beside it either. An action that writes one is writing prose, and the line stays exactly
 // where its author put it — the same answer this program gives any other name it
 // does not claim.
 //
-// Only these four names are claimed as annotations. Every other `@` line is
+// Only these five names are claimed as annotations. Every other `@` line is
 // description, because this vocabulary shares a doc comment with `@param`,
 // `@remarks` and the rest of TSDoc on the other generator, and one that lifted
 // every tag out of the description would delete an author's prose to protect its
@@ -72,10 +85,11 @@ import (
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
 const (
-	toolTag      = "tool"
-	shortDescTag = "shortdesc"
-	useWhenTag   = "usewhen"
-	payloadTag   = "Payload"
+	toolTag         = "tool"
+	shortDescTag    = "shortdesc"
+	useWhenTag      = "usewhen"
+	parallelSafeTag = "parallelsafe"
+	payloadTag      = "Payload"
 )
 
 // A LISTING HAS TO STAY SMALL, SO WHAT DOES NOT FIT IS REFUSED, NEVER DROPPED.
@@ -99,11 +113,11 @@ var (
 	// Every name this program claims, which is also the net the misspelling rule
 	// casts. `@Payload` is in it for both jobs: it is lifted out of the prose
 	// where it is written, and a name one edit from it is refused.
-	actionTags = []string{toolTag, shortDescTag, useWhenTag, payloadTag}
+	actionTags = []string{toolTag, shortDescTag, useWhenTag, parallelSafeTag, payloadTag}
 
 	// The names that make up the STATEMENT, which is every claimed name except
 	// the one that only says where to read the schema from.
-	statementTags = []string{toolTag, shortDescTag, useWhenTag}
+	statementTags = []string{toolTag, shortDescTag, useWhenTag, parallelSafeTag}
 
 	// The tags that qualify `@tool`. Either one written without it is a statement
 	// about nothing.
@@ -141,11 +155,13 @@ type docContent struct {
 // order the other generator writes too. `usewhen` is absent rather than empty
 // when the author wrote none, so a reader is never handed an empty list to tell
 // apart from an unstated one; `shortdesc` is never absent, because a statement
-// without one is refused.
+// without one is refused. `parallelsafe` is present only when written and never
+// `false`: an unmarked tool is simply not parallel-safe.
 type aiMetadata struct {
-	Tool      bool     `json:"tool"`
-	ShortDesc string   `json:"shortdesc"`
-	UseWhen   []string `json:"usewhen,omitempty"`
+	Tool         bool     `json:"tool"`
+	ShortDesc    string   `json:"shortdesc"`
+	UseWhen      []string `json:"usewhen,omitempty"`
+	ParallelSafe bool     `json:"parallelsafe,omitempty"`
 }
 
 type Schema struct {
@@ -620,7 +636,20 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 		declared[tag.name] = tag.value
 	}
 
-	// NOTHING IS ASKED OF AN ACTION THAT IS NOT A TOOL.
+	// `@parallelsafe` IS THE ONE STATEMENT REFUSED WITHOUT `@tool`.
+	//
+	// It says how the host may dispatch a tool, so on an action that is not one
+	// it says something nobody will act on. Dropping it the way the listing tags
+	// are dropped would also hide the likeliest cause: an author who wrote both
+	// tags and lost `@tool` has an action that quietly stopped being callable.
+	parallelValue, parallelSafe := declared[parallelSafeTag]
+	if _, marked := declared[toolTag]; parallelSafe && !marked {
+		return nil, annotationError(action,
+			fmt.Sprintf("@%s says how a tool may be dispatched, and this action is not a tool. Write @%s to expose it, or delete @%s",
+				parallelSafeTag, toolTag, parallelSafeTag), nil)
+	}
+
+	// NOTHING ELSE IS ASKED OF AN ACTION THAT IS NOT A TOOL.
 	//
 	// `@shortdesc` and `@usewhen` describe a tool to a model choosing between
 	// tools. An action that never enters that listing has no use for either, so
@@ -634,8 +663,9 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 	// which is what they said, if not what they meant.
 	//
 	// That is the trade, and it is deliberate. Refusing here used to catch a
-	// dropped `@tool` as a side effect; nothing catches it now. The near-miss rule
-	// still refuses `@toool`, but no rule can refuse an absence.
+	// dropped `@tool` as a side effect; nothing catches it now unless the action
+	// also wrote `@parallelsafe`. The near-miss rule still refuses `@toool`, but
+	// no rule can refuse an absence.
 	value, marked := declared[toolTag]
 	if !marked {
 		return nil, nil
@@ -648,6 +678,15 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 		return nil, annotationError(action,
 			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries %q. Leave it bare to expose the action, or delete it to leave the action unexposed",
 				toolTag, value), nil)
+	}
+
+	// The same rule for the other modifier tag. A value here is most likely an
+	// author qualifying the claim — `@parallelsafe reads only` — and the claim
+	// has no qualified form: a tool either may run beside the others or may not.
+	if parallelSafe && parallelValue != "" {
+		return nil, annotationError(action,
+			fmt.Sprintf("@%s is a modifier tag and takes no value, and this one carries %q. Leave it bare to let the tool run beside other parallel-safe calls, or delete it to run it alone",
+				parallelSafeTag, parallelValue), nil)
 	}
 
 	// Required, and with no default to fall back to. The listing an agent chooses
@@ -698,9 +737,10 @@ func buildAIMetadata(action string, statement docContent) (*aiMetadata, error) {
 	}
 
 	return &aiMetadata{
-		Tool:      true,
-		ShortDesc: shortDesc,
-		UseWhen:   useWhen,
+		Tool:         true,
+		ShortDesc:    shortDesc,
+		UseWhen:      useWhen,
+		ParallelSafe: parallelSafe,
 	}, nil
 }
 
