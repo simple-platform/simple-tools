@@ -432,8 +432,8 @@ simple new action com.mycompany.crm close-lead "Close Lead" \
 ```
 
 **Making an action callable by an agent:** a scaffolded action is not a tool. It
-becomes one when its doc comment says so, with the `@tool`, `@effects`, `@retry`
-and `@discloses` tags the build carries into `action.json` — see
+becomes one when its doc comment says so, with the `@tool`, `@shortdesc` and
+`@usewhen` tags the build carries into `action.json` — see
 [the action exposure vocabulary](docs/action-exposure-vocabulary.md).
 
 ---
