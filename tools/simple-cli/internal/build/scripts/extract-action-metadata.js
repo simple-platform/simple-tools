@@ -9,13 +9,13 @@ import { Project, SyntaxKind, ts } from 'ts-morph'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// THE AUTHOR-FACING EXPOSURE VOCABULARY.
+// THE AUTHOR-FACING VOCABULARY, AND IT IS ONE VOCABULARY FOR EVERY LANGUAGE.
 //
 // An action becomes callable by an agent because its own source says so, one
-// tag per line, anywhere in a comment in the action's main file, once. Carrying
-// it in the source is what lets regeneration keep it: this file rewrites
-// action.json wholesale, so anything added to that file by hand is deleted the
-// next time an author touches the action.
+// tag per line, anywhere in a comment in the action's main file. Carrying it in
+// the source is what lets regeneration keep it: this file rewrites action.json
+// wholesale, so anything added to that file by hand is deleted the next time an
+// author touches the action.
 //
 // Exposure is opt-in and there is no blocklist. An action that declares nothing
 // is not a tool, so a new action is unreachable by an agent until its author
@@ -29,24 +29,61 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // thing: an action is unmarked until its author marks it, the way a symbol is
 // not `@public` until it says so.
 //
-// Only these four names are claimed as annotations. Every other `@` line is
-// description, because this vocabulary shares a doc comment with `@param`,
-// `@remarks` and the rest of TSDoc, and a generator that lifted every tag out of
-// the description would delete an author's prose to protect its own.
+// `@shortdesc` and `@usewhen` are written for the MODEL rather than for the
+// host: the first is the one line a tool listing shows and is REQUIRED wherever
+// `@tool` is, and the second is repeatable and says when to reach for the tool.
+// The doc comment's own prose is neither, and it is not touched: it is the full
+// contract, and it arrives when the tool is selected rather than in the listing.
+//
+// `@Payload` is claimed too, though it states nothing about exposure: it names
+// the type the schema is read from, so an author may point at a type not called
+// `Payload`. It is claimed for the same reason the other three are — this
+// generator READS it, and a directive to this generator that stayed in the
+// prose would be shipped to a model as a sentence about what the action does.
+// Claiming it also puts `@Payloud` in front of the misspelling rule below, where
+// the alternative is a silent fall back to a type of the other name and a schema
+// describing the wrong one.
+//
+// WHAT CALLING A TOOL DOES IS NOT IN THIS VOCABULARY, AND IT IS NOT ANYWHERE
+// ELSE EITHER. `@effects`, `@retry` and `@discloses` are deleted outright. They
+// were not relocated: a host-side table holding effects, retry safety and
+// disclosure origin was designed, built, and deleted the same day, so nothing
+// downstream states these about a tool and no action in any language has a way
+// to declare them. This list does not name them, and no list of retired names
+// sits beside it either. An action that writes one is writing prose, and the
+// line stays exactly where its author put it — the same answer this generator
+// gives `@param` or any other name it does not claim.
+//
+// That is a smaller net than the one the misspelling rule casts, and the two are
+// worth telling apart, because the retired spellings do not land the same way.
+// `@short_desc` is one edit from `@shortdesc`, so it is REFUSED — as a
+// misspelling of a claimed name, which is what an author who has not migrated
+// has in fact written. `@when_use` is seven edits from `@usewhen`, so it is not
+// refused at all and stays in the description like any other sentence. Neither
+// outcome is a statement about the retired vocabulary: they fall out of how far
+// each spelling happens to sit from a name this list does claim.
 //
 // A NAME ONE EDIT AWAY FROM A CLAIMED ONE IS REFUSED RATHER THAN LEFT AS PROSE.
-// tsdoc.json declares these four to the editor and to ESLint, and that was taken
-// here as the answer to a misspelling. It is not one: it reports `@toool` in an
-// editor an author may not be running, it says nothing at build time, and the
-// other generator reads Go doc comments that tsdoc.json does not reach at all —
-// so the same typo stopped nothing in either language. What it costs is silent
-// twice over: the class `@dicloses secret_field` was written to tighten falls
-// back to the loosest one, and the line itself travels into the description a
-// model reads.
+// tsdoc.json declares these names to the editor and to ESLint, and that was
+// taken here as the answer to a misspelling. It is not one: it reports `@toool`
+// in an editor an author may not be running, it says nothing at build time, and
+// the other generator reads Go doc comments that tsdoc.json does not reach at
+// all — so the same typo stopped nothing in either language. What it costs is
+// silent twice over: an action that meant to say `@shortdes` is offered to a
+// model as a name and nothing else, and the line itself travels into the
+// description that model reads.
 //
 // The host, not the author, pins a tool's revision: it is not in this
 // vocabulary and there is nothing here for an author to get wrong about it.
 const TOOL_TAG = 'tool'
+const SHORTDESC_TAG = 'shortdesc'
+const USEWHEN_TAG = 'usewhen'
+const PAYLOAD_TAG = 'Payload'
+
+const ACTION_TAGS = [TOOL_TAG, SHORTDESC_TAG, USEWHEN_TAG, PAYLOAD_TAG]
+
+// The type a schema is read from when the source names none.
+const DEFAULT_PAYLOAD_TYPE = 'Payload'
 
 // THE TAGS THE SCHEMA GENERATOR TURNS INTO A CONSTRAINT, ASKED OF IT RATHER
 // THAN LISTED HERE.
@@ -87,42 +124,9 @@ const SCHEMA_TAGS = new Set([
 // exited zero.
 SCHEMA_TAGS.delete('description')
 
-// THE VOCABULARY A RUST ACTION IS AUTHORED IN.
-//
-// Three tags on the action and nothing else. `@tool` is the same modifier tag
-// the vocabulary above claims — bare, presence-only, and refused if a value
-// follows it. The other two are written for the MODEL rather than for the host:
-// `@short_desc` is the one line a tool listing shows, and `@when_use` is
-// repeatable and says when to reach for it. The doc comment's own prose is not
-// in this list and is not touched: it is the full contract, and it arrives when
-// the tool is selected rather than in the listing.
-//
-// `@Payload` is claimed too, though it states nothing about exposure: it names
-// the struct the schema is read from, so an author may point at a type not
-// called `Payload`. It is claimed for the same reason the three are — this
-// generator READS it, and a directive to this generator that stayed in the
-// prose would be shipped to a model as a sentence about what the action does.
-// Claiming it also puts `@Payloud` in front of the misspelling rule below,
-// where the alternative is a silent fall back to a struct of the other name and
-// a schema describing the wrong type.
-//
-// WHAT CALLING A TOOL DOES IS NOT IN THIS VOCABULARY. `@effects`, `@retry` and
-// `@discloses` are facts the host states in its own table, about a tool it
-// already knows. They are simply not claimed here, so a line writing one is
-// prose like any other unclaimed `@name`.
-const SHORTDESC_TAG = 'shortdesc'
-const USEWHEN_TAG = 'usewhen'
-const PAYLOAD_TAG = 'Payload'
-
-const ACTION_TAGS = [TOOL_TAG, SHORTDESC_TAG, USEWHEN_TAG, PAYLOAD_TAG]
-
-// The tags that qualify `@tool` in Rust. Either one written without it is a
-// statement about nothing, the same way the three above are.
-const QUALIFYING_TAGS = [SHORTDESC_TAG, USEWHEN_TAG]
-
 // A LISTING HAS TO STAY SMALL, SO WHAT DOES NOT FIT IS REFUSED, NEVER DROPPED.
 //
-// Every `@short_desc` and `@when_use` an action writes is carried into the
+// Every `@shortdesc` and `@usewhen` an action writes is carried into the
 // listing an agent chooses from, and that listing is read in full on every turn.
 // Keeping the first few and discarding the rest would be a cap nobody was told
 // about: the author reads the line in the source, the model never sees it, and
@@ -225,22 +229,34 @@ function applySourceDescriptions(schema, description, type) {
   }
 }
 
-// The exposure statement a RUST action makes about itself, or nothing at all.
+// The exposure statement an action makes about itself, or nothing at all.
 //
-// THE VOCABULARY IS STATED HERE AND NOWHERE ELSE, for the same reason the
-// TypeScript one is: this generator writes action.json, and a rule about what
-// may appear in that file that lives in a second program is a rule two
-// languages get to disagree about. The Go extractor already holds a second copy
-// of the vocabulary above, in Go, and keeping those two agreeing is work that
-// buys nothing. The Rust companion parses Rust — comments, types, serde
+// ONE FUNCTION FOR EVERY LANGUAGE, because there is now one vocabulary. Two
+// existed while a TypeScript or Go action declared what calling it did and a
+// Rust action did not, and the two were told apart by nothing an author could
+// see: the same doc comment was refused in one language and advertised in
+// another, both at exit 0. With the three host-facing tags gone, what is left is
+// the same four names, the same widths and the same refusals in the same order,
+// so keeping two copies of them would only be keeping somewhere for the
+// languages to drift apart.
+//
+// What genuinely differs between the languages is not in here. It is in the
+// readers — which tags a description has already lost to a schema generator, and
+// which type a payload is declared as — and each reader still states its own.
+//
+// THE VOCABULARY IS STATED HERE AND NOWHERE ELSE for the two languages this file
+// reads itself: this generator writes action.json, and a rule about what may
+// appear in that file that lives in a second program is a rule two programs get
+// to disagree about. The Rust companion parses Rust — comments, types, serde
 // attributes — and states no opinion about which tags are claimed, what they
-// mean, or when a source is refused.
+// mean, or when a source is refused. The Go extractor is the one second copy
+// that remains, because it is a second program in a second language, and the
+// suite that drives both generators end to end is what holds them to one answer.
 //
-// Shaped after `buildAiMetadata` and refusing in the same order for the same
-// reasons: a mistyped name first, because it explains a missing tag; then a
-// qualifier without `@tool`; then a value on the modifier tag. The wording is
-// repeated rather than shared, because sharing it would have meant editing the
-// function the other two languages are already refused by.
+// An action that writes no tag gets no `ai` object, which is how every action
+// that is not a tool regenerates unchanged. Anything short of a complete,
+// well-formed statement refuses instead of degrading, because a half-read
+// annotation is how an action ends up advertised as something it is not.
 function buildAiMetadata(action, tags, misspellings) {
   const accepted = ACTION_TAGS.map(tag => `@${tag}`)
   const [refusal] = misspellings
@@ -253,22 +269,21 @@ function buildAiMetadata(action, tags, misspellings) {
     )
   }
 
-  // `@Payload` says which type the schema was read from, which the companion
-  // has already acted on. It is not part of the statement about exposure, and
-  // an action that writes it and nothing else is not making one.
+  // `@Payload` says which type the schema was read from, which the caller has
+  // already acted on. It is not part of the statement about exposure, and an
+  // action that writes it and nothing else is not making one.
   const stated = tags.filter(tag => tag.name !== PAYLOAD_TAG)
 
   if (stated.length === 0) {
     return undefined
   }
 
-  const present = new Set(stated.map(tag => tag.name))
   const whenUse = stated.filter(tag => tag.name === USEWHEN_TAG).map(tag => tag.value)
   const declared = new Map()
 
-  // `@when_use` is the one repeatable name, so it is collected above rather
+  // `@usewhen` is the one repeatable name, so it is collected above rather
   // than refused here. Everything else may be written once: a second
-  // `@short_desc` is two answers to one question, and picking either is
+  // `@shortdesc` is two answers to one question, and picking either is
   // deciding on the author's behalf which sentence they meant.
   for (const tag of stated) {
     if (tag.name === USEWHEN_TAG) {
@@ -282,15 +297,24 @@ function buildAiMetadata(action, tags, misspellings) {
     declared.set(tag.name, tag.value)
   }
 
+  // NOTHING IS ASKED OF AN ACTION THAT IS NOT A TOOL.
+  //
+  // `@shortdesc` and `@usewhen` describe a tool to a model choosing between
+  // tools. An action that never enters that listing has no use for either, so
+  // writing one without `@tool` is not an error to refuse — it is a statement
+  // about nothing, and the action simply gets no exposure block.
+  //
+  // The lines themselves do not reach the description. They are claimed names,
+  // so they were already lifted out of the prose before this ran, and they are
+  // dropped here rather than written anywhere. An author who wrote them and
+  // omitted `@tool` gets a clean description and an action that is not a tool —
+  // which is what they said, if not what they meant.
+  //
+  // That is the trade, and it is deliberate. Refusing here used to catch a
+  // dropped `@tool` as a side effect; nothing catches it now. The near-miss rule
+  // still refuses `@toool`, but no rule can refuse an absence.
   if (!declared.has(TOOL_TAG)) {
-    // Named in vocabulary order rather than in the order they were declared, so
-    // the same source is refused with the same sentence every time.
-    const written = QUALIFYING_TAGS.filter(tag => present.has(tag)).map(tag => `@${tag}`)
-
-    throw annotationError(
-      action,
-      `declares ${written.join(', ')} without @${TOOL_TAG}, so it is not a tool and the rest says nothing`,
-    )
+    return undefined
   }
 
   // A modifier tag is its own statement. A value written after one is an author
@@ -376,9 +400,9 @@ function buildAiMetadata(action, tags, misspellings) {
 // parser found, heard both. One vocabulary answering differently in two
 // languages is two vocabularies wearing one name.
 //
-// Only the four names are claimed and each may be written once, so reading more
-// comments cannot make an author's prose mean something: a line either is one of
-// the four or is left exactly where it was written.
+// Only the four names are claimed, so reading more comments cannot make an
+// author's prose mean something: a line either is one of the four or is left
+// exactly where it was written.
 function commentsIn(sourceText) {
   const scanner = ts.createScanner(ts.ScriptTarget.Latest, false)
   const comments = []
@@ -511,6 +535,19 @@ function normalizeOpenDictionarySchemas(node) {
 
   Object.values(node).forEach(normalizeOpenDictionarySchemas)
 }
+
+// The type a TypeScript action's schema is read from: the one its source names,
+// or the conventional one when it names none.
+//
+// A name that is not written out is not a name this file may guess at, so an
+// action pointing at a type it does not declare is described by the no-input
+// schema — the same answer an action that declares no payload at all gets.
+function payloadTypeNamed(tags) {
+  const named = tags.find(tag => tag.name === PAYLOAD_TAG && tag.value !== '')
+
+  return named ? named.value : DEFAULT_PAYLOAD_TYPE
+}
+
 // A REFUSED SOURCE TAKES ITS STALE OUTPUT WITH IT.
 //
 // action.json is generated wholesale from the source beside it. When the source
@@ -681,17 +718,47 @@ function rustCompanionOutput(actionDir, rustPath) {
 // This is the same line-wise rule the Go extractor applies, so one authoring
 // pattern is described identically by both generators.
 //
-// Two vocabularies are claimed and only one is returned. The exposure tags are
-// this file's own and are what a caller asks for; the schema generator's tags
-// are removed because it has already turned them into CONSTRAINTS, and a
+// Two vocabularies are claimed and only one is returned. The four names above
+// are this file's own and are what a caller asks for; the schema generator's
+// tags are removed because it has already turned them into CONSTRAINTS, and a
 // constraint stated twice — once as a keyword and once as English — is a member
 // documented by whichever one the reader believes. `@description` is the
 // exception and is kept, because it is the one of those that arrives as prose
 // this file then replaces rather than as a constraint that survives.
 //
 // Everything else is what the author wrote: a `@param` or a `@remarks` stays
-// where they put it.
+// where they put it. A name one edit from a claimed one is recorded rather than
+// lifted, and its line stays in the description, because it is refused before
+// any description ships.
 function splitDoc(text) {
+  return splitTags(text, SCHEMA_TAGS)
+}
+
+// The same line-wise reading, for a RUST action's doc comments.
+//
+// One difference from the reading above, and it is the whole reason a second
+// entry point exists: THE SCHEMA GENERATOR'S TAGS ARE NOT REMOVED. `@minimum`
+// and `@pattern` leave a TypeScript doc comment because a generator has already
+// turned them into constraints beside the description, and a constraint stated
+// twice is a member documented by whichever copy the reader believes. Nothing
+// does that for Rust — there is no constraint vocabulary for a Rust member and
+// none has been ruled on — so removing those lines here would delete the
+// author's sentence and put nothing in its place. The gaps the companion reports
+// are how an author hears about that instead.
+//
+// The claimed names and the misspelling rule are the SAME ones, because there is
+// one vocabulary. So `@effects` on a Rust action and `@effects` on a TypeScript
+// action land identically: nothing claims the name and nothing is one edit from
+// it, so the line stays exactly where its author wrote it, while `@short_desc` —
+// one edit from `@shortdesc` — is refused in both.
+function splitRustDoc(text) {
+  return splitTags(text, new Set())
+}
+
+// The reading both of the above are: the claimed names lifted out line by line,
+// the named set discarded, and everything else kept exactly where it was
+// written.
+function splitTags(text, discarded) {
   const descriptionLines = []
   const misspellings = []
   const tags = []
@@ -705,7 +772,7 @@ function splitDoc(text) {
       continue
     }
 
-    if (SCHEMA_TAGS.has(name)) {
+    if (discarded.has(name)) {
       continue
     }
 
@@ -715,49 +782,6 @@ function splitDoc(text) {
 
     if (meant) {
       misspellings.push({ meant, written: name })
-    }
-
-    descriptionLines.push(line)
-  }
-
-  return { description: descriptionLines.join('\n').trim(), misspellings, tags }
-}
-
-// The same line-wise reading, for the vocabulary a Rust action is written in.
-//
-// The claimed names are lifted out and everything else is left exactly where
-// the author put it, so a comment may state its tags and keep writing. One
-// difference from the reading above, and it is the whole reason this is a
-// separate function rather than a parameter: THE SCHEMA GENERATOR'S TAGS ARE
-// NOT REMOVED. `@minimum` and `@pattern` leave a TypeScript doc comment because
-// a generator has already turned them into constraints beside the description,
-// and a constraint stated twice is a member documented by whichever copy the
-// reader believes. Nothing does that for Rust — there is no constraint
-// vocabulary for a Rust member and none has been ruled on — so removing those
-// lines here would delete the author's sentence and put nothing in its place.
-//
-// A retired name is recorded rather than lifted, and the line stays in the
-// description, because it is refused before any description ships.
-function splitRustDoc(text) {
-  const descriptionLines = []
-  const misspellings = []
-  const tags = []
-
-  for (const line of String(text).split('\n')) {
-    const trimmed = line.trim()
-    const name = trimmed.startsWith('@') ? trimmed.slice(1).split(/\s+/)[0] : ''
-
-    if (ACTION_TAGS.includes(name)) {
-      tags.push({ name, value: trimmed.slice(name.length + 1).trim() })
-      continue
-    }
-
-    if (name) {
-      const meant = ACTION_TAGS.find(claimed => withinOneEdit(name, claimed))
-
-      if (meant) {
-        misspellings.push({ meant, written: name })
-      }
     }
 
     descriptionLines.push(line)
@@ -894,34 +918,49 @@ if (tsPath) {
   const project = new Project()
   const sourceFile = project.addSourceFileAtPath(tsPath)
 
-  // The two blocks an author may describe an action in: the Payload interface,
+  // EVERY comment in the file is read for the annotations, not only the one that
+  // supplies the description.
+  //
+  // Which comment describes the action is decided below, by rules about where a
+  // payload is declared. Where an author writes the statement must not be
+  // decided by those rules as a side effect: a tag written in a comment that did
+  // not win would be dropped in silence, and a dropped `@tool` is an action that
+  // quietly stops being callable — the failure this whole annotation exists to
+  // make impossible.
+  const comments = commentsIn(sourceFile.getFullText()).map(splitDoc)
+
+  const statedTags = comments.flatMap(comment => comment.tags)
+  const misspellings = comments.flatMap(comment => comment.misspellings)
+
+  // The two blocks an author may describe an action in: the payload interface,
   // and the handler when the interface says nothing.
-  const payloadInterface = sourceFile.getInterface('Payload')
+  const payloadType = payloadTypeNamed(statedTags)
+  const payloadInterface = sourceFile.getInterface(payloadType)
 
   const handlerFunc = sourceFile.getFunction('handler') || sourceFile.getVariableDeclaration('handler')
   const handlerNode = handlerFunc && handlerFunc.getKindName() === 'VariableDeclaration'
     ? handlerFunc.getFirstAncestorByKind(SyntaxKind.VariableStatement)
     : handlerFunc
 
-  const description = describedBy(payloadInterface) || describedBy(handlerNode)
-
-  // EVERY comment in the file is read for exposure annotations, not only the
-  // one that supplied the description.
+  // WHERE THE PROSE IS WHEN `@Payload` POINTS AT A TYPE THAT DOES NOT CARRY IT.
   //
-  // Which comment describes the action is decided above, by rules about where a
-  // payload is declared. Where an author writes the exposure statement must not
-  // be decided by those rules as a side effect: a tag written in a comment that
-  // did not win would be dropped in silence, and a dropped `@tool` is an action
-  // that quietly stops being callable — the failure this whole annotation
-  // exists to make impossible.
-  const comments = commentsIn(sourceFile.getFullText()).map(splitDoc)
+  // The two blocks above are the ones a reader looks at, and they are tried in
+  // that order. An author who names a payload type other than the block they
+  // wrote the statement in has put their prose in a third place: the block
+  // carrying the tags. Reading only the two would drop it, and the action would
+  // advertise an input shape while stating nothing about what it does — refused
+  // downstream, correctly, but named as a missing description rather than as a
+  // sentence this reading failed to find, which sends its author looking for the
+  // wrong thing.
+  const stating = comments.find(comment => comment.tags.length > 0)
 
-  const exposureTags = comments.flatMap(comment => comment.tags)
-  const misspellings = comments.flatMap(comment => comment.misspellings)
+  const description = describedBy(payloadInterface)
+    || describedBy(handlerNode)
+    || (stating ? stating.description : '')
 
   let ai
   try {
-    ai = buildAiMetadata(path.basename(actionDir), exposureTags, misspellings)
+    ai = buildAiMetadata(path.basename(actionDir), statedTags, misspellings)
   }
   catch (err) {
     console.error(err.message)
@@ -936,7 +975,7 @@ if (tsPath) {
         path: tsPath,
         skipTypeCheck: true,
         tsconfig: path.join(actionDir, 'tsconfig.json'),
-        type: 'Payload',
+        type: payloadType,
       }
 
       if (!fs.existsSync(config.tsconfig)) {

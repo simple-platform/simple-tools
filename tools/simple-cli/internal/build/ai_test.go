@@ -34,20 +34,22 @@ func TestTheDeclaredVocabularyIsTheGeneratorsOwn(t *testing.T) {
 //
 // Symmetry with the script side is the point, not tidiness. This used to match
 // every `xTag = "..."` const in the file and call the result the vocabulary,
-// which is true only while the file declares exactly one — and it holds today by
-// luck rather than by construction: the value pattern was `[a-z]+`, so a tag
-// spelled with an underscore was invisible to it, and the script side had
-// already gained two of those without this check noticing. Reading the declared
-// array means a second vocabulary appearing here is read as a second
-// vocabulary rather than folded into this one.
+// which is true only while the file declares exactly one. Reading the declared
+// array means a second list appearing here — the extractor already keeps one
+// for the names that make up a statement — is read as a second list rather than
+// folded into this one.
+//
+// The value pattern accepts a capital for the reason the script side's does:
+// `@Payload` names a type and is spelled like one, and a lower-case-only pattern
+// reads that declaration as no declaration at all.
 var (
-	goExtractorVocabularyPattern = regexp.MustCompile(`(?m)^\texposureTags = \[\]string\{([^}]*)\}`)
-	goExtractorTagValuePattern   = regexp.MustCompile(`(?m)^\t(\w+Tag)\s+= "([a-z_]+)"$`)
+	goExtractorVocabularyPattern = regexp.MustCompile(`(?m)^\tactionTags = \[\]string\{([^}]*)\}`)
+	goExtractorTagValuePattern   = regexp.MustCompile(`(?m)^\t(\w+Tag)\s+= "([A-Za-z_]+)"$`)
 )
 
-// goExtractorExposureTags is the vocabulary as the embedded Go extractor
+// goExtractorActionTags is the vocabulary as the embedded Go extractor
 // declares it, in the order it lists it.
-func goExtractorExposureTags() []string {
+func goExtractorActionTags() []string {
 	vocabulary := goExtractorVocabularyPattern.FindStringSubmatch(goExtractorSource)
 	if vocabulary == nil {
 		return nil
@@ -97,10 +99,10 @@ func goExtractorExposureTags() []string {
 // Pinning each to its own list is what makes a sync visible: a file arriving
 // with a vocabulary this package was not told about fails here, naming the file,
 // instead of changing what an author may write in silence.
-var goActionTags = []string{"tool", "effects", "retry", "discloses"}
+var goActionTags = []string{"tool", "shortdesc", "usewhen", "Payload"}
 
 func TestTheGoExtractorClaimsTheVocabularyItOwns(t *testing.T) {
-	claimed := goExtractorExposureTags()
+	claimed := goExtractorActionTags()
 
 	if len(claimed) == 0 {
 		t.Fatal("no tag declarations were found in the embedded Go extractor, so this check proves nothing")
