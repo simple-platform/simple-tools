@@ -66,9 +66,9 @@ import (
 // `@parallelsafe` does not reopen that: it lets reads overlap, and it changes
 // neither what a failed call is taken to have done to stored data nor whether a
 // call may be tried again. This list does not name the three, and no list of
-// retired names sits beside it either. An action that writes one is writing prose, and the line stays exactly
-// where its author put it — the same answer this program gives any other name it
-// does not claim.
+// retired names sits beside it either. An action that writes one is writing
+// prose, and the line stays exactly where its author put it — the same answer
+// this program gives any other name it does not claim.
 //
 // Only these five names are claimed as annotations. Every other `@` line is
 // description, because this vocabulary shares a doc comment with `@param`,
