@@ -1,5 +1,6 @@
+import type { SpaceContext } from '@simpleplatform/sdk/space'
+import { connect } from '@simpleplatform/sdk/space'
 import { useEffect, useState } from 'react'
-import { connectSpace, type SpaceContext } from '@simpleplatform/sdk/space'
 
 interface Application {
   id: string
@@ -17,7 +18,8 @@ query GetApplications {
 }
 `
 
-const spaceConnection = connectSpace({
+// Trusted configuration is required when referrer is unavailable.
+const spaceConnection = connect({
   targetOrigin: new URL(document.referrer).origin,
 })
 
