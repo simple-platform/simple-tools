@@ -54,6 +54,7 @@ Follow these documents in order:
 | 9     | [Custom Views](./09-custom-views.md)                     | UI customization          |
 | 10    | [GraphQL API](./10-graphql-api.md)                       | Queries and mutations     |
 | 11    | [SDK Reference](./11-sdk-reference.md)                   | Complete API docs         |
+| 12    | [Tasks](./12-tasks.md)                                   | Agent work, scheduling    |
 
 ## Key Concepts
 
