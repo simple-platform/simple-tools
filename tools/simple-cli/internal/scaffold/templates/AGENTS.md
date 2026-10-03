@@ -135,6 +135,7 @@ Consult these documents for detailed syntax and behavior.
 - [Actions and Triggers](./context/07-actions-and-triggers.md) - Server Logic & Scheduling
 - [Record Behaviors](./context/08-record-behaviors.md) - Client/Form Logic
 - [SDK Reference](./context/11-sdk-reference.md) - TypeScript API (`@simpleplatform/sdk`)
+- [Tasks](./context/12-tasks.md) - Task types, creating tasks, `start_after` scheduling, `read-task-output`
 
 **UI Layer**
 
