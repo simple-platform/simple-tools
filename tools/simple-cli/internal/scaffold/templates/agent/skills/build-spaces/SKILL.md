@@ -45,19 +45,20 @@ Spaces operate in an isolated, secure iframe served from `assets.simple.dev` wit
 
 Therefore, Space developers **MUST NOT** use raw `fetch()` to query the Simple Backend. Use the published `@simpleplatform/sdk` Space API instead. Its browser adapter establishes the secure MessageChannel with the parent frame and the host authorizes every request.
 
-The scaffold imports `connectSpace()` directly from the published SDK. Do not add a copied bridge or a local wrapper just to rename the connection.
+The scaffold imports `connect()` directly from the published SDK. Do not add a copied bridge or a local wrapper just to rename the connection. Explicit host-origin configuration is required using `targetOrigin` (use `new URL(document.referrer).origin` in the embedded example; trusted configuration is required when referrer is unavailable).
 
 ```tsx
-import { connectSpace } from '@simpleplatform/sdk/space'
+import { connect } from '@simpleplatform/sdk/space'
 
-const spaceConnection = connectSpace({
+// Trusted configuration is required when referrer is unavailable.
+const spaceConnection = connect({
   targetOrigin: new URL(document.referrer).origin,
 })
 
 const simple = await spaceConnection
 ```
 
-Create one connection promise per Space and reuse it. Calling `connectSpace()` again starts another handshake, which the host does not provide for the same iframe.
+Create one connection promise per Space and reuse it. Calling `connect()` again starts another handshake, which the host does not provide for the same iframe.
 
 ### Host-provided context
 
@@ -74,7 +75,7 @@ switch (simple.context.kind) {
 }
 ```
 
-`simple.context.kind` is currently either `standalone` or `record`. List context is not available yet. There is no inferred or unknown context state. A missing or malformed host context makes `connectSpace()` reject with a structured SDK error.
+`simple.context.kind` is currently either `standalone` or `record`. List context is not available yet. There is no inferred or unknown context state. A missing or malformed host context makes `connect()` reject with a structured SDK error.
 
 ### Fetching Data via GraphQL
 
@@ -82,6 +83,7 @@ Use `simple.data.query()` and `simple.data.mutate()` from the connected Space cl
 
 ```tsx
 import { useEffect, useState } from 'react'
+
 const GET_CUSTOMERS = `
   query GetCustomers {
     customer { id first_name last_name }
@@ -198,4 +200,4 @@ All commands are run from the `client-bnv` repository root using the `simple` CL
 - **Error Handling:** Always handle loading and error states for queries and mutations to provide good UX.
 - **State Management:** For complex state, combine React Context or a state management library with the `query`/`mutate` SDK functions.
 - **Styling:** Consider a robust UI library (Material-UI, Chakra UI, Radix UI, etc.) for complex interfaces.
-- **SDK:** Call `connectSpace()` from `@simpleplatform/sdk/space`. Do not copy, fork, reimplement, or rename the MessageChannel connection protocol.
+- **SDK:** Call `connect()` from `@simpleplatform/sdk/space`. Do not copy, fork, reimplement, or rename the MessageChannel connection protocol.

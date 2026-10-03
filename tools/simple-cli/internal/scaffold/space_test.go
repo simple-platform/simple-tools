@@ -88,7 +88,13 @@ func TestSpaceTemplatesUseUnifiedSDK(t *testing.T) {
 		t.Error("space app template must not copy the GraphQL MessagePort protocol")
 	}
 	if strings.Contains(content, "getSimple") {
-		t.Error("space app template must call connectSpace directly without a local SDK wrapper")
+		t.Error("space app template must call connect directly without a local SDK wrapper")
+	}
+	if strings.Contains(content, "connectSpace") {
+		t.Error("space app template must not call removed connectSpace")
+	}
+	if !strings.Contains(content, "connect({") {
+		t.Error("space app template must call connect({ targetOrigin }) directly")
 	}
 
 	themeCSS, err := TemplatesFS.ReadFile("templates/space/src/styles/theme.css")
@@ -105,6 +111,23 @@ func TestSpaceTemplatesUseUnifiedSDK(t *testing.T) {
 	}
 	if strings.Contains(string(skill), "case 'list'") {
 		t.Error("build-spaces skill template must not document unsupported list context")
+	}
+	if strings.Contains(string(skill), "connectSpace") {
+		t.Error("build-spaces skill template must not instruct customers to import or call connectSpace")
+	}
+	if !strings.Contains(string(skill), "connect({") {
+		t.Error("build-spaces skill template must document connect({ targetOrigin })")
+	}
+
+	appTest, err := TemplatesFS.ReadFile("templates/space/tests/App.test.tsx")
+	if err != nil {
+		t.Fatalf("read app test template: %v", err)
+	}
+	if strings.Contains(string(appTest), "connectSpace") {
+		t.Error("space app test template must not mock deprecated connectSpace")
+	}
+	if !strings.Contains(string(appTest), "connect:") {
+		t.Error("space app test template must mock connect")
 	}
 }
 

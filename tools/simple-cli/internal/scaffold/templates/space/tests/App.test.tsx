@@ -12,7 +12,7 @@ vi.hoisted(() => {
 
 // Mock the simple SDK so tests don't need a real RPC connection
 vi.mock('@simpleplatform/sdk/space', () => ({
-  connectSpace: vi.fn().mockResolvedValue({
+  connect: vi.fn().mockResolvedValue({
     context: { kind: 'standalone' },
     data: {
       query: vi.fn().mockResolvedValue({
