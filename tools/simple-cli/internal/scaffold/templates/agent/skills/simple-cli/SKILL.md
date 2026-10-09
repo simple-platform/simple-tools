@@ -135,6 +135,21 @@ Install a deployed app to an environment (migrations, cache warming).
   - `--progress <string>`: `auto` (default), `tty` or `plain`. Use `plain` for one line per step when capturing output.
   - `--json`: Print one JSON document on stdout; errors go to stderr as `{"error": ...}`.
 
+### `simple cleanup`
+
+Permanently delete tables and fields, and their data, from an app in an environment. An install refuses a version that would drop either; this is the separate step that removes them on purpose. It shows everything that will be deleted before it asks. Run it without `--yes` first and show the user the plan.
+
+- **Usage:** `simple cleanup <app-id> --env <env> [--table <table>]... [--field <table.field>]...`
+- **Args:**
+  - `<app-id>`: App ID to clean up.
+- **Flags:**
+  - `--env <string>`: **REQUIRED**. Target environment (`dev`, `staging`, `prod`).
+  - `--table <string>`: Table to remove. Repeatable.
+  - `--field <string>`: Field to remove, written `table.field` (exactly one dot). Repeatable. At least one `--table` or `--field` is required.
+  - `--yes`: Remove without asking for confirmation. Without it, a terminal asks for the app id to be typed; without a terminal the command only prints the plan and removes nothing. On a production environment the server accepts a removal only when the app id was typed, so `--yes` is refused there: ask the user to run the command in a terminal and type the app id.
+  - `--json`: Never asks. Print one JSON document on stdout, `{"plan": ..., "executed": false}`, or with `--yes` `{"plan": ..., "executed": true}` once removed; errors go to stderr as `{"error": ...}`.
+- **Output:** One line per table or field with its row count (for a field, the rows that hold a value), the metadata that goes with it, an `also removes from <app-id>: <count> <what>` line for what the removal also takes from other applications (for example `also removes from com.acme.billing: 2 db events`), and a `blocked:` line for each thing that stops it. A blocked plan removes nothing and exits 1. After a removal, install the version again with `simple install <app-id> --env <env>`.
+
 ### `simple test`
 
 Run the unified test runner. Each target is handed to its own runner: Vitest for

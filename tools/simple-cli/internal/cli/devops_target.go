@@ -13,26 +13,28 @@ import (
 	"simple-cli/internal/ui"
 )
 
-// devopsAuthenticator is the part of deploy.Authenticator that deploy and
-// install use.
+// devopsAuthenticator is the part of deploy.Authenticator that deploy,
+// install and cleanup use.
 type devopsAuthenticator interface {
 	GetJWT(ctx context.Context, endpoint, apiKey, tenantEnvKey string) (string, error)
 	ClearCache(tenantEnvKey string) error
 }
 
-// devopsClient is the part of deploy.Client that deploy and install use.
+// devopsClient is the part of deploy.Client that deploy, install and cleanup
+// use.
 type devopsClient interface {
 	JoinChannel(ctx context.Context, appID string) error
 	SendManifest(ctx context.Context, files map[string]deploy.FileInfo, version string) ([]string, error)
 	SendFiles(ctx context.Context, files map[string]deploy.FileInfo, needed []string, onProgress func(deploy.UploadProgress)) error
 	Deploy(ctx context.Context) (*deploy.DeployResult, error)
 	Install(ctx context.Context) (*deploy.InstallResult, error)
+	Cleanup(ctx context.Context, req deploy.CleanupRequest) (*deploy.CleanupPlan, error)
 	Close()
 }
 
-// devopsDeps are the side effects deploy and install share: finding the
-// scl-parser, reading simple.scl, signing in and dialling the devops server.
-// Tests replace them; defaultDevopsDeps wires the real ones.
+// devopsDeps are the side effects deploy, install and cleanup share: finding
+// the scl-parser, reading simple.scl, signing in and dialling the devops
+// server. Tests replace them; defaultDevopsDeps wires the real ones.
 type devopsDeps struct {
 	ensureParser     func(onStatus func(string)) (string, error)
 	loadConfig       func(parserPath string, warn func(string)) (*config.SimpleSCL, error)
