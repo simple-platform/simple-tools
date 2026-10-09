@@ -88,6 +88,7 @@ type fakeDevopsClient struct {
 	upload   func(ctx context.Context, files map[string]deploy.FileInfo, needed []string, onProgress func(deploy.UploadProgress)) error
 	publish  func(ctx context.Context) (*deploy.DeployResult, error)
 	install  func(ctx context.Context) (*deploy.InstallResult, error)
+	cleanup  func(ctx context.Context, req deploy.CleanupRequest) (*deploy.CleanupPlan, error)
 	closed   atomic.Int32
 }
 
@@ -126,6 +127,13 @@ func (c *fakeDevopsClient) Install(ctx context.Context) (*deploy.InstallResult, 
 		return c.install(ctx)
 	}
 	return &deploy.InstallResult{AppID: "com.acme.crm", Version: "1.0.0", Success: true}, nil
+}
+
+func (c *fakeDevopsClient) Cleanup(ctx context.Context, req deploy.CleanupRequest) (*deploy.CleanupPlan, error) {
+	if c.cleanup != nil {
+		return c.cleanup(ctx, req)
+	}
+	return &deploy.CleanupPlan{AppID: "com.acme.crm"}, nil
 }
 
 func (c *fakeDevopsClient) Close() { c.closed.Add(1) }

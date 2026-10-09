@@ -267,6 +267,61 @@ The steps are load project config, authenticate, connect, and install. The serve
 
 ---
 
+### `simple cleanup`
+
+Permanently delete tables and fields, and their data, from an application in an environment. An install refuses a version that would drop a table or a field; this is the separate step that removes them on purpose. You name exactly what to remove, see everything that will be deleted, and confirm. Afterwards, install the version again.
+
+**Usage:**
+
+```bash
+simple cleanup <app-id> --env <environment> [--table <table>]... [--field <table.field>]... [flags]
+```
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--table` | | Table to remove. Repeat the flag for more tables. |
+| `--field` | | Field to remove, written `table.field` (exactly one dot). Repeat the flag for more fields. At least one `--table` or `--field` is required. |
+| `--yes` | `false` | Remove without asking for confirmation. Refused on a production environment. |
+| `--json` | `false` | Never ask. Print one JSON document on stdout (see below); errors go to stderr as `{"error": "..."}`. |
+
+The command loads the project config, authenticates, connects, and asks the server what the removal would delete. It prints that plan: each table or field with its row count (for a field, the rows that hold a value), the metadata that goes with it (fields, relationships and so on, as the server counts them), an `also removes from <app-id>: <count> <what>` line for each kind of record of another application that goes with it (for example `also removes from com.mycompany.billing: 2 db events`), and a `blocked:` line for each thing that stops it. An item that is not in the database any more shows as leftover metadata only.
+
+- A plan with a blocked item removes nothing and exits 1, without asking.
+- Otherwise the command asks you to type the app id. Anything else prints `Nothing was removed.` and exits 1.
+- Without a terminal on stdin and without `--yes`, it prints the plan, says that nothing was removed and that `--yes` runs it, and exits 0.
+- With `--yes`, it removes without asking. The request carries the fingerprint of the plan that was shown, so the server refuses it if the plan has changed since.
+- The request also says how the removal was confirmed: `typed` when you typed the app id, `flag` when `--yes` let it through. On a production environment the server accepts a removal only when the app id was typed, so `--yes` is refused there: the command prints the server's message, removes nothing and exits 1. Run it on a terminal and type the app id.
+
+After a removal it prints `Removed.` and the `simple install` command to run next. Ctrl+C or `SIGTERM` during the removal stops the CLI, not the server: when the CLI stops waiting before the server answers, it says the server may still be removing, and running the command again without `--yes` shows what is left.
+
+**JSON output (`--json`):** the command never asks, and prints exactly one document on stdout.
+
+| Outcome                           | stdout                                                                                                                                           | Exit code |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| Plan only (no `--yes`)            | `{"plan":{"app_id","fingerprint","blocked","items":[{"kind","name","in_database","rows","metadata","other_apps","blockers"}]},"executed":false}` | 0         |
+| Blocked plan                      | the same document, `"executed":false`                                                                                                            | 1         |
+| Removed (`--yes`)                 | `{"plan":...,"executed":true}`, the plan the server removed                                                                                      | 0         |
+| Any other failure or an interrupt | nothing                                                                                                                                          | 1         |
+
+An item carries `other_apps`, a list of `{"app_id","what","count"}`, only when its removal also takes records of other applications.
+
+**Examples:**
+
+```bash
+# See what removing a table and a field would delete; nothing is removed
+simple cleanup com.mycompany.crm --table old_thing --field project.code --env dev --json
+
+# Remove them, asking for the app id first
+simple cleanup com.mycompany.crm --table old_thing --field project.code --env dev
+
+# Remove them without asking, e.g. from a script
+simple cleanup com.mycompany.crm --table old_thing --env staging --yes
+```
+
+---
+
 ### `simple auth`
 
 Manages Proof-of-Possession (PoP) machine authentication for the Simple Platform.
