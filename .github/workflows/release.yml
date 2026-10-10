@@ -60,6 +60,14 @@ env:
   # tool added to this workflow adds its scopes here.
   TOOL_SCOPES: 'simple-cli|cli|contextualizer|scl-parser|scl-parser-cli'
 
+  # THE NPM THAT PARKS A VERSION. The npm package is not published by this
+  # workflow: it is parked on npm, and a person publishes it there (the
+  # Contextualizer's `publish` job says how). The command that parks a version
+  # arrived in npm 11.16, and the Node that devbox.json names ships an older
+  # npm, so the job installs this one. When that Node ships an npm that has
+  # the command, this line and the install can go.
+  NPM_FOR_PARKING: 11.21.0
+
   # A RELEASE CAN WAIT THIRTY DAYS FOR ITS REVIEW, which is as long as GitHub
   # keeps a review open. What it would publish is kept that long too, so an
   # approval on the last day still finds the files it approves.
@@ -698,8 +706,8 @@ jobs:
     needs: [version, contextualizer-build]
     if: needs.version.outputs.contextualizer-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
     runs-on: ubuntu-latest
-    # THE NPM PACKAGE IS PUBLISHED WITHOUT A TOKEN. npm is told, in the
-    # package's settings there, to trust a publish that comes from this
+    # THE NPM PACKAGE IS UPLOADED WITHOUT A TOKEN. npm is told, in the
+    # package's settings there, to trust an upload that comes from this
     # repository, this workflow file and this job's environment. GitHub
     # vouches for those three with a short-lived identity it hands the job,
     # and the `id-token` permission is what asks for it. So there is no npm
@@ -708,8 +716,14 @@ jobs:
     # What npm is told has to match this file exactly: the repository
     # `simple-tools` of `simple-platform`, the workflow file `release.yml`,
     # and the environment `release-contextualizer`. Renaming any of the three
-    # here stops the publish until the package's settings on npm are changed
+    # here stops the upload until the package's settings on npm are changed
     # to match.
+    #
+    # AND IT IS NOT PUBLISHED WITHOUT A PERSON. What that identity may do is
+    # park a version: npm holds it where nobody can install it, until a
+    # maintainer approves it on npmjs.com with a two-factor code. A stolen
+    # login to this repository, or a change slipped into this workflow, is
+    # then not enough to put a version in front of users.
     permissions:
       contents: read
       id-token: write
@@ -754,19 +768,19 @@ jobs:
           node-version: ${{ needs.version.outputs.nodejs }}
           registry-url: https://registry.npmjs.org
 
-      # A VERSION THAT IS ON NPM ALREADY IS NOT PUBLISHED AGAIN. The release
+      # A VERSION THAT IS ON NPM ALREADY IS NOT UPLOADED AGAIN. The release
       # above and the package here are made one after the other, so a job that
       # made the release and failed here is run again, and a second run of it
       # must be able to finish what the first began. Each of the two asks its
       # own destination whether the version is there.
       #
       # A registry that cannot be reached reads as "not published". The
-      # publish is then attempted, and the registry itself is the judge of it.
+      # upload is then attempted, and the registry itself is the judge of it.
       #
       # The package is published with the version computed above, written into
       # package.json here and nowhere else. It is how the installed package
       # knows which release to download its program from.
-      - name: Publish to npm
+      - name: Park the version on npm
         working-directory: tools/contextualizer
         env:
           VERSION: ${{ needs.version.outputs.contextualizer-version }}
@@ -777,7 +791,7 @@ jobs:
 
           found=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${package/\//%2f}/${VERSION}" || true)
           if [ "$found" = "200" ]; then
-            echo "${package} ${VERSION} is on npm already. It is not published again." | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "${package} ${VERSION} is on npm already. It is not uploaded again." | tee -a "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -787,9 +801,49 @@ jobs:
           # pnpm packs the package, as it always has. npm uploads the file,
           # because npm is what proves to the registry where this job runs.
           pnpm pack --pack-destination "${RUNNER_TEMP}/package"
-          npm publish "${RUNNER_TEMP}"/package/*.tgz --access public
 
-          echo "Published ${package} ${VERSION} to npm." >> "$GITHUB_STEP_SUMMARY"
+          npm install --global "npm@${NPM_FOR_PARKING}"
+          if [ "$(npm --version)" != "$NPM_FOR_PARKING" ]; then
+            echo "npm ${NPM_FOR_PARKING} was installed, and npm --version still answers $(npm --version)." >&2
+            exit 1
+          fi
+
+          if ! npm stage publish "${RUNNER_TEMP}"/package/*.tgz --access public; then
+            echo "npm did not take ${package} ${VERSION}. If an earlier run of this job already parked that version, approve it on npmjs.com under Staged Packages and run this job again: it will find the version published and finish." >&2
+            exit 1
+          fi
+
+          echo "${package} ${VERSION} is parked on npm and is not public yet. To publish it, open Staged Packages on npmjs.com and approve it with a two-factor code. This job is waiting for that." | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # THE JOB GOES GREEN THE MOMENT THE VERSION IS PUBLIC. It looks at the
+      # registry every five seconds, so the wait is as long as the approval
+      # takes; half an hour is only how long it keeps looking before it gives
+      # up. A job that gave up is run again after the approval: it finds the
+      # release made and the version published, and finishes.
+      #
+      # The registry's page for one version is what is asked. It answers 200
+      # once the version is public, and it is not cached.
+      - name: Wait for the approval on npm
+        working-directory: tools/contextualizer
+        env:
+          VERSION: ${{ needs.version.outputs.contextualizer-version }}
+        run: |
+          set -euo pipefail
+
+          package=$(jq -r .name package.json)
+          page="https://registry.npmjs.org/${package/\//%2f}/${VERSION}"
+
+          waited=0
+          until [ "$(curl -s -o /dev/null -w '%{http_code}' "$page" || true)" = "200" ]; do
+            if [ "$waited" -ge 1800 ]; then
+              echo "${package} ${VERSION} is still not public after half an hour. If it is parked on npm, approve it under Staged Packages on npmjs.com and run this job again: it will find the version published and finish." >&2
+              exit 1
+            fi
+            sleep 5
+            waited=$((waited + 5))
+          done
+
+          echo "${package} ${VERSION} is public." | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # SCL Parser
