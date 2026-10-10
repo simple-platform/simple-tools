@@ -16,6 +16,7 @@ type MockFileSystem struct {
 	WriteFileErr error
 	ReadFileErr  error
 	RemoveErr    error
+	RenameErr    error
 	Files        map[string][]byte
 }
 
@@ -81,6 +82,27 @@ func (m *MockFileSystem) Remove(name string) error {
 	}
 
 	delete(m.Files, name)
+
+	return nil
+}
+
+// Rename moves a file to a new name, replacing whatever holds that name, as the
+// real one does. A file that is not there cannot be moved.
+func (m *MockFileSystem) Rename(oldpath, newpath string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.RenameErr != nil {
+		return m.RenameErr
+	}
+
+	content, ok := m.Files[oldpath]
+	if !ok {
+		return os.ErrNotExist
+	}
+
+	m.Files[newpath] = content
+	delete(m.Files, oldpath)
 
 	return nil
 }

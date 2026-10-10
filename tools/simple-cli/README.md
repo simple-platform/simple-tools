@@ -24,13 +24,46 @@
 
 ## Installation
 
-### Automatic Install (Recommended)
+### Download a Release (Recommended)
 
-Run the following command to install `simple` on macOS, Linux, or Windows (Git Bash):
+Releases are published on the [releases page](https://github.com/simple-platform/simple-tools/releases) under tags named `v<version>-simple-cli`. Each carries one program per supported machine, and `simple-cli-checksums.txt` with the SHA-256 of each:
+
+| Machine                | File                           |
+| ---------------------- | ------------------------------ |
+| macOS on Apple silicon | `simple-cli-darwin-arm64`      |
+| Windows on x64         | `simple-cli-windows-amd64.exe` |
+
+Install it into a directory that is on your `PATH` and that your account can write to. `simple version update` replaces the program where it is installed, so a directory only an administrator can write to means every update needs one.
+
+**macOS (Apple silicon):**
 
 ```bash
-curl -fsSL https://tools.simple.dev/simple-cli/install | bash
+# The release to install: the newest "Simple CLI" on the releases page
+VERSION=1.0.0
+
+mkdir -p ~/.local/bin
+curl -fsSL -o ~/.local/bin/simple \
+  "https://github.com/simple-platform/simple-tools/releases/download/v${VERSION}-simple-cli/simple-cli-darwin-arm64"
+chmod +x ~/.local/bin/simple
 ```
+
+Add `~/.local/bin` to your `PATH` if it is not there already. Download with `curl` as above rather than a browser: macOS quarantines a program a browser downloaded and refuses to start it.
+
+**Windows (x64):**
+
+Download `simple-cli-windows-amd64.exe` from the release, rename it to `simple.exe`, and put it in a folder that is on your `PATH`.
+
+### Update
+
+```bash
+# Show the installed version and whether a newer one is out
+simple version
+
+# Download the newest release for this machine and replace the installed program
+simple version update
+```
+
+The CLI also looks for a newer release by itself, at most once a day, and tells you when there is one. It only does so for a person at a terminal: it says nothing in a script, in CI, or with `--json`.
 
 ### Install from Source
 
@@ -632,6 +665,40 @@ simple new trigger:webhook com.company.crm payment-hook "Payment Hook" \
   --action handle-payment \
   --method post \
   --public
+```
+
+---
+
+### `simple version`
+
+Show the installed version of the CLI and whether a newer one has been released.
+
+**Usage:**
+
+```bash
+simple version
+simple version update
+```
+
+`simple version update` downloads the newest release for this machine and replaces the installed program with it. The download is checked against the SHA-256 published with the release before anything on disk is changed, and a download that does not match changes nothing.
+
+The program is replaced where it is installed, so the account running the command must be able to write to that directory. On Windows a running program cannot be deleted, so the previous one is kept beside the new one as `simple.exe.old` and removed by a later run of the CLI.
+
+**JSON output (`--json`):**
+
+| Command                 | Document                                                               |
+| ----------------------- | ---------------------------------------------------------------------- |
+| `simple version`        | `{"version","latest","update_available"}`; `version` alone if offline  |
+| `simple version update` | `{"status":"updated","from","to"}` or `{"status":"current","version"}` |
+
+**Examples:**
+
+```bash
+# What is installed, and is there something newer?
+simple version
+
+# Install the newest release
+simple version update
 ```
 
 ---

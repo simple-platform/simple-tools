@@ -10,6 +10,7 @@ import (
 const (
 	DirPerm  os.FileMode = 0755 // Standard directory permissions: rwxr-xr-x
 	FilePerm os.FileMode = 0644 // Standard file permissions: rw-r--r--
+	ExecPerm os.FileMode = 0755 // A program anyone may run and its owner may replace: rwxr-xr-x
 )
 
 // FileSystem abstraction for mocking
@@ -60,6 +61,16 @@ func (OSFileSystem) Remove(name string) error {
 	}
 
 	return nil
+}
+
+// Rename moves a file to a new name, replacing whatever holds that name. Within
+// one directory it is a single step: a reader sees the old file or the new one
+// and never part of either, which is what replacing a program needs.
+//
+// It is not part of FileSystem. Only the code that replaces a program needs
+// it, and that code names the methods it uses in an interface of its own.
+func (OSFileSystem) Rename(oldpath, newpath string) error {
+	return os.Rename(oldpath, newpath)
 }
 
 // ResolveUpward finds the first directory in dir's parent chain that contains

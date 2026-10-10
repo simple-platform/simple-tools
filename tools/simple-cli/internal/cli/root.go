@@ -40,15 +40,24 @@ var RootCmd = &cobra.Command{
 // It is the main entry point called by main.main().
 // Returns 0 on success, 1 on failure.
 func Execute() int {
-	if err := RootCmd.Execute(); err != nil {
+	cmd, err := RootCmd.ExecuteC()
+
+	code := 0
+	if err != nil {
 		if jsonOutput {
 			printErrorJSON(err)
 		} else {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 		}
-		return 1
+		code = 1
 	}
-	return 0
+
+	// Said last and whatever the command did, so it is the line a user is
+	// left with: a command that failed on an old version is the one most
+	// worth telling.
+	announceUpdate(os.Stderr, cmd.CommandPath())
+
+	return code
 }
 
 func init() {

@@ -2,9 +2,11 @@ package build
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/fsx"
 	"strings"
 )
 
@@ -114,15 +116,78 @@ func mapWasmOptArchOS(arch, platform string) archOSPair {
 	return result
 }
 
+// extractWasmOpt unpacks the archive wasm-opt is released in, and leaves the
+// tool at destPath.
+//
+// The archive is a tree: the tool, the other programs released with it, and
+// under lib/ what the tool loads when it starts. It belongs under the tools
+// directory, two levels above the tool, so that bin/ and lib/ sit where the
+// tool looks for them: for a destPath in ~/.simple/bin that is ~/.simple.
+//
+// NOTHING UNDER THE TOOLS DIRECTORY IS WRITTEN INTO. The tree is unpacked into
+// a directory of its own and each file is renamed into place, for the reason
+// downloadTool gives: a file another process is running, or has loaded, has to
+// stay whole.
+//
+// The tool itself is renamed to destPath and nowhere else. downloadTool asked
+// for it there and gives it its name afterwards, so the tool appears only once
+// everything it loads is in place.
 func extractWasmOpt(srcPath, destPath string) error {
-	// destPath is .../bin/wasm-opt via EnsureTool -> GetToolsBinDir
-	// We want to extract to .../ (the root tools dir) so that bin/wasm-opt and lib/ land in correct places.
-	// destPath = ~/.simple/bin/wasm-opt
-	// filepath.Dir(destPath) = ~/.simple/bin
-	// filepath.Dir(filepath.Dir(destPath)) = ~/.simple
+	binDir := filepath.Dir(destPath)
+	rootDir := filepath.Dir(binDir)
 
-	rootDir := filepath.Dir(filepath.Dir(destPath))
-	return ExtractTarGz(srcPath, rootDir, 1)
+	unpacked, err := os.MkdirTemp(rootDir, ".unpack-*")
+	if err != nil {
+		return fmt.Errorf("failed to create a directory to unpack into: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(unpacked) }()
+
+	if err := ExtractTarGz(srcPath, unpacked, 1); err != nil {
+		return err
+	}
+
+	tool := filepath.Join(unpacked, filepath.Base(binDir), WasmOptName)
+	found := false
+
+	err = filepath.WalkDir(unpacked, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+
+		target := destPath
+		if path == tool {
+			found = true
+		} else {
+			rel, err := filepath.Rel(unpacked, path)
+			if err != nil {
+				return err
+			}
+			target = filepath.Join(rootDir, rel)
+			if err := os.MkdirAll(filepath.Dir(target), fsx.DirPerm); err != nil {
+				return fmt.Errorf("failed to create the directory for %s: %w", target, err)
+			}
+		}
+
+		if err := os.Rename(path, target); err != nil {
+			return fmt.Errorf("failed to install %s: %w", target, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// An archive without the tool would otherwise install the empty file
+	// downloadTool staged for it, and report success.
+	if !found {
+		return fmt.Errorf("the archive carries no %s", filepath.Join(filepath.Base(binDir), WasmOptName))
+	}
+
+	return nil
 }
 
 // InstallRustURL is where a developer with no Rust toolchain is sent. It is

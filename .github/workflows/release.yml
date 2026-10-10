@@ -1,0 +1,1199 @@
+name: Build and Release
+
+# EVERY PUSH TO MAIN OFFERS A RELEASE OF EACH TOOL THAT HAS CHANGED, AND NONE
+# GOES OUT WITHOUT AN APPROVAL.
+#
+# Four things are released from this repository, each on its own:
+#
+#   Simple CLI      tools/simple-cli      programs on a GitHub Release
+#   Contextualizer  tools/contextualizer  programs on a GitHub Release, and an
+#                                         npm package that downloads them
+#   SCL Parser      packages/scl_parser   a Hex package
+#   SCL Parser CLI  tools/scl_parser_cli  programs on a GitHub Release
+#
+# A push computes, for each of them, the version its unreleased commits have
+# earned. A tool with none is left alone. Each of the others is built and
+# tested, and then waits at its own `publish` job for a deployment review.
+# Approving it creates the tag `v<version>-<tool>` on the commit that was built
+# and a GitHub Release, and publishes the tool's package where it has one.
+# Leaving it alone releases nothing: the next push withdraws the run and offers
+# its own, from a newer commit.
+#
+# Each tool waits on an environment of its own, so approving one releases that
+# one and nothing else.
+#
+# A pull request runs everything up to the wait, so what a release would be
+# built from is linted, tested and started before it merges.
+#
+# THE VERSION OF RECORD IS THE TAG. Nothing is committed back: a version is
+# computed from the tags and the commit subjects each time, and written into
+# what is built on the runner. The number in a tool's mix.exs or package.json
+# is therefore not the next release's. It is replaced in the runner's checkout
+# by the version being built, and the file in the repository is left as it is.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  # THE MACHINES THE SIMPLE CLI IS BUILT FOR, as Go names an operating system
+  # and a processor. Each becomes one file of the release, named
+  # `simple-cli-<os>-<processor>` with `.exe` on Windows. The CLI works out the
+  # name of its own file the same way (`AssetName` in
+  # tools/simple-cli/internal/selfupdate/release.go), so a machine added here
+  # needs nothing added there. It does need a runner of its kind added to the
+  # `simple-cli-verify` job below, which is where each file is started on the
+  # machine it was built for.
+  SIMPLE_CLI_TARGETS: darwin/arm64 windows/amd64
+
+  # A RELEASE CAN WAIT THIRTY DAYS FOR ITS REVIEW, which is as long as GitHub
+  # keeps a review open. What it would publish is kept that long too, so an
+  # approval on the last day still finds the files it approves.
+  KEEP_DAYS: 30
+
+jobs:
+  # A RUN THAT WAITS ON A REVIEW IS WITHDRAWN WHEN A NEWER PUSH ARRIVES.
+  #
+  # Each push to `main` computes the versions its unreleased commits have
+  # earned and then waits for the reviews on the `publish` jobs. Nothing ended
+  # a run that was overtaken, so without this job two pushes ahead of one
+  # release leave two approvals pending for the same version, and approving the
+  # older one releases a commit that is no longer the newest.
+  #
+  # A newer run offers everything an older one does, from a later commit, so
+  # the older one is cancelled. The one exception is a run with an approved
+  # release that is publishing right now: stopping that leaves a release half
+  # made, so the run is left to finish.
+  supersede:
+    name: Withdraw Superseded Runs
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the older runs that are still open
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          # The workflow is named by the file this run was started from, so the
+          # name is not written down a second time here.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          workflow="${workflow##*/}"
+
+          older=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&event=push&per_page=100" \
+            --jq ".workflow_runs[] | select(.status != \"completed\" and .run_number < ${GITHUB_RUN_NUMBER}) | .id")
+
+          if [ -z "$older" ]; then
+            echo "No older run is open." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for id in $older; do
+            approved=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/approvals" \
+              --jq '[.[] | select(.state == "approved")] | length')
+            if [ "$approved" -gt 0 ]; then
+              under_way=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.status != "completed" and .status != "waiting")] | length')
+              if [ "$under_way" -gt 0 ]; then
+                echo "Run ${id} is publishing an approved release. It is left to finish." >> "$GITHUB_STEP_SUMMARY"
+                continue
+              fi
+            fi
+
+            if gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" > /dev/null; then
+              echo "Run ${id} is cancelled. This run offers its releases from a newer commit." >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}" --jq .status)" = "completed" ]; then
+              echo "Run ${id} finished before it was cancelled." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Run ${id} is still open and was not cancelled." >&2
+              exit 1
+            fi
+          done
+
+  version:
+    name: Calculate Versions
+    runs-on: ubuntu-latest
+    outputs:
+      simple-cli-version: ${{ steps.simple-cli.outputs.version }}
+      simple-cli-tag: ${{ steps.simple-cli.outputs.version_tag }}
+      simple-cli-changed: ${{ steps.simple-cli.outputs.changed }}
+      contextualizer-version: ${{ steps.contextualizer.outputs.version }}
+      contextualizer-tag: ${{ steps.contextualizer.outputs.version_tag }}
+      contextualizer-changed: ${{ steps.contextualizer.outputs.changed }}
+      scl-parser-version: ${{ steps.scl-parser.outputs.version }}
+      scl-parser-tag: ${{ steps.scl-parser.outputs.version_tag }}
+      scl-parser-changed: ${{ steps.scl-parser.outputs.changed }}
+      scl-parser-cli-version: ${{ steps.scl-parser-cli.outputs.version }}
+      scl-parser-cli-tag: ${{ steps.scl-parser-cli.outputs.version_tag }}
+      scl-parser-cli-changed: ${{ steps.scl-parser-cli.outputs.changed }}
+      go: ${{ steps.toolchain.outputs.go }}
+      golangci-lint: ${{ steps.toolchain.outputs.golangci-lint }}
+      nodejs: ${{ steps.toolchain.outputs.nodejs }}
+      erlang: ${{ steps.toolchain.outputs.erlang }}
+      elixir: ${{ steps.toolchain.outputs.elixir }}
+      zig: ${{ steps.toolchain.outputs.zig }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      # WHAT STARTS A RELEASE. This workflow runs on pushes to `main` and on
+      # pull requests against it. Tags are an output of it and never an input.
+      # Each of the four steps below computes one tool's version, and they
+      # differ only in the tool they name.
+      #
+      #   * `namespace` keeps a tool's versions apart from the other tools'. A
+      #     step reads back only its own `v<version>-<namespace>` tags, by
+      #     their whole name: `scl-parser` does not read the tags of
+      #     `scl-parser-cli`.
+      #   * `change_path` is the path the version is computed over. The action
+      #     compares the newest tag in its namespace against `HEAD` for that
+      #     path, so `changed` means "this path holds commits that have not
+      #     been released yet". Whichever run picks them up, the version
+      #     published is the one those commits earned.
+      #
+      # A FEATURE IS COUNTED UNDER THE TOOL'S OWN SCOPE. Any commit that
+      # changes a tool's files makes its next release at least a patch. Only
+      # `feat(<the tool's scope>):` makes it a minor.
+      #
+      # A MAJOR IS WRITTEN OUT IN FULL AND CANNOT BE TYPED BY ACCIDENT. Above
+      # 1.0 the major is the line an installed tool does not cross by itself,
+      # and when to cross it is a judgement about timing that a diff cannot
+      # make: a break can land on `main` well ahead of the release that
+      # carries it. A `!` still records the break where a reader looks for it,
+      # in `git log` and under Breaking Changes in the changelog. Recording a
+      # break and choosing the release that carries it are two acts, and only
+      # the sentence `<type>(<scope>): release the next major` does the second.
+      #
+      # THE SENTENCE COUNTS ONLY ON A COMMIT THAT CHANGES THE TOOL. The action
+      # lists the commits to read with `change_path`, so a commit that touches
+      # nothing under the tool's path is not read at all, whatever its subject
+      # says. An empty commit carrying the sentence was tried and left the
+      # version where it was.
+      #
+      # `search_commit_body` is OFF, and that is what makes the sentence safe
+      # to write down. With bodies searched it would be enough to QUOTE it, in
+      # a commit explaining this policy, to compute a major from a change that
+      # declared nothing. The subject line is the one place a release is
+      # deliberate, so only it is read.
+
+      # TWO SCOPES ARE THE SIMPLE CLI'S. Its commits carry `simple-cli`, and
+      # some carry `cli`. Read as `simple-cli` alone, a feature under the
+      # shorter scope would count as a patch.
+      #
+      # Its first release is 1.0.0: with no tag to count from, the action
+      # starts at zero, and the commit that carries the sentence is what makes
+      # it 1.0.0 rather than 0.1.0.
+      - name: Simple CLI Version
+        id: simple-cli
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
+        with:
+          tag_prefix: v
+          major_pattern: '/\(simple-cli\)!?: release the next major/'
+          minor_pattern: '/feat\((simple-cli|cli)\):/'
+          version_format: '${major}.${minor}.${patch}'
+          change_path: tools/simple-cli
+          namespace: simple-cli
+          bump_each_commit: false
+          search_commit_body: false
+          enable_prerelease_mode: false
+          debug: false
+
+      - name: Contextualizer Version
+        id: contextualizer
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
+        with:
+          tag_prefix: v
+          major_pattern: '/\(contextualizer\)!?: release the next major/'
+          minor_pattern: '/feat\(contextualizer\):/'
+          version_format: '${major}.${minor}.${patch}'
+          change_path: tools/contextualizer
+          namespace: contextualizer
+          bump_each_commit: false
+          search_commit_body: false
+          enable_prerelease_mode: false
+          debug: false
+
+      - name: SCL Parser Version
+        id: scl-parser
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
+        with:
+          tag_prefix: v
+          major_pattern: '/\(scl-parser\)!?: release the next major/'
+          minor_pattern: '/feat\(scl-parser\):/'
+          version_format: '${major}.${minor}.${patch}'
+          change_path: packages/scl_parser
+          namespace: scl-parser
+          bump_each_commit: false
+          search_commit_body: false
+          enable_prerelease_mode: false
+          debug: false
+
+      - name: SCL Parser CLI Version
+        id: scl-parser-cli
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
+        with:
+          tag_prefix: v
+          major_pattern: '/\(scl-parser-cli\)!?: release the next major/'
+          minor_pattern: '/feat\(scl-parser-cli\):/'
+          version_format: '${major}.${minor}.${patch}'
+          change_path: tools/scl_parser_cli
+          namespace: scl-parser-cli
+          bump_each_commit: false
+          search_commit_body: false
+          enable_prerelease_mode: false
+          debug: false
+
+      # The toolchain has one authority in this repository and it is
+      # devbox.json, the file a contributor's Go, linter, Node, Erlang, Elixir
+      # and Zig come from. Read, not copied: a number written down twice is a
+      # number that drifts.
+      - name: Toolchain Versions
+        id: toolchain
+        run: |
+          set -euo pipefail
+
+          for tool in go golangci-lint nodejs erlang elixir zig; do
+            version=$(jq -r --arg tool "$tool" '.packages[$tool] // empty' devbox.json)
+            case "$version" in
+              [0-9]*.[0-9]*) ;;
+              *)
+                echo "devbox.json .packages.\"${tool}\" is '${version}', which is not a version. It is the only authority for it; if it moved, move this read with it." >&2
+                exit 1
+                ;;
+            esac
+            echo "${tool}=${version}" >> "$GITHUB_OUTPUT"
+          done
+
+      # What this run offers, at the top of its page: the version each tool
+      # would be released as, and whether it has anything to release.
+      - name: Summary
+        env:
+          SIMPLE_CLI: ${{ steps.simple-cli.outputs.version }} | ${{ steps.simple-cli.outputs.changed }}
+          CONTEXTUALIZER: ${{ steps.contextualizer.outputs.version }} | ${{ steps.contextualizer.outputs.changed }}
+          SCL_PARSER: ${{ steps.scl-parser.outputs.version }} | ${{ steps.scl-parser.outputs.changed }}
+          SCL_PARSER_CLI: ${{ steps.scl-parser-cli.outputs.version }} | ${{ steps.scl-parser-cli.outputs.changed }}
+        run: |
+          {
+            echo "| Tool | Next version | Has unreleased commits |"
+            echo "| --- | --- | --- |"
+            echo "| Simple CLI | ${SIMPLE_CLI} |"
+            echo "| Contextualizer | ${CONTEXTUALIZER} |"
+            echo "| SCL Parser | ${SCL_PARSER} |"
+            echo "| SCL Parser CLI | ${SCL_PARSER_CLI} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # Simple CLI
+  # ---------------------------------------------------------------------------
+
+  simple-cli-build:
+    name: Build Simple CLI
+    needs: version
+    if: needs.version.outputs.simple-cli-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.version.outputs.go }}
+          cache-dependency-path: tools/simple-cli/go.sum
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+        with:
+          version: v${{ needs.version.outputs.golangci-lint }}
+          working-directory: tools/simple-cli
+
+      # THE TESTS BUILD REAL ACTIONS, so they need what a contributor's
+      # machine has: Node, pnpm, and this workspace's packages installed at the
+      # root, where the CLI's metadata generator looks for them. pnpm's version
+      # is the one package.json names in `packageManager`, read by its setup
+      # action, and it is set up first so Node's setup can ask it where its
+      # store is.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ needs.version.outputs.nodejs }}
+          cache: pnpm
+
+      - name: Install workspace packages
+        run: pnpm install --frozen-lockfile
+
+      # THE PACKAGES ARE TESTED SIDE BY SIDE, ON A MACHINE THAT HAS NEVER RUN
+      # SCL-PARSER. The tests run scl-parser, and scl-parser unpacks its own
+      # runtime under the home directory the first time it runs. Two first
+      # runs at once collide, and a runner is where that shows: a
+      # contributor's machine ran the tool long ago, a runner never has. The
+      # CLI makes a tool's first runs take turns (`ToolOutput` in
+      # tools/simple-cli/internal/home/home.go), so nothing here has to hold
+      # the packages apart.
+      - name: Test
+        working-directory: tools/simple-cli
+        run: go test ./...
+
+      # The same thing asked for directly: the released scl-parser is
+      # downloaded into an empty home and started six times at once.
+      - name: Start scl-parser six times at once on an empty home
+        working-directory: tools/simple-cli
+        env:
+          SIMPLE_CLI_INTEGRATION: '1'
+        run: go test -count=1 -v -run '^TestIntegration_SCLParserFirstRunsAtOnce$' ./internal/build/
+
+      # ONE BUILD MACHINE MAKES EVERY FILE. Go builds for another operating
+      # system and processor without their toolchains, so each program comes
+      # out of the same checkout, compiler and flags, and only its target
+      # differs. The version computed above is written into it here, which is
+      # the only place the program learns its own version.
+      #
+      # The checksums are written from the list of files just built, and are
+      # what an installed CLI checks its download against before it replaces
+      # itself.
+      - name: Build
+        working-directory: tools/simple-cli
+        env:
+          VERSION: ${{ needs.version.outputs.simple-cli-version }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          files=()
+          for target in $SIMPLE_CLI_TARGETS; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="simple-cli-${goos}-${goarch}"
+            if [ "$goos" = "windows" ]; then
+              name="${name}.exe"
+            fi
+
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+              -ldflags "-s -w -X simple-cli/internal/cli.Version=${VERSION}" \
+              -o "dist/${name}" ./cmd/simple
+            files+=("$name")
+          done
+
+          (cd dist && sha256sum "${files[@]}" > simple-cli-checksums.txt)
+
+          {
+            echo "### Simple CLI ${VERSION}"
+            echo '```'
+            cat dist/simple-cli-checksums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded on pull requests too: the `simple-cli-verify` job starts each
+      # file on the machine it was built for, and that is worth knowing before
+      # a merge.
+      - name: Upload programs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: simple-cli
+          path: tools/simple-cli/dist
+          if-no-files-found: error
+          retention-days: ${{ env.KEEP_DAYS }}
+
+      # THE CHANGELOG IS WRITTEN BEFORE THE REVIEW AND SHOWN ON THE RUN'S PAGE,
+      # so whoever approves a release reads what it will say first. It is
+      # written on pull requests too, where it shows what merging would offer.
+      - name: Changelog
+        env:
+          VERSION: ${{ needs.version.outputs.simple-cli-version }}
+          TAG: ${{ needs.version.outputs.simple-cli-tag }}
+        run: |
+          set -euo pipefail
+
+          scripts/release-changelog.sh "Simple CLI" "$VERSION" simple-cli "simple-cli|cli" tools/simple-cli > changelog.md
+
+          {
+            echo "### 📦 Install or update"
+            echo ""
+            echo "Already have the CLI? Run \`simple version update\`."
+            echo ""
+            echo "Otherwise download the file for your machine below and follow the"
+            echo "[install steps](https://github.com/${GITHUB_REPOSITORY}/tree/main/tools/simple-cli#installation)."
+            echo "\`simple-cli-checksums.txt\` carries the SHA-256 of each file."
+          } >> changelog.md
+
+          {
+            echo "**Tag:** ${TAG}"
+            echo ""
+            cat changelog.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: changelog-simple-cli
+          path: changelog.md
+          if-no-files-found: error
+          retention-days: ${{ env.KEEP_DAYS }}
+
+  # EACH FILE IS STARTED ON THE MACHINE IT WAS BUILT FOR, and the update is run
+  # there against a real disk.
+  #
+  # Two things about a release can only be learned on the machine itself. One
+  # is whether the program starts at all: it was built on Linux for somewhere
+  # else. The other is whether the operating system lets a running program be
+  # replaced, which is what `simple version update` does: Windows refuses to
+  # overwrite or delete the file of a running program and allows it to be
+  # renamed, and macOS ties a program to the file it was started from. The
+  # test named below replaces a running program for real and then runs the
+  # replacement.
+  #
+  # One runner for each entry of SIMPLE_CLI_TARGETS above.
+  simple-cli-verify:
+    name: Verify Simple CLI on ${{ matrix.os }}
+    needs: [version, simple-cli-build]
+    if: needs.version.outputs.simple-cli-changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.version.outputs.go }}
+          cache-dependency-path: tools/simple-cli/go.sum
+
+      - name: Replace a running program
+        working-directory: tools/simple-cli
+        run: go test -count=1 -tags integration -run '^TestUpdateReplacesARunningProgram$' -v ./internal/selfupdate/
+
+      - name: Download programs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: simple-cli
+          path: dist
+
+      # The file is found by the name this machine's own Go gives its
+      # operating system and processor, which is how an installed CLI finds
+      # it. A runner whose kind is not in SIMPLE_CLI_TARGETS finds nothing and
+      # fails here.
+      - name: Start the program built for this machine
+        env:
+          VERSION: ${{ needs.version.outputs.simple-cli-version }}
+        run: |
+          set -euo pipefail
+
+          name="simple-cli-$(go env GOOS)-$(go env GOARCH)"
+          if [ "$(go env GOOS)" = "windows" ]; then
+            name="${name}.exe"
+          fi
+
+          # The tool that checks a SHA-256 is `sha256sum` on Linux and in the
+          # shell Windows runners use, and `shasum` on macOS.
+          if command -v sha256sum > /dev/null; then
+            check="sha256sum --check -"
+          else
+            check="shasum -a 256 --check -"
+          fi
+          (cd dist && grep " ${name}\$" simple-cli-checksums.txt | $check)
+
+          chmod +x "dist/${name}"
+          said=$("dist/${name}" --version)
+          echo "$said"
+          if [ "$said" != "simple version ${VERSION}" ]; then
+            echo "expected: simple version ${VERSION}" >&2
+            exit 1
+          fi
+
+  simple-cli-publish:
+    name: Publish Simple CLI
+    needs: [version, simple-cli-build, simple-cli-verify]
+    if: needs.version.outputs.simple-cli-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
+    runs-on: ubuntu-latest
+    # THE APPROVAL LIVES ON THE ENVIRONMENT. Each `publish` job in this file
+    # waits on an environment that has a required reviewer and accepts only
+    # `main`, so the job waits until its release is approved, and the secrets
+    # it publishes with are not handed to it before then.
+    #
+    # Each tool has an environment of its own, because a deployment review is
+    # granted to an environment: sharing one would put one tool's approval on
+    # every other tool's release.
+    environment:
+      name: github-releases
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.simple-cli-tag }}
+    # One release of a tool at a time, and nothing else waits on it. A run
+    # that is already publishing is not cancelled: a release that has been
+    # created cannot be undone by stopping the run that created it.
+    concurrency:
+      group: publish-simple-cli
+      cancel-in-progress: false
+    steps:
+      # The checkout is for the script that creates the release. It is the
+      # commit this run built, and the token it was fetched with is not kept.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download programs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: simple-cli
+          path: dist
+
+      - name: Download changelog
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: changelog-simple-cli
+
+      # The script is where the tag is created, and where it says why it uses
+      # this token, why it names this commit, and what it does about a version
+      # that is already released.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+          VERSION: ${{ needs.version.outputs.simple-cli-version }}
+          TAG: ${{ needs.version.outputs.simple-cli-tag }}
+        run: scripts/release-create.sh "$TAG" "Simple CLI ${VERSION}" changelog.md dist/*
+
+  # ---------------------------------------------------------------------------
+  # Contextualizer
+  # ---------------------------------------------------------------------------
+
+  contextualizer-build:
+    name: Build Contextualizer
+    needs: version
+    if: needs.version.outputs.contextualizer-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.version.outputs.go }}
+          cache-dependency-path: tools/contextualizer/go.sum
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
+        with:
+          version: v${{ needs.version.outputs.golangci-lint }}
+          working-directory: tools/contextualizer
+
+      - name: Test
+        working-directory: tools/contextualizer
+        run: go test ./...
+
+      # THE FILE NAMES ARE WHAT THE NPM PACKAGE DOWNLOADS. Every published
+      # version of @simpleplatform/contextualizer fetches the program for its
+      # machine from this release by one of these five names
+      # (tools/contextualizer/bin/index.js), so a name changed here is a
+      # download that fails there.
+      #
+      # One build machine makes every file, as for the Simple CLI, and the
+      # version computed above is written into each.
+      - name: Build
+        working-directory: tools/contextualizer
+        env:
+          VERSION: ${{ needs.version.outputs.contextualizer-version }}
+        run: |
+          set -euo pipefail
+
+          # The file, then the operating system and processor it is for.
+          builds="
+          contextualizer-macos          darwin   amd64
+          contextualizer-macos-silicon  darwin   arm64
+          contextualizer-linux          linux    amd64
+          contextualizer-linux-arm64    linux    arm64
+          contextualizer-windows.exe    windows  amd64
+          "
+
+          mkdir -p dist
+          while read -r name goos goarch; do
+            if [ -z "$name" ]; then
+              continue
+            fi
+
+            GOOS="$goos" GOARCH="$goarch" go build \
+              -ldflags "-s -w -X main.Version=${VERSION}" \
+              -o "dist/${name}" ./cmd/contextualizer
+          done <<< "$builds"
+
+          ls -l dist
+
+          # The one built for this machine is started, and has to know the
+          # version it was built as.
+          said=$(dist/contextualizer-linux --version)
+          echo "contextualizer --version: ${said}"
+          if [ "$said" != "$VERSION" ]; then
+            echo "expected: ${VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Upload programs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: contextualizer
+          path: tools/contextualizer/dist
+          if-no-files-found: error
+          retention-days: ${{ env.KEEP_DAYS }}
+
+      - name: Changelog
+        env:
+          VERSION: ${{ needs.version.outputs.contextualizer-version }}
+          TAG: ${{ needs.version.outputs.contextualizer-tag }}
+        run: |
+          set -euo pipefail
+
+          scripts/release-changelog.sh "Contextualizer" "$VERSION" contextualizer contextualizer tools/contextualizer > changelog.md
+
+          {
+            echo "**Tag:** ${TAG}"
+            echo ""
+            cat changelog.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: changelog-contextualizer
+          path: changelog.md
+          if-no-files-found: error
+          retention-days: ${{ env.KEEP_DAYS }}
+
+  contextualizer-publish:
+    name: Publish Contextualizer
+    needs: [version, contextualizer-build]
+    if: needs.version.outputs.contextualizer-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
+    runs-on: ubuntu-latest
+    environment:
+      name: release-contextualizer
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.contextualizer-tag }}
+    concurrency:
+      group: publish-contextualizer
+      cancel-in-progress: false
+    steps:
+      # BOTH SECRETS ARE ASKED FOR BEFORE ANYTHING IS PUBLISHED. This job
+      # publishes to two places, and a secret found missing at the second
+      # would leave the release made in the first and not in the other.
+      - name: Check this job's secrets
+        env:
+          SIMPLE_DEVOPS_TOKEN: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          missing=""
+          if [ -z "$SIMPLE_DEVOPS_TOKEN" ]; then missing="${missing} SIMPLE_DEVOPS_TOKEN"; fi
+          if [ -z "$NPM_TOKEN" ]; then missing="${missing} NPM_TOKEN"; fi
+
+          if [ -n "$missing" ]; then
+            echo "The environment release-contextualizer has no secret named:${missing}. Nothing has been published. Add what is missing to that environment and run this job again." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download programs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: contextualizer
+          path: dist
+
+      - name: Download changelog
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: changelog-contextualizer
+
+      # THE RELEASE COMES BEFORE THE PACKAGE, because the package downloads
+      # its program from the release when it is installed.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+          VERSION: ${{ needs.version.outputs.contextualizer-version }}
+          TAG: ${{ needs.version.outputs.contextualizer-tag }}
+        run: scripts/release-create.sh "$TAG" "Contextualizer ${VERSION}" changelog.md dist/*
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ needs.version.outputs.nodejs }}
+          registry-url: https://registry.npmjs.org
+
+      # A VERSION THAT IS ON NPM ALREADY IS NOT PUBLISHED AGAIN. The release
+      # above and the package here are made one after the other, so a job that
+      # made the release and failed here is run again, and a second run of it
+      # must be able to finish what the first began. Each of the two asks its
+      # own destination whether the version is there.
+      #
+      # A registry that cannot be reached reads as "not published". The
+      # publish is then attempted, and the registry itself is the judge of it.
+      #
+      # The package is published with the version computed above, written into
+      # package.json here and nowhere else. It is how the installed package
+      # knows which release to download its program from.
+      - name: Publish to npm
+        working-directory: tools/contextualizer
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          VERSION: ${{ needs.version.outputs.contextualizer-version }}
+        run: |
+          set -euo pipefail
+
+          package=$(jq -r .name package.json)
+
+          found=$(curl -s -o /dev/null -w '%{http_code}' "https://registry.npmjs.org/${package/\//%2f}/${VERSION}" || true)
+          if [ "$found" = "200" ]; then
+            echo "${package} ${VERSION} is on npm already. It is not published again." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          jq --arg version "$VERSION" '.version = $version' package.json > package.json.next
+          mv package.json.next package.json
+
+          # The token is named here and read from the environment when the
+          # package is published. It is not written to the disk.
+          echo '//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}' > .npmrc
+
+          pnpm publish --access public --no-git-checks
+
+          echo "Published ${package} ${VERSION} to npm." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # SCL Parser
+  # ---------------------------------------------------------------------------
+
+  scl-parser-build:
+    name: Build SCL Parser
+    needs: version
+    if: needs.version.outputs.scl-parser-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        with:
+          otp-version: ${{ needs.version.outputs.erlang }}
+          elixir-version: ${{ needs.version.outputs.elixir }}
+
+      - name: Write the version being built
+        env:
+          VERSION: ${{ needs.version.outputs.scl-parser-version }}
+        run: scripts/release-set-mix-version.sh packages/scl_parser/mix.exs "$VERSION"
+
+      - name: Install dependencies
+        working-directory: packages/scl_parser
+        run: mix deps.get
+
+      # The formatter has the last word on how the code is laid out, so a file
+      # it would change stops the build here.
+      - name: Check formatting
+        working-directory: packages/scl_parser
+        run: mix format --check-formatted
+
+      - name: Compile
+        working-directory: packages/scl_parser
+        run: mix compile --warnings-as-errors
+
+      - name: Test
+        working-directory: packages/scl_parser
+        run: mix test
+
+      # The package is built the way it is published, and has to come out
+      # carrying the version computed above.
+      - name: Build the Hex package
+        working-directory: packages/scl_parser
+        env:
+          VERSION: ${{ needs.version.outputs.scl-parser-version }}
+        run: |
+          set -euo pipefail
+
+          mix hex.build
+
+          if [ ! -f "scl_parser-${VERSION}.tar" ]; then
+            echo "expected the package scl_parser-${VERSION}.tar, and found:" >&2
+            ls -- *.tar >&2 || true
+            exit 1
+          fi
+
+      - name: Changelog
+        env:
+          VERSION: ${{ needs.version.outputs.scl-parser-version }}
+          TAG: ${{ needs.version.outputs.scl-parser-tag }}
+        run: |
+          set -euo pipefail
+
+          scripts/release-changelog.sh "SCL Parser" "$VERSION" scl-parser scl-parser packages/scl_parser > changelog.md
+
+          {
+            echo "**Tag:** ${TAG}"
+            echo ""
+            cat changelog.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: changelog-scl-parser
+          path: changelog.md
+          if-no-files-found: error
+          retention-days: ${{ env.KEEP_DAYS }}
+
+  scl-parser-publish:
+    name: Publish SCL Parser
+    needs: [version, scl-parser-build]
+    if: needs.version.outputs.scl-parser-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
+    runs-on: ubuntu-latest
+    environment:
+      name: release-scl-parser
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.scl-parser-tag }}
+    concurrency:
+      group: publish-scl-parser
+      cancel-in-progress: false
+    steps:
+      # Both secrets are asked for before anything is published, for the
+      # reason given on the Contextualizer's `publish` job.
+      - name: Check this job's secrets
+        env:
+          SIMPLE_DEVOPS_TOKEN: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+        run: |
+          missing=""
+          if [ -z "$SIMPLE_DEVOPS_TOKEN" ]; then missing="${missing} SIMPLE_DEVOPS_TOKEN"; fi
+          if [ -z "$HEX_API_KEY" ]; then missing="${missing} HEX_API_KEY"; fi
+
+          if [ -n "$missing" ]; then
+            echo "The environment release-scl-parser has no secret named:${missing}. Nothing has been published. Add what is missing to that environment and run this job again." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download changelog
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: changelog-scl-parser
+
+      # This release carries no files: the package is on Hex. It is made so
+      # the version has its tag and its changelog where the other tools' are.
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+          VERSION: ${{ needs.version.outputs.scl-parser-version }}
+          TAG: ${{ needs.version.outputs.scl-parser-tag }}
+        run: scripts/release-create.sh "$TAG" "SCL Parser ${VERSION}" changelog.md
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        with:
+          otp-version: ${{ needs.version.outputs.erlang }}
+          elixir-version: ${{ needs.version.outputs.elixir }}
+
+      # A version that is on Hex already is not published again, for the
+      # reason given on the Contextualizer's `publish` job: a job that made
+      # the release and failed here is run again, and has to be able to
+      # finish.
+      - name: Publish to Hex
+        working-directory: packages/scl_parser
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+          VERSION: ${{ needs.version.outputs.scl-parser-version }}
+        run: |
+          set -euo pipefail
+
+          found=$(curl -s -o /dev/null -w '%{http_code}' "https://hex.pm/api/packages/scl_parser/releases/${VERSION}" || true)
+          if [ "$found" = "200" ]; then
+            echo "scl_parser ${VERSION} is on Hex already. It is not published again." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          "${GITHUB_WORKSPACE}/scripts/release-set-mix-version.sh" mix.exs "$VERSION"
+
+          mix deps.get
+          mix hex.publish --yes
+
+          echo "Published scl_parser ${VERSION} to Hex." >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # SCL Parser CLI
+  # ---------------------------------------------------------------------------
+
+  scl-parser-cli-test:
+    name: Test SCL Parser CLI
+    needs: version
+    if: needs.version.outputs.scl-parser-cli-changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        with:
+          otp-version: ${{ needs.version.outputs.erlang }}
+          elixir-version: ${{ needs.version.outputs.elixir }}
+
+      - name: Install dependencies
+        working-directory: tools/scl_parser_cli
+        run: mix deps.get
+
+      - name: Check formatting
+        working-directory: tools/scl_parser_cli
+        run: mix format --check-formatted
+
+      - name: Test
+        working-directory: tools/scl_parser_cli
+        run: mix test --no-start
+
+      - name: Compile as it is released
+        working-directory: tools/scl_parser_cli
+        env:
+          MIX_ENV: prod
+        run: mix compile --warnings-as-errors
+
+      - name: Changelog
+        env:
+          VERSION: ${{ needs.version.outputs.scl-parser-cli-version }}
+          TAG: ${{ needs.version.outputs.scl-parser-cli-tag }}
+        run: |
+          set -euo pipefail
+
+          scripts/release-changelog.sh "SCL Parser CLI" "$VERSION" scl-parser-cli scl-parser-cli tools/scl_parser_cli > changelog.md
+
+          {
+            echo "**Tag:** ${TAG}"
+            echo ""
+            cat changelog.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload changelog
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: changelog-scl-parser-cli
+          path: changelog.md
+          if-no-files-found: error
+          retention-days: ${{ env.KEEP_DAYS }}
+
+  # ONE PROGRAM FOR EACH MACHINE, each a single file that carries its own
+  # Erlang runtime and unpacks it the first time it runs.
+  #
+  # THE FILE NAMES ARE WHAT THE SIMPLE CLI DOWNLOADS. It fetches the program
+  # for its machine from this release by one of these five names
+  # (`mapSCLPlatform` in tools/simple-cli/internal/build/scl.go), so a name
+  # changed here is a download that fails there.
+  scl-parser-cli-build:
+    name: Build SCL Parser CLI (${{ matrix.target }})
+    needs: version
+    if: needs.version.outputs.scl-parser-cli-changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos
+            file: scl-parser-macos
+          - target: macos_silicon
+            file: scl-parser-macos-silicon
+          - target: linux
+            file: scl-parser-linux
+          - target: linux_arm
+            file: scl-parser-linux-arm64
+          - target: windows
+            file: scl-parser-windows.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        with:
+          otp-version: ${{ needs.version.outputs.erlang }}
+          elixir-version: ${{ needs.version.outputs.elixir }}
+
+      # ZIG IS WHAT BUILDS THE PROGRAM FOR A MACHINE OTHER THAN THIS ONE. It is
+      # one file, so no action sets it up: it is downloaded from where Zig is
+      # published, at the version devbox.json names, and put on the PATH.
+      #
+      # The file is checked against the SHA-256 Zig publishes for it, which
+      # catches a download that was cut short or changed on the way. The
+      # checksum comes from the same place as the file, so it does not vouch
+      # for the place.
+      - name: Set up Zig
+        env:
+          ZIG: ${{ needs.version.outputs.zig }}
+        run: |
+          set -euo pipefail
+
+          # What is published for this version, for the machine this job runs
+          # on: where the file is, and its SHA-256.
+          published=$(curl -fsSL --retry 3 https://ziglang.org/download/index.json \
+            | jq -c --arg version "$ZIG" '.[$version]["x86_64-linux"] // empty')
+          if [ -z "$published" ]; then
+            echo "https://ziglang.org/download/index.json lists no x86_64-linux build of Zig ${ZIG}." >&2
+            exit 1
+          fi
+
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/zig.tar.xz" "$(jq -r .tarball <<< "$published")"
+          echo "$(jq -r .shasum <<< "$published")  ${RUNNER_TEMP}/zig.tar.xz" | sha256sum --check -
+
+          mkdir "${RUNNER_TEMP}/zig"
+          tar -xJf "${RUNNER_TEMP}/zig.tar.xz" -C "${RUNNER_TEMP}/zig" --strip-components=1
+          echo "${RUNNER_TEMP}/zig" >> "$GITHUB_PATH"
+
+          # The Zig that was set up has to be the one that was asked for.
+          said=$("${RUNNER_TEMP}/zig/zig" version)
+          echo "zig version: ${said}"
+          if [ "$said" != "$ZIG" ]; then
+            echo "expected: ${ZIG}" >&2
+            exit 1
+          fi
+
+      # THE VERSION IS PART OF WHERE THE PROGRAM UNPACKS ITSELF. Each version
+      # unpacks its runtime into a folder named for it, so a program built as
+      # the version of the one before it would run that one's unpacked files
+      # instead of its own.
+      #
+      # The line in the repository stays as it is, and not only because
+      # nothing is committed back: programs installed before releases were
+      # found by their tags read that line from `main` to learn which release
+      # to download, so it has to go on naming a version that has one.
+      - name: Write the version being built
+        env:
+          VERSION: ${{ needs.version.outputs.scl-parser-cli-version }}
+        run: scripts/release-set-mix-version.sh tools/scl_parser_cli/mix.exs "$VERSION"
+
+      - name: Install dependencies
+        working-directory: tools/scl_parser_cli
+        run: mix deps.get
+
+      - name: Build
+        working-directory: tools/scl_parser_cli
+        env:
+          MIX_ENV: prod
+          BURRITO_TARGET: ${{ matrix.target }}
+          FILE: ${{ matrix.file }}
+        run: |
+          set -euo pipefail
+
+          mix release --overwrite
+
+          # One target was asked for, so one program is expected.
+          built=(burrito_out/*)
+          if [ "${#built[@]}" -ne 1 ] || [ ! -f "${built[0]}" ]; then
+            echo "expected one program in burrito_out, and found: ${built[*]}" >&2
+            exit 1
+          fi
+
+          mkdir -p dist
+          mv "${built[0]}" "dist/${FILE}"
+          ls -l dist
+
+      # The one built for this machine is started on a file it can parse, and
+      # has to unpack itself into a folder named for the version computed
+      # above.
+      - name: Start the program built for this machine
+        if: matrix.target == 'linux'
+        working-directory: tools/scl_parser_cli
+        env:
+          VERSION: ${{ needs.version.outputs.scl-parser-cli-version }}
+          FILE: ${{ matrix.file }}
+        run: |
+          set -euo pipefail
+
+          scratch=$(mktemp -d)
+          printf 'tenant "test"\n' > "${scratch}/sample.scl"
+
+          XDG_DATA_HOME="${scratch}/data" "dist/${FILE}" "${scratch}/sample.scl"
+          echo ""
+
+          unpacked=$(ls "${scratch}/data/.burrito")
+          echo "unpacked into: ${unpacked}"
+          case "$unpacked" in
+            *"_${VERSION}") ;;
+            *)
+              echo "expected a folder that ends in _${VERSION}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Upload program
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scl-parser-cli-${{ matrix.target }}
+          path: tools/scl_parser_cli/dist
+          if-no-files-found: error
+          retention-days: ${{ env.KEEP_DAYS }}
+
+  scl-parser-cli-publish:
+    name: Publish SCL Parser CLI
+    needs: [version, scl-parser-cli-test, scl-parser-cli-build]
+    if: needs.version.outputs.scl-parser-cli-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
+    runs-on: ubuntu-latest
+    environment:
+      name: release-scl-parser-cli
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.scl-parser-cli-tag }}
+    concurrency:
+      group: publish-scl-parser-cli
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The five programs were uploaded one from each build, and are gathered
+      # into one folder here.
+      - name: Download programs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: scl-parser-cli-*
+          path: dist
+          merge-multiple: true
+
+      - name: Download changelog
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: changelog-scl-parser-cli
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+          VERSION: ${{ needs.version.outputs.scl-parser-cli-version }}
+          TAG: ${{ needs.version.outputs.scl-parser-cli-tag }}
+        run: scripts/release-create.sh "$TAG" "SCL Parser CLI ${VERSION}" changelog.md dist/*
