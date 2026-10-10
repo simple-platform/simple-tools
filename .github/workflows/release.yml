@@ -196,7 +196,7 @@ jobs:
       # it 1.0.0 rather than 0.1.0.
       - name: Simple CLI Version
         id: simple-cli
-        uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
           major_pattern: '/\(simple-cli\)!?: release the next major/'
@@ -211,7 +211,7 @@ jobs:
 
       - name: Contextualizer Version
         id: contextualizer
-        uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
           major_pattern: '/\(contextualizer\)!?: release the next major/'
@@ -226,7 +226,7 @@ jobs:
 
       - name: SCL Parser Version
         id: scl-parser
-        uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
           major_pattern: '/\(scl-parser\)!?: release the next major/'
@@ -241,7 +241,7 @@ jobs:
 
       - name: SCL Parser CLI Version
         id: scl-parser-cli
-        uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
+        uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
           major_pattern: '/\(scl-parser-cli\)!?: release the next major/'
