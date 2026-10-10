@@ -1,5 +1,12 @@
 #!/bin/bash
-set -e
+# Installs the Simple CLI.
+#
+#   curl -fsSL https://raw.githubusercontent.com/simple-platform/simple-tools/main/tools/simple-cli/install | bash
+#
+# The program goes into ~/.simple/bin, beside everything else the CLI keeps
+# under ~/.simple, and that folder is put on the PATH. It installs the newest
+# release of the CLI. From then on `simple version update` keeps it up to date.
+set -euo pipefail
 
 # Colors for output
 RED='\033[0;31m'
@@ -16,75 +23,129 @@ echo_success() {
 }
 
 echo_error() {
-    echo -e "${RED}ERROR:${NC} $1"
+    echo -e "${RED}ERROR:${NC} $1" >&2
 }
 
-# Detect OS and Architecture
+REPOSITORY="simple-platform/simple-tools"
+
+# What the release workflow puts after a version to name the CLI's tag:
+# v1.4.0-simple-cli.
+TAG_SUFFIX="-simple-cli"
+
+# THE MACHINES THE CLI IS RELEASED FOR. A release carries one program for each,
+# named `simple-cli-<os>-<processor>` the way Go names the two, with `.exe` on
+# Windows. The CLI works out the name of its own file the same way when it
+# updates itself.
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
-BINARY_NAME=""
-TARGET_OS=""
-
-case "$OS" in
-    Darwin)
-        TARGET_OS="macos"
-        if [ "$ARCH" = "arm64" ]; then
-            BINARY_NAME="simple-cli-macos-silicon"
-        else
-            BINARY_NAME="simple-cli-macos"
-        fi
+case "$OS/$ARCH" in
+    Darwin/arm64)
+        ASSET="simple-cli-darwin-arm64"
+        PROGRAM="simple"
         ;;
-    Linux)
-        TARGET_OS="linux"
-        if [ "$ARCH" = "aarch64" ]; then
-            BINARY_NAME="simple-cli-linux-arm64"
-        else
-            BINARY_NAME="simple-cli-linux"
-        fi
-        ;;
-    MINGW*|MSYS*|CYGWIN*)
-        TARGET_OS="windows"
-        BINARY_NAME="simple-cli-windows.exe"
+    MINGW*/x86_64|MSYS*/x86_64|CYGWIN*/x86_64)
+        ASSET="simple-cli-windows-amd64.exe"
+        PROGRAM="simple.exe"
         ;;
     *)
-        echo_error "Unsupported operating system: $OS"
+        echo_error "The Simple CLI is not released for this machine ($OS on $ARCH). It is released for macOS on Apple silicon and for Windows on x64. To build it from source, see https://github.com/${REPOSITORY}/tree/main/tools/simple-cli#install-from-source"
         exit 1
         ;;
 esac
 
 echo_info "Detected platform: $OS ($ARCH)"
-echo_info "Target binary: $BINARY_NAME"
+
+# Prints what is at an address.
+fetch() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$1"
+    else
+        echo_error "Neither curl nor wget found. Please install one of them to proceed."
+        exit 1
+    fi
+}
+
+# Saves what is at an address into a file.
+download() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$1" -o "$2"
+    else
+        wget -qO "$2" "$1"
+    fi
+}
+
+# THE NEWEST RELEASE IS FOUND BY ITS TAG, the way the CLI finds its own
+# updates. The releases page is shared with the other tools built in this
+# repository, so "the latest release" there is whichever tool was released
+# last, and often not the CLI.
+#
+# The tags are asked for the way git asks for them. That address needs no
+# sign-in and has no hourly allowance to run out, which GitHub's API has.
+VERSION="$(
+    fetch "https://github.com/${REPOSITORY}.git/info/refs?service=git-upload-pack" |
+        tr '\0' '\n' |
+        grep -a -o -E "refs/tags/v[0-9]+\.[0-9]+\.[0-9]+${TAG_SUFFIX}" |
+        sed -E "s#^refs/tags/v##; s#${TAG_SUFFIX}\$##" |
+        sort -u -t. -k1,1n -k2,2n -k3,3n |
+        tail -n 1
+)" || true
+
+if [ -z "$VERSION" ]; then
+    echo_error "No release of the Simple CLI was found at https://github.com/${REPOSITORY}/releases"
+    exit 1
+fi
+
+echo_info "Newest release: $VERSION"
 
 # Define install paths
 INSTALL_DIR="$HOME/.simple/bin"
-BINARY_PATH="$INSTALL_DIR/simple"
+BINARY_PATH="$INSTALL_DIR/$PROGRAM"
 
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 
-# Download URL
-DOWNLOAD_URL="https://github.com/simple-platform/simple-tools/releases/latest/download/$BINARY_NAME"
+# THE PROGRAM IS DOWNLOADED BESIDE WHERE IT WILL LIVE, AND RENAMED INTO PLACE.
+# An installed program is never written into. Writing over one that is running
+# breaks it mid-run, and macOS stops trusting a program whose file was
+# rewritten in place and kills it when it is next started. A rename swaps the
+# whole file at once, and it has to start in the same folder to be a rename.
+STAGING="$(mktemp "$INSTALL_DIR/.install.XXXXXX")"
+trap 'rm -f "$STAGING" "$STAGING.checksums"' EXIT
 
-echo_info "Downloading simple cli..."
+RELEASE_URL="https://github.com/${REPOSITORY}/releases/download/v${VERSION}${TAG_SUFFIX}"
 
-# Download the binary
-if command -v curl >/dev/null 2>&1; then
-    curl -fsSL "$DOWNLOAD_URL" -o "$BINARY_PATH"
-elif command -v wget >/dev/null 2>&1; then
-    wget -qO "$BINARY_PATH" "$DOWNLOAD_URL"
+echo_info "Downloading $ASSET..."
+download "$RELEASE_URL/$ASSET" "$STAGING"
+download "$RELEASE_URL/simple-cli-checksums.txt" "$STAGING.checksums"
+
+# WHAT WAS DOWNLOADED IS CHECKED BEFORE IT IS INSTALLED. Every release carries
+# a file with the SHA-256 of each program in it, one to a line: the checksum,
+# then the program's name.
+EXPECTED="$(awk -v name="$ASSET" '$2 == name { print $1 }' "$STAGING.checksums")"
+
+if command -v sha256sum >/dev/null 2>&1; then
+    ACTUAL="$(sha256sum "$STAGING" | awk '{ print $1 }')"
 else
-    echo_error "Neither curl nor wget found. Please install one of them to proceed."
+    ACTUAL="$(shasum -a 256 "$STAGING" | awk '{ print $1 }')"
+fi
+
+if [ -z "$EXPECTED" ] || [ "$EXPECTED" != "$ACTUAL" ]; then
+    echo_error "The downloaded $ASSET does not match the checksum published with release $VERSION. Nothing was installed."
     exit 1
 fi
 
-# Make executable
-chmod +x "$BINARY_PATH"
+# Make executable. The file was created private to this account, so every
+# permission is set here, not only the one to run it.
+chmod 755 "$STAGING"
+mv -f "$STAGING" "$BINARY_PATH"
 
-echo_success "Installed simple-cli to $BINARY_PATH"
+echo_success "Installed Simple CLI $VERSION to $BINARY_PATH"
 
 # Setup PATH
-SHELL_NAME=$(basename "$SHELL")
+SHELL_NAME=$(basename "${SHELL:-}")
 PROFILE_FILE=""
 
 case "$SHELL_NAME" in
@@ -123,10 +184,11 @@ if [[ "$OS" == MINGW* ]] || [[ "$OS" == MSYS* ]] || [[ "$OS" == CYGWIN* ]]; then
 fi
 
 if [ -n "$PROFILE_FILE" ]; then
-    if grep -q "$INSTALL_DIR" "$PROFILE_FILE"; then
+    if grep -q "$INSTALL_DIR" "$PROFILE_FILE" 2>/dev/null; then
         echo_info "PATH already configured in $PROFILE_FILE"
     else
         echo_info "Adding $INSTALL_DIR to PATH in $PROFILE_FILE"
+        mkdir -p "$(dirname "$PROFILE_FILE")"
         echo >> "$PROFILE_FILE"
         echo "# simple-cli" >> "$PROFILE_FILE"
         if [[ "$SHELL_NAME" == "fish" ]]; then

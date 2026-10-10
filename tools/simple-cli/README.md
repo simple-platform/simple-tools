@@ -24,7 +24,15 @@
 
 ## Installation
 
-### Download a Release (Recommended)
+### Install a Release (Recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/simple-platform/simple-tools/main/tools/simple-cli/install | bash
+```
+
+The installer downloads the newest release of the CLI for your machine, checks it against the SHA-256 published with that release, and puts it at `~/.simple/bin/simple`. The CLI keeps everything it uses under `~/.simple`, and its own program lives there too.
+
+It then adds `~/.simple/bin` to your `PATH` in your shell's profile. Open a new terminal, or `source` the file it names, and `simple` is there.
 
 Releases are published on the [releases page](https://github.com/simple-platform/simple-tools/releases) under tags named `v<version>-simple-cli`. Each carries one program per supported machine, and `simple-cli-checksums.txt` with the SHA-256 of each:
 
@@ -33,25 +41,37 @@ Releases are published on the [releases page](https://github.com/simple-platform
 | macOS on Apple silicon | `simple-cli-darwin-arm64`      |
 | Windows on x64         | `simple-cli-windows-amd64.exe` |
 
-Install it into a directory that is on your `PATH` and that your account can write to. `simple version update` replaces the program where it is installed, so a directory only an administrator can write to means every update needs one.
+**If you would rather not change your `PATH`**, link the program from a folder that is already on it:
 
-**macOS (Apple silicon):**
+```bash
+mkdir -p ~/.local/bin
+ln -s ~/.simple/bin/simple ~/.local/bin/simple
+```
+
+`simple version update` follows the link and replaces the program it points at.
+
+**Windows (x64):**
+
+In Git Bash, the installer above works as it is and installs `~/.simple/bin/simple.exe`. It adds the folder to the `PATH` of Git Bash only.
+
+For PowerShell or the Command Prompt, download `simple-cli-windows-amd64.exe` from the release, save it as `%USERPROFILE%\.simple\bin\simple.exe`, and add `%USERPROFILE%\.simple\bin` to your `PATH`.
+
+**By hand, on macOS (Apple silicon):**
 
 ```bash
 # The release to install: the newest "Simple CLI" on the releases page
 VERSION=1.0.0
 
-mkdir -p ~/.local/bin
-curl -fsSL -o ~/.local/bin/simple \
+mkdir -p ~/.simple/bin
+curl -fsSL -o ~/.simple/bin/simple.download \
   "https://github.com/simple-platform/simple-tools/releases/download/v${VERSION}-simple-cli/simple-cli-darwin-arm64"
-chmod +x ~/.local/bin/simple
+chmod +x ~/.simple/bin/simple.download
+mv ~/.simple/bin/simple.download ~/.simple/bin/simple
+
+export PATH="$HOME/.simple/bin:$PATH"
 ```
 
-Add `~/.local/bin` to your `PATH` if it is not there already. Download with `curl` as above rather than a browser: macOS quarantines a program a browser downloaded and refuses to start it.
-
-**Windows (x64):**
-
-Download `simple-cli-windows-amd64.exe` from the release, rename it to `simple.exe`, and put it in a folder that is on your `PATH`.
+Put the last line in your shell's profile to keep it. Download with `curl` as above rather than a browser: macOS quarantines a program a browser downloaded and refuses to start it. The download is saved beside the program and then moved over it, because macOS stops trusting a program whose file was written into in place.
 
 ### Update
 
@@ -77,8 +97,9 @@ cd simple-tools/tools/simple-cli
 # Build the binary
 go build -o simple ./cmd/simple
 
-# (Optional) Install to PATH
-sudo mv simple /usr/local/bin/
+# Install it where the CLI keeps everything else
+mkdir -p ~/.simple/bin
+mv simple ~/.simple/bin/simple
 ```
 
 ### Verify Installation
