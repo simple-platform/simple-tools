@@ -87,7 +87,8 @@ defmodule SCLParser do
 
   Returns `{:ok, tokens}` or `{:error, {message, line, col}}`.
   """
-  @spec tokenize(String.t()) :: {:ok, list(tuple())} | {:error, {String.t(), integer(), integer()}}
+  @spec tokenize(String.t()) ::
+          {:ok, list(tuple())} | {:error, {String.t(), integer(), integer()}}
   def tokenize(input) do
     do_tokenize(input, 1, 1, [])
   end
@@ -392,7 +393,8 @@ defmodule SCLParser do
 
   Returns `{:ok, raw_ast}` or `{:error, {message, line, col}}`.
   """
-  @spec parse_tokens(list(tuple())) :: {:ok, list()} | {:error, {String.t(), integer(), integer()}}
+  @spec parse_tokens(list(tuple())) ::
+          {:ok, list()} | {:error, {String.t(), integer(), integer()}}
   def parse_tokens(tokens),
     do: parse_root_statements(tokens, [])
 
