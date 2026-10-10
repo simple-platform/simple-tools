@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"simple-cli/internal/fsx"
 	"simple-cli/internal/home"
 	"strings"
 	"sync"
@@ -216,18 +217,49 @@ func downloadTool(url, destPath string, postFn func(string, string) error, onPro
 		return fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
+	// THE TOOL IS MADE BESIDE ITS DESTINATION AND RENAMED ONTO IT, never
+	// written into it.
+	//
+	// Another process may be running the tool at this moment, or about to:
+	// two commands started together both find it missing or out of date, and
+	// both come here. Written into in place, the file is there and unfinished
+	// for as long as the copy takes, and whoever runs it then is refused or
+	// runs half a program. Linux will not start a file that is open for
+	// writing, and macOS ties a program to the file it was checked on and
+	// stalls or kills a process whose file is rewritten underneath it.
+	//
+	// A rename gives the name to a finished file in one step. Whoever is
+	// running the old one keeps the file they started from, and two installs
+	// at once each rename a whole file of their own.
+	staged, err := os.CreateTemp(filepath.Dir(destPath), filepath.Base(destPath)+".new-*")
+	if err != nil {
+		return fmt.Errorf("failed to stage %s: %w", destPath, err)
+	}
+	stagedPath := staged.Name()
+	_ = staged.Close()
+	defer func() {
+		// Already gone when the rename below has happened.
+		if err := os.Remove(stagedPath); err != nil && !os.IsNotExist(err) {
+			fmt.Printf("Warning: failed to remove staged file: %v\n", err)
+		}
+	}()
+
 	if postFn != nil {
-		if err := postFn(tmpPath, destPath); err != nil {
+		if err := postFn(tmpPath, stagedPath); err != nil {
 			return fmt.Errorf("post-download processing failed: %w", err)
 		}
 	} else {
-		if err := copyFile(tmpPath, destPath); err != nil {
+		if err := copyFile(tmpPath, stagedPath); err != nil {
 			return err
 		}
 	}
 
-	if err := os.Chmod(destPath, 0755); err != nil {
+	if err := os.Chmod(stagedPath, fsx.ExecPerm); err != nil {
 		return fmt.Errorf("failed to chmod: %w", err)
+	}
+
+	if err := os.Rename(stagedPath, destPath); err != nil {
+		return fmt.Errorf("failed to install %s: %w", destPath, err)
 	}
 
 	return nil
