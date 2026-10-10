@@ -53,6 +53,13 @@ env:
   # machine it was built for.
   SIMPLE_CLI_TARGETS: darwin/arm64 windows/amd64
 
+  # EVERY TOOL'S COMMIT SCOPES, as an alternation. A tool's changelog leaves
+  # out a commit that was made for another tool, even when it changed this
+  # tool's files (scripts/release-changelog.sh says why). This list is how it
+  # tells: a scope found here that is not the tool's own is another tool's. A
+  # tool added to this workflow adds its scopes here.
+  TOOL_SCOPES: 'simple-cli|cli|contextualizer|scl-parser|scl-parser-cli'
+
   # A RELEASE CAN WAIT THIRTY DAYS FOR ITS REVIEW, which is as long as GitHub
   # keeps a review open. What it would publish is kept that long too, so an
   # approval on the last day still finds the files it approves.
@@ -163,8 +170,10 @@ jobs:
       #     published is the one those commits earned.
       #
       # A FEATURE IS COUNTED UNDER THE TOOL'S OWN SCOPE. Any commit that
-      # changes a tool's files makes its next release at least a patch. Only
-      # `feat(<the tool's scope>):` makes it a minor.
+      # changes a tool's files makes its next release at least a patch,
+      # whichever tool the commit was made for. Only
+      # `feat(<the tool's scope>):` makes it a minor. The changelog is
+      # stricter: it leaves out a commit made for another tool.
       #
       # A MAJOR IS WRITTEN OUT IN FULL AND CANNOT BE TYPED BY ACCIDENT. Above
       # 1.0 the major is the line an installed tool does not cross by itself,
@@ -420,7 +429,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          scripts/release-changelog.sh "Simple CLI" "$VERSION" simple-cli "simple-cli|cli" tools/simple-cli > changelog.md
+          scripts/release-changelog.sh "Simple CLI" "$VERSION" simple-cli "simple-cli|cli" tools/simple-cli "$TOOL_SCOPES" > changelog.md
 
           {
             echo "### 📦 Install or update"
@@ -668,7 +677,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          scripts/release-changelog.sh "Contextualizer" "$VERSION" contextualizer contextualizer tools/contextualizer > changelog.md
+          scripts/release-changelog.sh "Contextualizer" "$VERSION" contextualizer contextualizer tools/contextualizer "$TOOL_SCOPES" > changelog.md
 
           {
             echo "**Tag:** ${TAG}"
@@ -854,7 +863,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          scripts/release-changelog.sh "SCL Parser" "$VERSION" scl-parser scl-parser packages/scl_parser > changelog.md
+          scripts/release-changelog.sh "SCL Parser" "$VERSION" scl-parser scl-parser packages/scl_parser "$TOOL_SCOPES" > changelog.md
 
           {
             echo "**Tag:** ${TAG}"
@@ -994,7 +1003,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          scripts/release-changelog.sh "SCL Parser CLI" "$VERSION" scl-parser-cli scl-parser-cli tools/scl_parser_cli > changelog.md
+          scripts/release-changelog.sh "SCL Parser CLI" "$VERSION" scl-parser-cli scl-parser-cli tools/scl_parser_cli "$TOOL_SCOPES" > changelog.md
 
           {
             echo "**Tag:** ${TAG}"
