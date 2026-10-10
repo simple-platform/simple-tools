@@ -563,6 +563,25 @@ jobs:
             exit 1
           fi
 
+      # THE INSTALLER IS RUN THE WAY A NEW USER RUNS IT, into an empty home, on
+      # each machine the CLI is released for. It installs the newest release
+      # that is already out, not the build above: what is checked here is that
+      # the installer still finds a release, takes the file for this machine,
+      # and leaves a program that starts.
+      - name: Install the newest release with the installer
+        run: |
+          set -euo pipefail
+
+          home="$(mktemp -d)"
+          HOME="$home" bash tools/simple-cli/install
+
+          said=$("${home}/.simple/bin/simple" --version)
+          echo "$said"
+          if ! grep -q -E '^simple version [0-9]+\.[0-9]+\.[0-9]+$' <<< "$said"; then
+            echo "expected: simple version <the newest release>" >&2
+            exit 1
+          fi
+
   simple-cli-publish:
     name: Publish Simple CLI
     needs: [version, simple-cli-build, simple-cli-verify]
