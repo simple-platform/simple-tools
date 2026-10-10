@@ -572,8 +572,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          home="${RUNNER_TEMP}/new-user"
-          mkdir -p "$home"
+          home="$(mktemp -d)"
           HOME="$home" bash tools/simple-cli/install
 
           said=$("${home}/.simple/bin/simple" --version)
