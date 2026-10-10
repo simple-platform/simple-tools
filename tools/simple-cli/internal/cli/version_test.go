@@ -208,7 +208,7 @@ func TestRunVersionUpdate(t *testing.T) {
 		{
 			name:    "the CLI has never been released",
 			fixture: versionFixture{current: "1.3.2", latestErr: selfupdate.ErrNoRelease},
-			wantErr: "failed to find the newest version: no release of the CLI was found",
+			wantErr: "failed to find the newest version: no release was found",
 		},
 		{
 			name: "the newest release has nothing built for this machine",

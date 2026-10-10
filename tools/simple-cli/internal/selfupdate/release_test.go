@@ -132,14 +132,14 @@ func TestFinderLatest(t *testing.T) {
 			name: "a CLI that has never been released",
 			said: answer{body: advertised("HEAD", "refs/heads/main", "refs/tags/v9.0.0-contextualizer")},
 			goos: "darwin", goarch: "arm64",
-			wantErr:     "no release of the CLI was found",
+			wantErr:     "no release was found",
 			wantNothing: true,
 		},
 		{
 			name: "an answer with no references at all",
 			said: answer{body: ""},
 			goos: "darwin", goarch: "arm64",
-			wantErr:     "no release of the CLI was found",
+			wantErr:     "no release was found",
 			wantNothing: true,
 		},
 		{
@@ -207,6 +207,48 @@ func TestFinderLatest_AsksOnceAndWithoutASignIn(t *testing.T) {
 	}
 	if got := asked.Header.Get("Authorization"); got != "" {
 		t.Errorf("Authorization = %q, want none", got)
+	}
+}
+
+// Each tool released here has a suffix of its own, and one that ends another
+// is not mistaken for it.
+func TestNewestTagged(t *testing.T) {
+	refs := advertised(
+		"HEAD",
+		"refs/tags/v1.0.1-scl-parser",
+		"refs/tags/v1.0.2-scl-parser-cli",
+		"refs/tags/v1.0.3-scl-parser-cli",
+		"refs/tags/v1.0.7-contextualizer",
+		"refs/tags/v2.0.0-simple-cli",
+	)
+
+	tests := []struct {
+		suffix  string
+		want    Version
+		wantTag string
+		wantErr error
+	}{
+		{suffix: "-scl-parser-cli", want: Version{1, 0, 3}, wantTag: "v1.0.3-scl-parser-cli"},
+		{suffix: "-scl-parser", want: Version{1, 0, 1}, wantTag: "v1.0.1-scl-parser"},
+		{suffix: "-contextualizer", want: Version{1, 0, 7}, wantTag: "v1.0.7-contextualizer"},
+		{suffix: "-simple-cli", want: Version{2, 0, 0}, wantTag: "v2.0.0-simple-cli"},
+		{suffix: "-cli", wantErr: ErrNoRelease},
+		{suffix: "-never-released", wantErr: ErrNoRelease},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.suffix, func(t *testing.T) {
+			github := &fakeGitHub{answers: map[string]answer{refsAddress: {body: refs}}}
+
+			got, tag, err := NewestTagged(context.Background(), github, "simple-cli/test", tt.suffix)
+
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("NewestTagged() error = %v, want %v", err, tt.wantErr)
+			}
+			if got != tt.want || tag != tt.wantTag {
+				t.Errorf("NewestTagged() = %v, %q; want %v, %q", got, tag, tt.want, tt.wantTag)
+			}
+		})
 	}
 }
 

@@ -36,8 +36,8 @@ const (
 )
 
 var (
-	// ErrNoRelease says the CLI has never been released.
-	ErrNoRelease = errors.New("no release of the CLI was found")
+	// ErrNoRelease says nothing has been released under the tag asked for.
+	ErrNoRelease = errors.New("no release was found")
 
 	// ErrNoBuild says a release carries no program for this machine.
 	ErrNoBuild = errors.New("the release has no build for this machine")
@@ -114,40 +114,54 @@ func refsURL() string {
 }
 
 // Latest answers with the newest release of the CLI.
-//
-// A tag is created when its release is published, by the workflow that built
-// the programs, so a tag that reads as a version of the CLI is a release.
 func (f Finder) Latest(ctx context.Context) (Release, error) {
-	refs, err := get(ctx, f.Client, refsURL(), f.UserAgent, maxRefs)
+	version, tag, err := NewestTagged(ctx, f.Client, f.UserAgent, tagSuffix)
 	if err != nil {
-		return Release{}, fmt.Errorf("failed to list the releases: %w", err)
+		return Release{}, err
 	}
 
-	var newest Release
-	found := false
+	return Release{Version: version, Tag: tag, Asset: AssetName(f.GOOS, f.GOARCH)}, nil
+}
+
+// NewestTagged answers with the highest version among the repository's tags
+// that read v<version><suffix>, and with the tag that carries it.
+//
+// Every tool released from this repository is tagged that way, each with a
+// suffix of its own, so "which is the newest release of this tool" is one
+// question whichever tool is asked about. A tag is created when its release is
+// published, by the workflow that built it, so a tag that reads as a version
+// is a release.
+func NewestTagged(ctx context.Context, client Doer, userAgent, suffix string) (Version, string, error) {
+	refs, err := get(ctx, client, refsURL(), userAgent, maxRefs)
+	if err != nil {
+		return Version{}, "", fmt.Errorf("failed to list the releases: %w", err)
+	}
+
+	var newest Version
+	newestTag := ""
 
 	for _, tag := range tagsIn(string(refs)) {
-		version, ok := versionOf(tag)
-		if ok && (!found || version.NewerThan(newest.Version)) {
-			newest, found = Release{Version: version, Tag: tag, Asset: AssetName(f.GOOS, f.GOARCH)}, true
+		version, ok := versionOf(tag, suffix)
+		if ok && (newestTag == "" || version.NewerThan(newest)) {
+			newest, newestTag = version, tag
 		}
 	}
 
-	if !found {
-		return Release{}, ErrNoRelease
+	if newestTag == "" {
+		return Version{}, "", ErrNoRelease
 	}
 
-	return newest, nil
+	return newest, newestTag, nil
 }
 
-// versionOf reads a tag as a version of the CLI, or says it is not one:
-// another tool's tag, or one whose middle is not three numbers.
-func versionOf(tag string) (Version, bool) {
-	if !strings.HasPrefix(tag, tagPrefix) || !strings.HasSuffix(tag, tagSuffix) {
+// versionOf reads a tag as a version of the tool with this suffix, or says it
+// is not one: another tool's tag, or one whose middle is not three numbers.
+func versionOf(tag, suffix string) (Version, bool) {
+	if !strings.HasPrefix(tag, tagPrefix) || !strings.HasSuffix(tag, suffix) {
 		return Version{}, false
 	}
 
-	return ParseVersion(strings.TrimSuffix(strings.TrimPrefix(tag, tagPrefix), tagSuffix))
+	return ParseVersion(strings.TrimSuffix(strings.TrimPrefix(tag, tagPrefix), suffix))
 }
 
 // tagsIn reads the names of the tags out of a list of references.
