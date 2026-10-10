@@ -816,6 +816,12 @@ jobs:
         working-directory: packages/scl_parser
         run: mix deps.get
 
+      # The formatter has the last word on how the code is laid out, so a file
+      # it would change stops the build here.
+      - name: Check formatting
+        working-directory: packages/scl_parser
+        run: mix format --check-formatted
+
       - name: Compile
         working-directory: packages/scl_parser
         run: mix compile --warnings-as-errors
@@ -966,6 +972,10 @@ jobs:
       - name: Install dependencies
         working-directory: tools/scl_parser_cli
         run: mix deps.get
+
+      - name: Check formatting
+        working-directory: tools/scl_parser_cli
+        run: mix format --check-formatted
 
       - name: Test
         working-directory: tools/scl_parser_cli
