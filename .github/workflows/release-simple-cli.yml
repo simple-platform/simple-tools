@@ -1,238 +1,550 @@
-name: Release Simple CLI
+name: Build and Release Simple CLI
+
+# EVERY PUSH TO MAIN OFFERS A RELEASE, AND NONE GOES OUT WITHOUT AN APPROVAL.
+#
+# A push computes the version its unreleased commits have earned, builds the
+# CLI for each machine it is released for, and then waits at the `publish` job
+# for a deployment review. Approving it creates the tag `v<version>-simple-cli`
+# on the commit that was built and a GitHub Release carrying the programs.
+# Leaving it alone releases nothing: the next push withdraws the run and offers
+# its own, from a newer commit.
+#
+# A pull request runs everything up to the wait, so what a release would be
+# built from is linted, tested and started on each machine before it merges.
+#
+# THE VERSION OF RECORD IS THE TAG. No file in the tree carries the CLI's
+# version and nothing is committed back: the version is computed from the tags
+# and the commit subjects each time, and written into the program when it is
+# built. The CLI finds a newer release the same way, by reading the tags.
 
 on:
-  workflow_dispatch:
-    inputs:
-      confirm_release:
-        description: 'Create a release PR with version bump and changelog'
-        required: true
-        type: boolean
-        default: true
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
 
+env:
+  # THE MACHINES A RELEASE IS BUILT FOR, as Go names an operating system and a
+  # processor. Each becomes one file of the release, named
+  # `simple-cli-<os>-<processor>` with `.exe` on Windows. The CLI works out the
+  # name of its own file the same way (`AssetName` in
+  # tools/simple-cli/internal/selfupdate/release.go), so a machine added here
+  # needs nothing added there. It does need a runner of its kind added to the
+  # `verify` job below, which is where each file is started on the machine it
+  # was built for.
+  TARGETS: darwin/arm64 windows/amd64
+
 jobs:
-  test:
-    name: Test
+  # A RUN THAT WAITS ON A REVIEW IS WITHDRAWN WHEN A NEWER PUSH ARRIVES.
+  #
+  # Each push to `main` computes the version its unreleased commits have earned
+  # and then waits for the review on `publish`. Nothing ended a run that was
+  # overtaken, so without this job two pushes ahead of one release leave two
+  # approvals pending for the same version, and approving the older one
+  # releases a commit that is no longer the newest.
+  #
+  # A newer run offers everything an older one does, from a later commit, so
+  # the older one is cancelled. The one exception is a run whose review was
+  # approved and which is now publishing: stopping that leaves a release half
+  # made, so it is left to finish.
+  supersede:
+    name: Withdraw Superseded Runs
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: '1.26.2'
-
-      - name: Lint
-        uses: golangci/golangci-lint-action@971e284b6050e8a5849b72094c50ab08da042db8 # v7.1.0
-        with:
-          version: v2.11.4
-          working-directory: tools/simple-cli
-
-      - name: Run Tests
+      - name: Cancel the older runs that are still open
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          cd tools/simple-cli
-          go test -v ./...
+          set -euo pipefail
 
-  prepare:
-    name: Prepare Release
-    needs: test
-    if: github.event.inputs.confirm_release == 'true'
+          # The workflow is named by the file this run was started from, so the
+          # name is not written down a second time here.
+          workflow="${GITHUB_WORKFLOW_REF%@*}"
+          workflow="${workflow##*/}"
+
+          older=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow}/runs?branch=main&event=push&per_page=100" \
+            --jq ".workflow_runs[] | select(.status != \"completed\" and .run_number < ${GITHUB_RUN_NUMBER}) | .id")
+
+          if [ -z "$older" ]; then
+            echo "No older run is open." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          for id in $older; do
+            approved=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/approvals" \
+              --jq '[.[] | select(.state == "approved")] | length')
+            if [ "$approved" -gt 0 ]; then
+              under_way=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.status != "completed" and .status != "waiting")] | length')
+              if [ "$under_way" -gt 0 ]; then
+                echo "Run ${id} is publishing an approved release. It is left to finish." >> "$GITHUB_STEP_SUMMARY"
+                continue
+              fi
+            fi
+
+            if gh api --method POST "repos/${GITHUB_REPOSITORY}/actions/runs/${id}/cancel" > /dev/null; then
+              echo "Run ${id} is cancelled. This run offers its release from a newer commit." >> "$GITHUB_STEP_SUMMARY"
+            elif [ "$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${id}" --jq .status)" = "completed" ]; then
+              echo "Run ${id} finished before it was cancelled." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "Run ${id} is still open and was not cancelled." >&2
+              exit 1
+            fi
+          done
+
+  version:
+    name: Calculate Version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      version-tag: ${{ steps.version.outputs.version_tag }}
+      changed: ${{ steps.version.outputs.changed }}
+      go: ${{ steps.toolchain.outputs.go }}
+      golangci-lint: ${{ steps.toolchain.outputs.golangci-lint }}
+      nodejs: ${{ steps.toolchain.outputs.nodejs }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Calculate Version
+      # WHAT STARTS A RELEASE. This workflow runs on pushes to `main` and on
+      # pull requests against it. Tags are an output of it and never an input.
+      #
+      #   * `namespace` keeps this tool's versions apart from those of the
+      #     other tools released from this repository: this step reads back
+      #     only `v<version>-simple-cli` tags.
+      #   * `change_path` is the path the version is computed over. The action
+      #     compares the newest tag in its namespace against `HEAD` for that
+      #     path, so `changed` means "this path holds commits that have not
+      #     been released yet". Whichever run picks them up, the version
+      #     published is the one those commits earned.
+      #
+      # TWO SCOPES ARE THIS TOOL'S. Its commits carry `simple-cli`, and some
+      # carry `cli`. Read as `simple-cli` alone, a feature under the shorter
+      # scope would count as a patch and be left out of the changelog below.
+      #
+      # A MAJOR IS WRITTEN OUT IN FULL AND CANNOT BE TYPED BY ACCIDENT. Above
+      # 1.0 the major is the line an installed CLI does not cross by itself,
+      # and when to cross it is a judgement about timing that a diff cannot
+      # make: a break can land on `main` well ahead of the release that
+      # carries it. A `!` still records the break where a reader looks for it,
+      # in `git log` and under Breaking Changes in the changelog. Recording a
+      # break and choosing the release that carries it are two acts, and only
+      # the sentence below does the second.
+      #
+      # The first release is 1.0.0 for the same reason: with no tag to count
+      # from, the action starts at zero, and the commit that carries the
+      # sentence is what makes it 1.0.0 rather than 0.1.0.
+      #
+      # THE SENTENCE COUNTS ONLY ON A COMMIT THAT CHANGES THE CLI. The action
+      # lists the commits to read with `change_path`, so a commit that touches
+      # nothing under tools/simple-cli is not read at all, whatever its
+      # subject says. An empty commit carrying the sentence was tried and left
+      # the version where it was.
+      #
+      # `search_commit_body` is OFF, and that is what makes the sentence safe
+      # to write down. With bodies searched it would be enough to QUOTE it, in
+      # a commit explaining this policy, to compute a major from a change that
+      # declared nothing. The subject line is the one place a release is
+      # deliberate, so only it is read.
+      - name: Simple CLI Version
         id: version
         uses: paulhatch/semantic-version@a8f8f59fd7f0625188492e945240f12d7ad2dca3 # v5.4.0
         with:
           tag_prefix: v
-          major_pattern: '/(\\(simple-cli\\).*!)|BREAKING CHANGE/'
-          minor_pattern: '/feat\\(simple-cli\\):/'
+          major_pattern: '/\(simple-cli\)!?: release the next major/'
+          minor_pattern: '/feat\((simple-cli|cli)\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: tools/simple-cli
           namespace: simple-cli
           bump_each_commit: false
-          search_commit_body: true
+          search_commit_body: false
           enable_prerelease_mode: false
+          debug: false
 
-  build_binaries:
-    name: Build Binary (${{ matrix.target }})
-    needs: prepare
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: macos
-            goos: darwin
-            goarch: amd64
-          - target: macos-silicon
-            goos: darwin
-            goarch: arm64
-          - target: linux
-            goos: linux
-            goarch: amd64
-          - target: linux-arm64
-            goos: linux
-            goarch: arm64
-          - target: windows
-            goos: windows
-            goarch: amd64
-            ext: .exe
-    steps:
-      - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Go
-        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: '1.26.2'
-
-      - name: Build
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+      # The toolchain has one authority in this repository and it is
+      # devbox.json, the file a contributor's Go, linter and Node come from.
+      # Read, not copied: a number written down twice is a number that drifts.
+      - name: Toolchain Versions
+        id: toolchain
         run: |
-          cd tools/simple-cli
-          EXTENSION="${{ matrix.ext }}"
-          
-          # Inject the calculated version
-          LDFLAGS="-s -w -X simple-cli/internal/cli.Version=${VERSION}"
-          
-          go build -ldflags="$LDFLAGS" -o "bin/simple${EXTENSION}" ./cmd/simple
-          
-          # Rename to final artifact name
-          mv "bin/simple${EXTENSION}" "../simple-cli-${{ matrix.target }}${EXTENSION}"
+          set -euo pipefail
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: binary-${{ matrix.target }}
-          path: tools/simple-cli-${{ matrix.target }}${{ matrix.ext }}
-          retention-days: 1
+          for tool in go golangci-lint nodejs; do
+            version=$(jq -r --arg tool "$tool" '.packages[$tool] // empty' devbox.json)
+            case "$version" in
+              [0-9]*.[0-9]*.[0-9]*) ;;
+              *)
+                echo "devbox.json .packages.\"${tool}\" is '${version}', which is not a version. It is the only authority for it; if it moved, move this read with it." >&2
+                exit 1
+                ;;
+            esac
+            echo "${tool}=${version}" >> "$GITHUB_OUTPUT"
+          done
 
-  create_release_pr:
-    name: Create Release PR
-    needs: [prepare, build_binaries]
+  build:
+    name: Build Simple CLI
+    needs: version
+    if: needs.version.outputs.changed == 'true'
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      # Version is already calculated in prepare job
-      
-      - name: Generate Changelog
-        id: changelog
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.version.outputs.go }}
+          cache-dependency-path: tools/simple-cli/go.sum
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@971e284b6050e8a5849b72094c50ab08da042db8 # v7.1.0
+        with:
+          version: v${{ needs.version.outputs.golangci-lint }}
+          working-directory: tools/simple-cli
+
+      # THE TESTS BUILD REAL ACTIONS, so they need what a contributor's
+      # machine has: Node, pnpm, and this workspace's packages installed at the
+      # root, where the CLI's metadata generator looks for them. pnpm's version
+      # is the one package.json names in `packageManager`, read by its setup
+      # action, and it is set up first so Node's setup can ask it where its
+      # store is.
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ needs.version.outputs.nodejs }}
+          cache: pnpm
+
+      - name: Install workspace packages
+        run: pnpm install --frozen-lockfile
+
+      # ONE PACKAGE AT A TIME. The tests run scl-parser, and scl-parser unpacks
+      # its own runtime into a folder under the home directory the first time
+      # it runs. Two first runs at once collide: one is still writing the
+      # runtime while the other starts it, and that one fails with "FileBusy".
+      # A contributor's machine ran it long ago. A runner never has, and
+      # packages tested side by side start it together. Started twice at once
+      # on a clean folder, one of the two failed every time it was tried; once
+      # it has run alone, two at once both succeed.
+      - name: Test
+        working-directory: tools/simple-cli
+        run: go test -p 1 ./...
+
+      # ONE BUILD MACHINE MAKES EVERY FILE. Go builds for another operating
+      # system and processor without their toolchains, so each program comes
+      # out of the same checkout, compiler and flags, and only its target
+      # differs. The version computed above is written into it here, which is
+      # the only place the program learns its own version.
+      #
+      # The checksums are written from the list of files just built, and are
+      # what an installed CLI checks its download against before it replaces
+      # itself.
+      - name: Build
+        working-directory: tools/simple-cli
         env:
-          VERSION: ${{ needs.prepare.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          files=()
+          for target in $TARGETS; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            name="simple-cli-${goos}-${goarch}"
+            if [ "$goos" = "windows" ]; then
+              name="${name}.exe"
+            fi
+
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath \
+              -ldflags "-s -w -X simple-cli/internal/cli.Version=${VERSION}" \
+              -o "dist/${name}" ./cmd/simple
+            files+=("$name")
+          done
+
+          (cd dist && sha256sum "${files[@]}" > simple-cli-checksums.txt)
+
+          {
+            echo "### Simple CLI ${VERSION}"
+            echo '```'
+            cat dist/simple-cli-checksums.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Uploaded on pull requests too: the `verify` job starts each file on
+      # the machine it was built for, and that is worth knowing before a merge.
+      - name: Upload programs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: simple-cli
+          path: tools/simple-cli/dist
+          if-no-files-found: error
+          retention-days: 5
+
+      - name: Generate Changelog
+        if: github.ref == 'refs/heads/main' && !github.event.pull_request
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # Everything since the CLI's last release, or all of it for the first.
           PREV_TAG=$(git tag -l "v*-simple-cli" --sort=-version:refname | head -n 1)
-          
           if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"* %s (%h)%n%b" --grep="(simple-cli)" -- tools/simple-cli)
+            COMMITS=$(git log --pretty=format:"* %s (%h)" --extended-regexp --grep="\((simple-cli|cli)\)" -- tools/simple-cli)
           else
-            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)%n%b" --grep="(simple-cli)" -- tools/simple-cli)
+            COMMITS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --extended-regexp --grep="\((simple-cli|cli)\)" -- tools/simple-cli)
           fi
 
-          FEATURES=$(echo "$COMMITS" | grep "feat(simple-cli):" | head -n 1 || true)
-          # Note: Simple grep on subject lines might need cleaner output if bodies are mixed in.
-          # Let's separate the retrieval.
-          
-          # 1. Get Subjects for lists
-          if [ -z "$PREV_TAG" ]; then
-            SUBJECTS=$(git log --pretty=format:"* %s (%h)" --grep="(simple-cli)" -- tools/simple-cli)
-          else
-            SUBJECTS=$(git log "${PREV_TAG}..HEAD" --pretty=format:"* %s (%h)" --grep="(simple-cli)" -- tools/simple-cli)
-          fi
-          
-          FEATURES=$(echo "$SUBJECTS" | grep "feat(simple-cli):" || true)
-          FIXES=$(echo "$SUBJECTS" | grep "fix(simple-cli):" || true)
-          OTHER=$(echo "$SUBJECTS" | grep -v -E "feat\(simple-cli\):|fix\(simple-cli\):|ci\(simple-cli\):" | grep -v "^$" || true)
-
-          # 2. Get Breaking Changes (Subject OR Body)
-          if [ -z "$PREV_TAG" ]; then
-             BREAKING_RAW=$(git log --pretty=format:"%s%n%b" --grep="BREAKING CHANGE" --grep="!:" -- tools/simple-cli)
-          else
-             BREAKING_RAW=$(git log "${PREV_TAG}..HEAD" --pretty=format:"%s%n%b" --grep="BREAKING CHANGE" --grep="!:" -- tools/simple-cli)
-          fi
-          
-          # Clean up breaking changes to be one-liners or just list the commits
-          if [ -n "$BREAKING_RAW" ]; then
-             BREAKING=$(echo "$BREAKING_RAW" | grep "BREAKING CHANGE" | sed 's/BREAKING CHANGE: //g' || true)
-             # Fallback if the grep misses (e.g. !:)
-             if [ -z "$BREAKING" ]; then
-                BREAKING="Contains breaking changes. See commit history."
-             fi
-          else
-             BREAKING=""
-          fi
+          # Both of this tool's scopes are read (see the version step), and a
+          # breaking commit is listed under Breaking Changes only, not a second
+          # time further down.
+          FEATURES=$(echo "$COMMITS" | grep -E "feat\((simple-cli|cli)\):" || true)
+          FIXES=$(echo "$COMMITS" | grep -E "fix\((simple-cli|cli)\):" || true)
+          BREAKING=$(echo "$COMMITS" | grep -E "\((simple-cli|cli)\)!:" || true)
+          OTHER=$(echo "$COMMITS" | grep -v -E "((feat|fix)\((simple-cli|cli)\):)|(\((simple-cli|cli)\)!:)" || true)
 
           {
             echo "## Simple CLI ${VERSION}"
             echo ""
-            if [ -n "$BREAKING" ]; then echo "### ⚠️ Breaking Changes"; echo "$BREAKING"; echo ""; fi
-            if [ -n "$FEATURES" ]; then echo "### ✨ Features"; echo "$FEATURES"; echo ""; fi
-            if [ -n "$FIXES" ]; then echo "### 🐛 Bug Fixes"; echo "$FIXES"; echo ""; fi
-            if [ -n "$OTHER" ]; then echo "### 📝 Other Changes"; echo "$OTHER"; echo ""; fi
-          } > /tmp/changelog_section.md
+            if [ -n "$BREAKING" ]; then
+              echo "### ⚠️ Breaking Changes"
+              echo "$BREAKING"
+              echo ""
+            fi
+            if [ -n "$FEATURES" ]; then
+              echo "### ✨ Features"
+              echo "$FEATURES"
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### 🐛 Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+            if [ -n "$OTHER" ]; then
+              echo "### 📝 Other Changes"
+              echo "$OTHER"
+              echo ""
+            fi
+            echo "### 📦 Install or update"
+            echo ""
+            echo "Already have the CLI? Run \`simple version update\`."
+            echo ""
+            echo "Otherwise download the file for your machine below and follow the"
+            echo "[install steps](https://github.com/${GITHUB_REPOSITORY}/tree/main/tools/simple-cli#installation)."
+            echo "\`simple-cli-checksums.txt\` carries the SHA-256 of each file."
+          } > changelog.md
 
-          cat /tmp/changelog_section.md >> $GITHUB_STEP_SUMMARY
+      - name: Upload changelog
+        if: github.ref == 'refs/heads/main' && !github.event.pull_request
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: changelog
+          path: changelog.md
+          if-no-files-found: error
+          retention-days: 5
 
-      - name: Create Release PR
+      - name: Create Release Summary
+        if: github.ref == 'refs/heads/main' && !github.event.pull_request
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ needs.prepare.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.version-tag }}
         run: |
-          BRANCH="release/simple-cli-v${VERSION}"
-          
-          git config --local user.email "154070804+simple-platform-devops@users.noreply.github.com"
-          git config --local user.name "Simple DevOps"
-          
-          git checkout -b "$BRANCH"
-          
-          cd tools/simple-cli
-          
-          if [ ! -f CHANGELOG.md ]; then
-            echo "# Changelog" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo "All notable changes to Simple CLI will be documented in this file." >> CHANGELOG.md
-            echo "" >> CHANGELOG.md
+          {
+            echo "## 📋 Release Summary"
+            echo ""
+            echo "**Version:** ${VERSION}"
+            echo "**Tag:** ${TAG}"
+            echo ""
+            echo "### Changelog Preview"
+            cat changelog.md
+            echo ""
+            echo "---"
+            echo "**⚠️ Review the changelog above before approving the deployment**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # EACH FILE IS STARTED ON THE MACHINE IT WAS BUILT FOR, and the update is run
+  # there against a real disk.
+  #
+  # Two things about a release can only be learned on the machine itself. One
+  # is whether the program starts at all: it was built on Linux for somewhere
+  # else. The other is whether the operating system lets a running program be
+  # replaced, which is what `simple version update` does: Windows refuses to
+  # overwrite or delete the file of a running program and allows it to be
+  # renamed, and macOS ties a program to the file it was started from. The
+  # test named below replaces a running program for real and then runs the
+  # replacement.
+  #
+  # One runner for each entry of TARGETS above.
+  verify:
+    name: Verify on ${{ matrix.os }}
+    needs: [version, build]
+    if: needs.version.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ needs.version.outputs.go }}
+          cache-dependency-path: tools/simple-cli/go.sum
+
+      - name: Replace a running program
+        working-directory: tools/simple-cli
+        run: go test -count=1 -tags integration -run '^TestUpdateReplacesARunningProgram$' -v ./internal/selfupdate/
+
+      - name: Download programs
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: simple-cli
+          path: dist
+
+      # The file is found by the name this machine's own Go gives its
+      # operating system and processor, which is how an installed CLI finds
+      # it. A runner whose kind is not in TARGETS finds nothing and fails here.
+      - name: Start the program built for this machine
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          name="simple-cli-$(go env GOOS)-$(go env GOARCH)"
+          if [ "$(go env GOOS)" = "windows" ]; then
+            name="${name}.exe"
           fi
-          
-          awk -v section="$(cat /tmp/changelog_section.md)" '
-            /^## / && !inserted { print section; print ""; inserted=1 }
-            { print }
-            END { if (!inserted) print section }
-          ' CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
-          
-          # Update package.json version
-          sed -i "s/\"version\": \"[0-9]*\.[0-9]*\.[0-9]*\"/\"version\": \"${VERSION}\"/" package.json
-          
-          git add CHANGELOG.md package.json
-          
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
+
+          # The tool that checks a SHA-256 is `sha256sum` on Linux and in the
+          # shell Windows runners use, and `shasum` on macOS.
+          if command -v sha256sum > /dev/null; then
+            check="sha256sum --check -"
+          else
+            check="shasum -a 256 --check -"
           fi
-          
-          git commit -m "chore(simple-cli): release version ${VERSION}"
-          git push origin "$BRANCH"
-          
-          gh pr create \
-            --title "chore(simple-cli): release version ${VERSION}" \
-            --body-file /tmp/changelog_section.md \
-            --base main \
-            --head "$BRANCH"
+          (cd dist && grep " ${name}\$" simple-cli-checksums.txt | $check)
+
+          chmod +x "dist/${name}"
+          said=$("dist/${name}" --version)
+          echo "$said"
+          if [ "$said" != "simple version ${VERSION}" ]; then
+            echo "expected: simple version ${VERSION}" >&2
+            exit 1
+          fi
+
+  publish:
+    name: Publish Simple CLI
+    needs: [version, build, verify]
+    if: needs.version.outputs.changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
+    runs-on: ubuntu-latest
+    # THE APPROVAL LIVES ON THIS ENVIRONMENT. `github-releases` has a required
+    # reviewer and accepts only `main`, so this job waits until the release is
+    # approved, and the token below is not handed to it before then.
+    #
+    # It is an environment of its own, apart from the one the other tools in
+    # this repository publish from, because a deployment review is granted to
+    # an environment: sharing one would put this approval on their releases
+    # and theirs on this.
+    environment:
+      name: github-releases
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.version-tag }}
+    # One release of the CLI at a time, and nothing else waits on it. A run
+    # that is already publishing is not cancelled: a release that has been
+    # created cannot be undone by stopping the run that created it.
+    concurrency:
+      group: publish-simple-cli
+      cancel-in-progress: false
+    steps:
+      # A RUN CAN BE ASKED TO PUBLISH A VERSION THAT IS ALREADY OUT.
+      #
+      # Every push to `main` computes the version its unreleased commits have
+      # earned, so two pushes ahead of one release compute the same number. A
+      # run that was approved after another had published it would then fail
+      # on a tag that exists, with nothing wrong behind it. So the tag is asked
+      # for first, and a version that has one is not released again.
+      #
+      # A GitHub that cannot be reached reads as "not released". The release is
+      # then attempted, and GitHub itself is the judge of it.
+      - name: Check what is already released
+        id: released
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.version-tag }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" > /dev/null 2>&1; then
+            echo "tagged=true" >> "$GITHUB_OUTPUT"
+            echo "The tag ${TAG} exists. No release is created again." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "tagged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download programs
+        if: steps.released.outputs.tagged != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: simple-cli
+          path: dist
+
+      - name: Download changelog
+        if: steps.released.outputs.tagged != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: changelog
+
+      # THE TAG NAMES THE COMMIT THIS RUN BUILT. A release waits on a review,
+      # and `main` moves while it waits. Naming the commit puts the tag on the
+      # tree the programs were built from, so the tag, the programs and the
+      # changelog describe one commit, and the next version is computed over
+      # exactly what came after it.
+      #
+      # THE TAG IS CREATED WITH THE DEVOPS TOKEN, not the token a workflow is
+      # given. This repository lets only its administrators and its release
+      # account create a tag that starts with `v`, which is what stops a
+      # version being claimed by anyone who can push a branch. The workflow's
+      # own token is neither, so the release is created as the release account.
+      # The token is a secret of this job's environment and is read nowhere
+      # else in this file.
+      - name: Create GitHub Release
+        if: steps.released.outputs.tagged != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SIMPLE_DEVOPS_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.version-tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$GH_TOKEN" ]; then
+            echo "The environment github-releases has no SIMPLE_DEVOPS_TOKEN secret, so the tag ${TAG} cannot be created. Add the secret to that environment and run this job again." >&2
+            exit 1
+          fi
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Simple CLI ${VERSION}" \
+            --notes-file changelog.md \
+            dist/*
