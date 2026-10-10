@@ -1036,11 +1036,43 @@ jobs:
           otp-version: ${{ needs.version.outputs.erlang }}
           elixir-version: ${{ needs.version.outputs.elixir }}
 
-      # Zig is what builds the program for a machine other than this one.
+      # ZIG IS WHAT BUILDS THE PROGRAM FOR A MACHINE OTHER THAN THIS ONE. It is
+      # one file, so no action sets it up: it is downloaded from where Zig is
+      # published, at the version devbox.json names, and put on the PATH.
+      #
+      # The file is checked against the SHA-256 Zig publishes for it, which
+      # catches a download that was cut short or changed on the way. The
+      # checksum comes from the same place as the file, so it does not vouch
+      # for the place.
       - name: Set up Zig
-        uses: goto-bus-stop/setup-zig@abea47f85e598557f500fa1fd2ab7464fcb39406 # v2.2.1
-        with:
-          version: ${{ needs.version.outputs.zig }}
+        env:
+          ZIG: ${{ needs.version.outputs.zig }}
+        run: |
+          set -euo pipefail
+
+          # What is published for this version, for the machine this job runs
+          # on: where the file is, and its SHA-256.
+          published=$(curl -fsSL --retry 3 https://ziglang.org/download/index.json \
+            | jq -c --arg version "$ZIG" '.[$version]["x86_64-linux"] // empty')
+          if [ -z "$published" ]; then
+            echo "https://ziglang.org/download/index.json lists no x86_64-linux build of Zig ${ZIG}." >&2
+            exit 1
+          fi
+
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/zig.tar.xz" "$(jq -r .tarball <<< "$published")"
+          echo "$(jq -r .shasum <<< "$published")  ${RUNNER_TEMP}/zig.tar.xz" | sha256sum --check -
+
+          mkdir "${RUNNER_TEMP}/zig"
+          tar -xJf "${RUNNER_TEMP}/zig.tar.xz" -C "${RUNNER_TEMP}/zig" --strip-components=1
+          echo "${RUNNER_TEMP}/zig" >> "$GITHUB_PATH"
+
+          # The Zig that was set up has to be the one that was asked for.
+          said=$("${RUNNER_TEMP}/zig/zig" version)
+          echo "zig version: ${said}"
+          if [ "$said" != "$ZIG" ]; then
+            echo "expected: ${ZIG}" >&2
+            exit 1
+          fi
 
       # THE VERSION IS PART OF WHERE THE PROGRAM UNPACKS ITSELF. Each version
       # unpacks its runtime into a folder named for it, so a program built as
