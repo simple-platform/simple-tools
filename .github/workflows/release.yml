@@ -497,8 +497,12 @@ jobs:
   # replacement.
   #
   # One runner for each entry of SIMPLE_CLI_TARGETS above.
+  # THE JOB'S NAME DOES NOT NAME THE MACHINE. GitHub adds the machine to it by
+  # itself, as "Verify Simple CLI (macos-latest)". A name written with
+  # `matrix.os` in it is shown as typed, braces and all, on a run where this
+  # job is skipped, because a skipped job is never given a machine.
   simple-cli-verify:
-    name: Verify Simple CLI on ${{ matrix.os }}
+    name: Verify Simple CLI
     needs: [version, simple-cli-build]
     if: needs.version.outputs.simple-cli-changed == 'true'
     strategy:
@@ -1117,8 +1121,11 @@ jobs:
   # for its machine from this release by one of these five names
   # (`mapSCLPlatform` in tools/simple-cli/internal/build/scl.go), so a name
   # changed here is a download that fails there.
+  #
+  # The job's name does not name the target, for the reason given on
+  # `simple-cli-verify`: GitHub adds each build's target and file to it.
   scl-parser-cli-build:
-    name: Build SCL Parser CLI (${{ matrix.target }})
+    name: Build SCL Parser CLI
     needs: version
     if: needs.version.outputs.scl-parser-cli-changed == 'true'
     runs-on: ubuntu-latest
