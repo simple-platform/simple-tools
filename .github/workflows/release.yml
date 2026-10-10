@@ -144,8 +144,8 @@ jobs:
       contextualizer-version: ${{ steps.contextualizer.outputs.version }}
       contextualizer-tag: ${{ steps.contextualizer.outputs.version_tag }}
       contextualizer-changed: ${{ steps.contextualizer.outputs.changed }}
-      scl-parser-version: ${{ steps.scl-parser-usable.outputs.version }}
-      scl-parser-tag: ${{ steps.scl-parser-usable.outputs.version_tag }}
+      scl-parser-version: ${{ steps.scl-parser.outputs.version }}
+      scl-parser-tag: ${{ steps.scl-parser.outputs.version_tag }}
       scl-parser-changed: ${{ steps.scl-parser.outputs.changed }}
       scl-parser-cli-version: ${{ steps.scl-parser-cli.outputs.version }}
       scl-parser-cli-tag: ${{ steps.scl-parser-cli.outputs.version_tag }}
@@ -256,27 +256,6 @@ jobs:
           enable_prerelease_mode: false
           debug: false
 
-      # 1.0.1 OF THE SCL PARSER CAN NEVER BE RELEASED. A release under the tag
-      # `v1.0.1-scl-parser` existed once and was deleted. Releases in this
-      # repository are immutable, and GitHub does not let the tag of a deleted
-      # immutable release be used again: creating it is refused, for good.
-      #
-      # The step above counts from the tags that exist. With that one gone it
-      # counts 1.0.1 again on every run, and this step moves it on to 1.0.2.
-      # Once `v1.0.2-scl-parser` exists the count starts from it, this step
-      # does nothing, and it can be deleted.
-      - name: Skip the SCL Parser version that cannot be used
-        id: scl-parser-usable
-        env:
-          VERSION: ${{ steps.scl-parser.outputs.version }}
-        run: |
-          if [ "$VERSION" = "1.0.1" ]; then
-            VERSION=1.0.2
-          fi
-
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "version_tag=v${VERSION}-scl-parser" >> "$GITHUB_OUTPUT"
-
       - name: SCL Parser CLI Version
         id: scl-parser-cli
         uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
@@ -319,7 +298,7 @@ jobs:
         env:
           SIMPLE_CLI: ${{ steps.simple-cli.outputs.version }} | ${{ steps.simple-cli.outputs.changed }}
           CONTEXTUALIZER: ${{ steps.contextualizer.outputs.version }} | ${{ steps.contextualizer.outputs.changed }}
-          SCL_PARSER: ${{ steps.scl-parser-usable.outputs.version }} | ${{ steps.scl-parser.outputs.changed }}
+          SCL_PARSER: ${{ steps.scl-parser.outputs.version }} | ${{ steps.scl-parser.outputs.changed }}
           SCL_PARSER_CLI: ${{ steps.scl-parser-cli.outputs.version }} | ${{ steps.scl-parser-cli.outputs.changed }}
         run: |
           {
