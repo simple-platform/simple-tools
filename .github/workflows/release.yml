@@ -73,6 +73,13 @@ env:
   # approval on the last day still finds the files it approves.
   KEEP_DAYS: 30
 
+# THE LINUX RUNNER IS NAMED BY ITS VERSION, NOT AS "LATEST". `ubuntu-latest`
+# is whichever Ubuntu GitHub means by it at the time, and GitHub moves it. A
+# release would then be built on a new operating system on a day nobody chose,
+# with nothing in this repository having changed. Every job below that runs on
+# Linux names `ubuntu-24.04`, which is what `ubuntu-latest` was when this was
+# written. Moving to a newer one is a change to this file, made on purpose and
+# seen passing on a pull request first.
 jobs:
   # A RUN THAT WAITS ON A REVIEW IS WITHDRAWN WHEN A NEWER PUSH ARRIVES.
   #
@@ -89,7 +96,7 @@ jobs:
   supersede:
     name: Withdraw Superseded Runs
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       actions: write
     steps:
@@ -136,7 +143,7 @@ jobs:
 
   version:
     name: Calculate Versions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       simple-cli-version: ${{ steps.simple-cli.outputs.version }}
       simple-cli-tag: ${{ steps.simple-cli.outputs.version_tag }}
@@ -318,7 +325,7 @@ jobs:
     name: Build Simple CLI
     needs: version
     if: needs.version.outputs.simple-cli-changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -569,7 +576,7 @@ jobs:
     name: Publish Simple CLI
     needs: [version, simple-cli-build, simple-cli-verify]
     if: needs.version.outputs.simple-cli-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # THE APPROVAL LIVES ON THE ENVIRONMENT. Each `publish` job in this file
     # waits on an environment that has a required reviewer and accepts only
     # `main`, so the job waits until its release is approved, and the secrets
@@ -624,7 +631,7 @@ jobs:
     name: Build Contextualizer
     needs: version
     if: needs.version.outputs.contextualizer-changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -728,7 +735,7 @@ jobs:
     name: Publish Contextualizer
     needs: [version, contextualizer-build]
     if: needs.version.outputs.contextualizer-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # THE NPM PACKAGE IS UPLOADED WITHOUT A TOKEN. npm is told, in the
     # package's settings there, to trust an upload that comes from this
     # repository, this workflow file and this job's environment. GitHub
@@ -876,7 +883,7 @@ jobs:
     name: Build SCL Parser
     needs: version
     if: needs.version.outputs.scl-parser-changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -956,7 +963,7 @@ jobs:
     name: Publish SCL Parser
     needs: [version, scl-parser-build]
     if: needs.version.outputs.scl-parser-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: release-scl-parser
       url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.scl-parser-tag }}
@@ -1039,7 +1046,7 @@ jobs:
     name: Test SCL Parser CLI
     needs: version
     if: needs.version.outputs.scl-parser-cli-changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1107,7 +1114,7 @@ jobs:
     name: Build SCL Parser CLI
     needs: version
     if: needs.version.outputs.scl-parser-cli-changed == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -1250,7 +1257,7 @@ jobs:
     name: Publish SCL Parser CLI
     needs: [version, scl-parser-cli-test, scl-parser-cli-build]
     if: needs.version.outputs.scl-parser-cli-changed == 'true' && github.ref == 'refs/heads/main' && !github.event.pull_request
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: release-scl-parser-cli
       url: https://github.com/${{ github.repository }}/releases/tag/${{ needs.version.outputs.scl-parser-cli-tag }}
