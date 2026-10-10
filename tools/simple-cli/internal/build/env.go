@@ -36,8 +36,7 @@ func ParseExecutionEnvironment(sclParserPath, actionDir string) (string, error) 
 		return "server", nil // default
 	}
 
-	cmd := home.ToolCommand(sclParserPath, sclPath)
-	output, err := cmd.Output()
+	output, err := home.ToolOutput(sclParserPath, sclPath)
 	if err != nil {
 		return "server", nil // fallback on parse error
 	}
