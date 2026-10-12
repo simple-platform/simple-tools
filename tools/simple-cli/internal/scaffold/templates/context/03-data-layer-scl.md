@@ -283,7 +283,7 @@ index customer, product, unit, valid_from {
 
 ### Index Names
 
-The platform builds an index's name as `idx_<table>_<fields joined by _>`. A name holds at most 63 characters, so an index on many fields, or on fields with long names, cannot use its built name and is refused. Two indexes of one table cannot share a name either.
+The platform builds an index's name from its table and its fields: `idx_<table>_<fields joined by _>`. In the database, a field that is a relationship counts under its column's name, which ends in `_id`. A name holds at most 63 characters in either form, so an index on many fields, or on fields with long names, cannot use its built name and is refused. No two indexes of an application can share a name either.
 
 Give such an index a `name`. It must:
 
