@@ -91,7 +91,7 @@ func TestModel_View(t *testing.T) {
 }
 
 func TestModel_ViewNeverExceedsViewport(t *testing.T) {
-	names := make([]string, 17) // employee_hub: 15 actions + 2 spaces
+	names := make([]string, 17) // the size of a large app: 15 actions + 2 spaces
 	for i := range names {
 		names[i] = "[Action] some-fairly-long-action-name-" + string(rune('a'+i))
 	}

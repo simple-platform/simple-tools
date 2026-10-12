@@ -208,7 +208,7 @@ belongs :to, department {
 
 # Cross-app reference
 belongs :to, employee {
-  table com_bnv_employee_hub.employee
+  table com_acme_hr.employee
   required true
 }
 
