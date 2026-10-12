@@ -273,7 +273,25 @@ index employee, effective_date {
 index period_start, period_end {
   unique true
 }
+
+# Named index, here inside `table price, prices { ... }`
+index customer, product, unit, valid_from {
+  name "idx_price_offer_by_start_day"
+  unique true
+}
 ```
+
+### Index Names
+
+The platform builds an index's name as `idx_<table>_<fields joined by _>`. A name holds at most 63 characters, so an index on many fields, or on fields with long names, cannot use its built name and is refused. Two indexes of one table cannot share a name either.
+
+Give such an index a `name`. It must:
+
+- start with `idx_<table>_` (for the table `price`: `idx_price_`);
+- contain only lowercase letters, digits and underscores;
+- be at most 63 characters.
+
+An index with no `name` keeps its built name.
 
 ---
 
