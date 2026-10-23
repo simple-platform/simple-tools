@@ -9,7 +9,7 @@ description: Guide to building custom React-based Spaces in Simple.
 
 - **Space:** A custom React application embedded within the Simple platform. Spaces provide complete UI freedom when Custom Views aren't flexible enough.
 - **Routing:** Spaces are typically single-page applications (SPAs) that handle their own internal routing if needed (e.g., using `react-router-dom`).
-- **Styling:** You have full control. You can use plain CSS, inline styles, or integrate libraries like Tailwind CSS or styled-components.
+- **Styling:** Tailwind classes only, with every colour taken from the brand theme and components from the UI Kit first. See [Design, Styling and Components](#5-design-styling-and-components).
 
 ## 2. Directory Structure
 
@@ -24,7 +24,7 @@ apps/<app-id>/spaces/<space-name>/
 │   └── App.test.tsx  # Unit test for App component
 └── src/
     ├── styles/
-    │   └── theme.css # Theme CSS variables
+    │   └── theme.css # Tailwind and the UI Kit's brand theme
     ├── App.tsx       # Main React component
     └── main.tsx      # React DOM entry point
 ```
@@ -184,7 +184,16 @@ set dev_simple_system.space, my_space {
 
 Once declared, you may then use standard `fetch()` for _those specific external domains_, and the browser's CSP engine will permit it.
 
-## 5. Building, Testing, and Deploying
+## 5. Design, Styling and Components
+
+- **Choose the screen:** Prefer a Space wherever a plain list or form would leave people doing work the screen could do for them. For one record's own page, such as a project, an invoice or an employee, build a Record Space (see [Record Space workflow](#record-space-workflow)): the platform keeps the record's header, workflow, permissions and Update button. Use a standalone Space for dashboards and work across many records.
+- **Design:** Rich and eye-catching but calm. Put the figures and statuses that matter most first, group related details in cards, and design what people see with no data, while data loads, and when a read fails. Show the instance's live data, never sample data.
+- **Colours come from the brand theme.** The UI Kit's theme maps Tailwind's colour names to the instance's brand colour variables, in light and dark: `primary`, `card`, `muted-foreground`, `destructive`, `border` and their kin, the platform's `surface-`, `text-`, `border-` and `action-` families, and `chart-1` to `chart-5` for charts, as in `bg-primary` or `text-muted-foreground`. Never write a colour value (hex, rgb, hsl or a colour's name), never use a bracketed value for a colour or a variable, and never define a CSS variable of your own when a theme name covers it.
+- **Tailwind classes only.** No stylesheets beyond `src/styles/theme.css`, no inline `style` attributes, and no CSS-in-JS. `theme.css` imports Tailwind and then the UI Kit's theme, `@simpleplatform/ui-kit/theme.css`, and `src/main.tsx` imports it once; the scaffold sets both up.
+- **UI Kit components first.** Use `@simpleplatform/ui-kit` wherever it has a component: `StatusBadge` for every status, `RecordForm` for a record's form, `RecordActivity` for its activity, and in a Record Space the header actions (`simple.ui.header`) and tabs the Space SDK provides. The kit is young, so check its guide for what it offers today.
+- **Otherwise shadcn and Tailwind.** Only when the UI Kit has nothing that fits, build the piece from shadcn components styled with Tailwind, and never write from scratch a component shadcn offers.
+
+## 6. Building, Testing, and Deploying
 
 All commands are run from the workspace root using the `simple` CLI:
 
@@ -194,10 +203,9 @@ All commands are run from the workspace root using the `simple` CLI:
 
 > **Note:** There is currently no local live-preview for Spaces. To preview and debug a Space, deploy the app to a dev instance and load the deployed Space in the browser.
 
-## 6. Best Practices
+## 7. Best Practices
 
-- **UI Components:** Build reusable React components for a consistent look and feel across your space.
+- **UI Components:** Use the UI Kit's components first, then shadcn styled with Tailwind, as section 5 describes.
 - **Error Handling:** Always handle loading and error states for queries and mutations to provide good UX.
 - **State Management:** For complex state, combine React Context or a state management library with the `query`/`mutate` SDK functions.
-- **Styling:** Consider a robust UI library (Material-UI, Chakra UI, Radix UI, etc.) for complex interfaces.
 - **SDK:** Call `connect()` from `@simpleplatform/sdk/space`. Do not copy, fork, reimplement, or rename the MessageChannel connection protocol.
