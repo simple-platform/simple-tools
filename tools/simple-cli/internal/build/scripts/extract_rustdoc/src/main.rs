@@ -762,7 +762,7 @@ fn main() {}
     #[test]
     fn the_action_is_named_by_its_crate_rather_than_by_src() {
         assert_eq!(
-            action_name("simple-apps/app/actions/total-due/src/main.rs"),
+            action_name("workspace/app/actions/total-due/src/main.rs"),
             "total-due"
         );
         assert_eq!(action_name("actions/total-due/main.rs"), "total-due");
