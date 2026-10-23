@@ -397,67 +397,24 @@ func TestDevStudioBridgeHandshake(t *testing.T) {
 	}
 }
 
-// The browser leaves the key out once the workspace's own key is set up and
-// its secret is no longer kept for the browser; simple.scl must then stay as
-// it is, so the CLI keeps signing with that key.
-func TestDevStudioBridgeConnectsWithoutDeployKeyAndKeepsSimpleSCL(t *testing.T) {
-	withDevStudioBlock := "tenant acme\n\nenv devstudio {\n  endpoint \"inst_acme_dev.simple.lcl\"\n  api_key \"workspace_key\"\n}\n"
-	withoutDevStudioBlock := "tenant acme\nenv dev {\n  endpoint acme.simple.lcl\n}\n"
-	tests := []struct {
-		name     string
-		config   string
-		key      any
-		omitKey  bool
-		wantSame bool
-	}{
-		{"key left out", withDevStudioBlock, nil, true, true},
-		{"key empty", withDevStudioBlock, "", false, true},
-		{"key left out, no devstudio block", withoutDevStudioBlock, nil, true, true},
-		// Unchanged behaviour, kept as a guard: a sent key is written.
-		{"key sent", withDevStudioBlock, "browser_key", false, false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			_, wsURL := startDevStudioBridge(t)
-			configPath := filepath.Join(devStudioProductionRoot, "inst_acme_dev", "simple.scl")
-			if err := os.WriteFile(configPath, []byte(test.config), 0644); err != nil {
-				t.Fatalf("write simple.scl: %v", err)
-			}
-			connection := dialDevStudio(t, wsURL)
-			defer func() { _ = connection.Close() }()
-
-			request := sessionConnectMessage("inst_acme_dev")
-			delete(request, "deployKey")
-			if !test.omitKey {
-				request["deployKey"] = test.key
-			}
-			sendDevStudioMessage(t, connection, request)
-			if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
-				t.Fatalf("connect = %v, want session.ready", message)
-			}
-			contents, err := os.ReadFile(configPath)
-			if err != nil {
-				t.Fatalf("read simple.scl: %v", err)
-			}
-			if test.wantSame && string(contents) != test.config {
-				t.Fatalf("simple.scl changed without a key:\n%s", contents)
-			}
-			if !test.wantSame && (!strings.Contains(string(contents), `api_key "browser_key"`) || strings.Contains(string(contents), "workspace_key")) {
-				t.Fatalf("simple.scl did not take the sent key:\n%s", contents)
-			}
-		})
-	}
-}
-
-func TestDevStudioBridgeRejectsBlankDeployKey(t *testing.T) {
+func TestDevStudioBridgeRequiresDeployKey(t *testing.T) {
 	_, wsURL := startDevStudioBridge(t)
 	connection := dialDevStudio(t, wsURL)
 	defer func() { _ = connection.Close() }()
 
-	request := sessionConnectMessage("inst_acme_dev")
-	request["deployKey"] = "   "
-	sendDevStudioMessage(t, connection, request)
-	if message := readDevStudioMessage(t, connection); message["code"] != "invalid_deploy_key" {
+	// Missing deployKey
+	sendDevStudioMessage(t, connection, map[string]any{
+		"type":            "session.connect",
+		"protocolVersion": devStudioProtocolVersion,
+		"instanceId":      "inst_acme_dev",
+		"instanceHost":    "inst_acme_dev.simple.lcl",
+	})
+
+	message := readDevStudioMessage(t, connection)
+	if message["type"] != "error" {
+		t.Fatalf("type = %q, want error", message["type"])
+	}
+	if message["code"] != "invalid_deploy_key" {
 		t.Fatalf("code = %q, want invalid_deploy_key", message["code"])
 	}
 }

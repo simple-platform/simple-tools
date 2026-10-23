@@ -453,12 +453,10 @@ func (session *devStudioSession) codexAdapter() *devStudioCodexAdapter {
 	return session.codex
 }
 
-// deployKeyForCodex returns the key the browser sent, which is empty when it
-// sent none, and false once the session is closed.
 func (session *devStudioSession) deployKeyForCodex() (string, bool) {
 	session.stateMu.Lock()
 	defer session.stateMu.Unlock()
-	if session.closed {
+	if session.closed || session.deployKey == "" {
 		return "", false
 	}
 	return session.deployKey, true
@@ -638,18 +636,13 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 		}
 	}
 
-	// Without a key from the browser, simple.scl is left as it is, so the CLI
-	// keeps signing with the keypair the workspace has already set up. The
-	// browser sends none once that key's secret is no longer kept for it.
-	if requestMessage.DeployKey != "" {
-		if err := ensureDevStudioSCLConfiguration(ws, requestMessage.InstanceHost, requestMessage.DeployKey); err != nil {
-			bridge.closeWithError(connection, devStudioProtocolError{
-				Type:    "error",
-				Code:    "workspace_configuration_failed",
-				Message: "The instance workspace could not be prepared for DevStudio.",
-			})
-			return
-		}
+	if err := ensureDevStudioSCLConfiguration(ws, requestMessage.InstanceHost, requestMessage.DeployKey); err != nil {
+		bridge.closeWithError(connection, devStudioProtocolError{
+			Type:    "error",
+			Code:    "workspace_configuration_failed",
+			Message: "The instance workspace could not be prepared for DevStudio.",
+		})
+		return
 	}
 
 	session, protocolError := bridge.beginSession(requestMessage.InstanceID, requestMessage.DeployKey, ws)
@@ -796,8 +789,7 @@ func readDevStudioConnectRequest(connection *websocket.Conn) (devStudioConnectRe
 			Message: "The instance host is invalid.",
 		}
 	}
-	// The key may be left out or empty; a key of only spaces is a mistake.
-	if request.DeployKey != "" && strings.TrimSpace(request.DeployKey) == "" {
+	if strings.TrimSpace(request.DeployKey) == "" {
 		return devStudioConnectRequest{}, &devStudioProtocolError{
 			Type:    "error",
 			Code:    "invalid_deploy_key",
