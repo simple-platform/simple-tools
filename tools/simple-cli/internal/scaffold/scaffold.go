@@ -28,6 +28,7 @@ type MonorepoConfig struct {
 //   - .simple/context/ directory with documentation files
 //   - AGENTS.md at root
 //   - README.md at root (templated with project name)
+//   - devbox.json and package.json at root, pinning node and pnpm
 //   - simple.scl (templated with tenant name)
 //
 // Returns an error if the target path already exists.
@@ -70,6 +71,17 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 
 	// Copy .gitignore
 	if err := copyTemplate(fsys, tplFS, "templates/gitignore", filepath.Join(rootPath, ".gitignore")); err != nil {
+		return err
+	}
+
+	// The workspace's tools, pinned as Simple's own app repositories pin
+	// them: node through devbox, and pnpm through corepack. Without the pnpm
+	// pin, corepack fetches the newest pnpm, which need not start with this
+	// node; pnpm 12.15.0 does not.
+	if err := copyTemplate(fsys, tplFS, "templates/devbox.json", filepath.Join(rootPath, "devbox.json")); err != nil {
+		return err
+	}
+	if err := copyTemplate(fsys, tplFS, "templates/package.json", filepath.Join(rootPath, "package.json")); err != nil {
 		return err
 	}
 

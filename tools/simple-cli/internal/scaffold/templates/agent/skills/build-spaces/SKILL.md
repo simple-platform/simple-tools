@@ -13,7 +13,7 @@ description: Guide to building custom React-based Spaces in Simple.
 
 ## 2. Directory Structure
 
-Spaces reside in the `spaces/` directory of an app within the `client-bnv` repository:
+Spaces reside in the `spaces/` directory of an app in your workspace:
 
 ```
 apps/<app-id>/spaces/<space-name>/
@@ -31,7 +31,7 @@ apps/<app-id>/spaces/<space-name>/
 
 ## 3. Scaffolding a Space
 
-Use the Simple CLI to generate a new space. The CLI should ONLY be used within the `client-bnv` repository as that is where apps and packages are deployed:
+Use the Simple CLI to generate a new space. Run it from the workspace root, the folder that holds `simple.scl`:
 
 ```bash
 simple new space <app-id> <space-name> <display-name>
@@ -186,7 +186,7 @@ Once declared, you may then use standard `fetch()` for _those specific external 
 
 ## 5. Building, Testing, and Deploying
 
-All commands are run from the `client-bnv` repository root using the `simple` CLI:
+All commands are run from the workspace root using the `simple` CLI:
 
 - **Building:** `simple build` compiles all apps including their spaces.
 - **Testing:** `simple test` runs all tests including space unit tests.

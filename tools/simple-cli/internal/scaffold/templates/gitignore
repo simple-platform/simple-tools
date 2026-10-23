@@ -7,6 +7,14 @@ tmp/
 # Dependencies
 node_modules/
 
+# Simple CLI state: key files, tool runtimes and caches. The platform docs
+# in .simple/context belong to the repository.
+.simple/*
+!.simple/context/
+
+# Local secrets
+.env
+
 # OS
 .DS_Store
 Thumbs.db
