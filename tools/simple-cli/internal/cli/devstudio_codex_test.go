@@ -1355,11 +1355,6 @@ func TestDevStudioCodexEnvironmentKeepsToolCachesInTheWorkspace(t *testing.T) {
 	if got := values["NODE_USE_SYSTEM_CA"]; len(got) != 0 {
 		t.Fatalf("NODE_USE_SYSTEM_CA = %v, want it left out", got)
 	}
-	for _, name := range []string{"NPM_CONFIG_CACHE", "NPM_CONFIG_STORE_DIR", "CARGO_HOME"} {
-		if info, err := os.Stat(want[name]); err != nil || !info.IsDir() {
-			t.Fatalf("%s folder %q was not created: %v", name, want[name], err)
-		}
-	}
 }
 
 func TestDevStudioCodexEnvironmentUsesOnlyCurrentDevStudioVariables(t *testing.T) {

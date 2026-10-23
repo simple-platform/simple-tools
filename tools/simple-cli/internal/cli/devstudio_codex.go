@@ -152,35 +152,26 @@ func (execDevStudioCodexStarter) Start(config devStudioCodexStartConfig) (devStu
 // instance workspace, so every place a tool writes by default under the home
 // folder is pointed under <instanceRoot>/.simple instead.
 func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) []string {
-	simpleDir := filepath.Join(workspaceRoot, ".simple")
-	writable := []struct{ name, dir string }{
-		{"XDG_DATA_HOME", filepath.Join(simpleDir, "data")},
-		{"TMPDIR", filepath.Join(simpleDir, "tmp")},
-		// npm and npx; by default ~/.npm.
-		{"npm_config_cache", filepath.Join(simpleDir, "cache", "npm")},
-		// pnpm's package store; by default under PNPM_HOME or ~/Library/pnpm.
-		{"npm_config_store_dir", filepath.Join(simpleDir, "cache", "pnpm-store")},
-		// Other tools' caches, pnpm's own among them.
-		{"XDG_CACHE_HOME", filepath.Join(simpleDir, "cache")},
-		// Cargo's registry and git checkouts for Rust actions; by default ~/.cargo.
-		{"CARGO_HOME", filepath.Join(simpleDir, "cargo")},
-	}
+	caches := devStudioCodexCaches(workspaceRoot)
 	// Names are compared in upper case, because npm reads its settings from
 	// the environment in either case.
 	replaced := map[string]bool{
 		"SIMPLE_CLI_HOME":      true,
 		"SIMPLE_LOCAL_API_KEY": true,
 		"SIMPLE_INSTANCE_ID":   true,
+		"XDG_DATA_HOME":        true,
+		"TMPDIR":               true,
 		// Node then reads the system's certificates from the keychain, which
 		// the sandbox denies, and node, npm and pnpm crash. A CA file named in
 		// NODE_EXTRA_CA_CERTS still applies.
 		"NODE_USE_SYSTEM_CA": true,
 	}
-	for _, variable := range writable {
-		replaced[strings.ToUpper(variable.name)] = true
+	for _, item := range caches {
+		name, _, _ := strings.Cut(item, "=")
+		replaced[strings.ToUpper(name)] = true
 	}
 
-	environment := make([]string, 0, len(os.Environ())+len(writable)+3)
+	environment := make([]string, 0, len(os.Environ())+len(caches)+5)
 	for _, item := range os.Environ() {
 		name, _, _ := strings.Cut(item, "=")
 		if replaced[strings.ToUpper(name)] {
@@ -191,16 +182,36 @@ func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) []st
 	if executable, err := os.Executable(); err == nil {
 		environment = prependDevStudioExecutableDirectory(environment, filepath.Dir(executable))
 	}
-	environment = append(environment,
+	environment = append(environment, caches...)
+	dataDir := filepath.Join(workspaceRoot, ".simple", "data")
+	tmpDir := filepath.Join(workspaceRoot, ".simple", "tmp")
+	_ = os.MkdirAll(dataDir, 0755)
+	_ = os.MkdirAll(tmpDir, 0755)
+
+	return append(environment,
 		"SIMPLE_CLI_HOME="+workspaceRoot,
 		"SIMPLE_LOCAL_API_KEY="+deployKey,
 		"SIMPLE_INSTANCE_ID="+instanceID,
+		"XDG_DATA_HOME="+dataDir,
+		"TMPDIR="+tmpDir,
 	)
-	for _, variable := range writable {
-		_ = os.MkdirAll(variable.dir, fsx.DirPerm)
-		environment = append(environment, variable.name+"="+variable.dir)
+}
+
+// devStudioCodexCaches points the caches of the tools the agent's commands
+// run, by default under the home folder, into the workspace. Each tool
+// creates its folder there on first use.
+func devStudioCodexCaches(workspaceRoot string) []string {
+	cacheDir := filepath.Join(workspaceRoot, ".simple", "cache")
+	return []string{
+		// npm and npx; by default ~/.npm.
+		"npm_config_cache=" + filepath.Join(cacheDir, "npm"),
+		// pnpm's package store; by default under PNPM_HOME or ~/Library/pnpm.
+		"npm_config_store_dir=" + filepath.Join(cacheDir, "pnpm-store"),
+		// Other tools' caches, pnpm's own among them.
+		"XDG_CACHE_HOME=" + cacheDir,
+		// Cargo's registry and git checkouts for Rust actions; by default ~/.cargo.
+		"CARGO_HOME=" + filepath.Join(workspaceRoot, ".simple", "cargo"),
 	}
-	return environment
 }
 
 func prependDevStudioExecutableDirectory(environment []string, directory string) []string {
