@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
 	"simple-cli/internal/home"
 )
 
@@ -154,6 +156,19 @@ func GenerateOrLoad(tenant, env, idSuffix string) (*Keypair, error) {
 // POST /auth/api-key/enroll for the given tenant and env.
 func MarkEnrolled(tenant, env, idSuffix string) error {
 	return os.WriteFile(filepath.Join(keyDir(tenant, env, idSuffix), ".enrolled"), []byte{}, 0600)
+}
+
+// SetAside moves the keypair directory for tenant, env and idSuffix to a
+// sibling named <idSuffix>.refused-<UTC time> and returns where it went. It is
+// never deleted, so it can still be looked at; once moved, the pair is no
+// longer found or counted as enrolled.
+func SetAside(tenant, env, idSuffix string, now time.Time) (string, error) {
+	from := keyDir(tenant, env, idSuffix)
+	to := from + ".refused-" + now.UTC().Format("20060102T150405Z")
+	if err := os.Rename(from, to); err != nil {
+		return "", fmt.Errorf("failed to move the key folder aside: %w", err)
+	}
+	return to, nil
 }
 
 // DeleteKey removes the entire env-scoped keypair directory.
