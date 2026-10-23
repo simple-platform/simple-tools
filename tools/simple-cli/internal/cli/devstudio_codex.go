@@ -580,7 +580,7 @@ func (adapter *devStudioCodexAdapter) openThread() (bool, error) {
 	stored, err := readDevStudioThreadID(adapter.workspace)
 	adapter.storeMu.Unlock()
 	if err != nil {
-		log.Printf("[DevStudio Bridge] Starting a new conversation: %v", err)
+		log.Printf("[DevStudio Bridge] Starting a new conversation: %s", devStudioLogValue(err))
 	}
 	if stored != "" {
 		params := adapter.threadParams()
@@ -729,7 +729,7 @@ func (adapter *devStudioCodexAdapter) savePlan(plan devStudioPlan) {
 		err = writeDevStudioThreadRecord(adapter.workspace, record)
 	}
 	if err != nil {
-		log.Printf("[DevStudio Bridge] The plan could not be kept for the replay: %v", err)
+		log.Printf("[DevStudio Bridge] The plan could not be kept for the replay: %s", devStudioLogValue(err))
 	}
 }
 
@@ -759,7 +759,7 @@ func (adapter *devStudioCodexAdapter) startTurn(text string) error {
 
 func (adapter *devStudioCodexAdapter) runTurn(turn *devStudioTurn, text string) {
 	if _, err := adapter.ensureCodex(); err != nil {
-		log.Printf("[DevStudio Bridge] Codex could not be started for a turn: %v", err)
+		log.Printf("[DevStudio Bridge] Codex could not be started for a turn: %s", devStudioLogValue(err))
 		adapter.finishTurn(turn, "failed", nil, &devStudioTurnError{Code: "codex_unavailable", Message: "Codex could not be started for this turn."}, true)
 		return
 	}
@@ -802,7 +802,7 @@ func (adapter *devStudioCodexAdapter) runTurn(turn *devStudioTurn, text string) 
 		err = errors.New("codex returned a turn without an id")
 	}
 	if err != nil {
-		log.Printf("[DevStudio Bridge] Codex could not start a turn: %v", err)
+		log.Printf("[DevStudio Bridge] Codex could not start a turn: %s", devStudioLogValue(err))
 		adapter.finishTurn(turn, "failed", nil, &devStudioTurnError{Code: "codex_unavailable", Message: "Codex could not start this turn."}, true)
 		return
 	}
@@ -857,7 +857,7 @@ func (adapter *devStudioCodexAdapter) cancelTurn() error {
 // turn/completed, status interrupted.
 func (adapter *devStudioCodexAdapter) interrupt(threadID, turnID string) {
 	if _, err := adapter.call("turn/interrupt", map[string]string{"threadId": threadID, "turnId": turnID}); err != nil {
-		log.Printf("[DevStudio Bridge] Codex did not accept the cancel: %v", err)
+		log.Printf("[DevStudio Bridge] Codex did not accept the cancel: %s", devStudioLogValue(err))
 	}
 }
 
@@ -889,7 +889,7 @@ func (adapter *devStudioCodexAdapter) runNewConversation() {
 		return
 	}
 	if err != nil {
-		log.Printf("[DevStudio Bridge] Codex could not start a new conversation: %v", err)
+		log.Printf("[DevStudio Bridge] Codex could not start a new conversation: %s", devStudioLogValue(err))
 		adapter.emitError("codex_unavailable", "Codex could not start a new conversation.")
 		return
 	}
@@ -1042,7 +1042,7 @@ func (adapter *devStudioCodexAdapter) handleCodexRequest(connection *devStudioCo
 		err = adapter.reply(connection, id, nil, &devStudioJSONRPCError{Code: devStudioJSONRPCMethodNotFound, Message: "DevStudio does not handle " + method + "."})
 	}
 	if err != nil {
-		log.Printf("[DevStudio Bridge] Failed to answer the Codex request %s: %v", method, err)
+		log.Printf("[DevStudio Bridge] Failed to answer the Codex request %s: %s", devStudioLogValue(method), devStudioLogValue(err))
 	}
 }
 
@@ -1063,7 +1063,7 @@ func (adapter *devStudioCodexAdapter) askQuestion(connection *devStudioCodexConn
 	}
 	if json.Unmarshal(params, &request) != nil || len(request.Questions) == 0 {
 		if err := adapter.reply(connection, id, nil, &devStudioJSONRPCError{Code: devStudioJSONRPCInvalidParams, Message: "DevStudio could not read this question."}); err != nil {
-			log.Printf("[DevStudio Bridge] Failed to refuse a Codex question: %v", err)
+			log.Printf("[DevStudio Bridge] Failed to refuse a Codex question: %s", devStudioLogValue(err))
 		}
 		return
 	}
@@ -1653,6 +1653,14 @@ func (adapter *devStudioCodexAdapter) redact(value string) string {
 	return strings.ReplaceAll(value, deployKey, "[redacted]")
 }
 
+// devStudioLogValue makes a value safe to print in one log line. Errors and
+// values can carry what the browser or Codex sent, such as an instance
+// folder, and a line break in them could forge a log line.
+func devStudioLogValue(value any) string {
+	text := strings.ReplaceAll(fmt.Sprint(value), "\n", `\n`)
+	return strings.ReplaceAll(text, "\r", `\r`)
+}
+
 func devStudioMessagePhase(phase *string) string {
 	if phase != nil && *phase == "commentary" {
 		return "commentary"
@@ -2013,7 +2021,7 @@ func formatSCLValue(val string) string {
 
 func ensureDevStudioSCLConfiguration(workspace *devStudioWorkspace, instanceHost, deployKey string) error {
 	path := filepath.Join(workspace.instanceRoot, "simple.scl")
-	log.Printf("[DevStudio Bridge] Writing SCL configuration to %s", path)
+	log.Printf("[DevStudio Bridge] Writing SCL configuration to %s", devStudioLogValue(path))
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {

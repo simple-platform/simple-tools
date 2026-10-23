@@ -566,13 +566,13 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 		return
 	}
 
-	log.Printf("[DevStudio Bridge] Session connect received: instanceID=%q, instanceHost=%q, hasDeployKey=%t, hasInstancePath=%t", requestMessage.InstanceID, requestMessage.InstanceHost, requestMessage.DeployKey != "", requestMessage.InstancePath != "")
+	log.Printf("[DevStudio Bridge] Session connect received: instanceID=%q, instanceHost=%q, hasDeployKey=%t, hasInstancePath=%t", devStudioLogValue(requestMessage.InstanceID), devStudioLogValue(requestMessage.InstanceHost), requestMessage.DeployKey != "", requestMessage.InstancePath != "")
 
 	var ws *devStudioWorkspace
 	if requestMessage.InstancePath != "" {
 		instanceRoot, err := ensureDevStudioInstanceRootAtPath(requestMessage.InstanceID, requestMessage.InstancePath)
 		if err != nil {
-			log.Printf("[DevStudio Bridge] Workspace initialization failed for path %q: %v", requestMessage.InstancePath, err)
+			log.Printf("[DevStudio Bridge] Workspace initialization failed for path %q: %s", devStudioLogValue(requestMessage.InstancePath), devStudioLogValue(err))
 			bridge.closeWithError(connection, devStudioProtocolError{
 				Type:    "error",
 				Code:    "workspace_initialization_failed",
@@ -592,7 +592,7 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 	} else {
 		foundPath, found := findExistingDevStudioInstanceRoot(requestMessage.InstanceID)
 		if !found {
-			log.Printf("[DevStudio Bridge] Instance %q not found in default locations", requestMessage.InstanceID)
+			log.Printf("[DevStudio Bridge] Instance %q not found in default locations", devStudioLogValue(requestMessage.InstanceID))
 			bridge.closeWithError(connection, devStudioProtocolError{
 				Type:    "error",
 				Code:    "instance_path_required",
@@ -671,7 +671,7 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 	// inside the read loop below.
 	threadID, resumed, err := codex.connect()
 	if err != nil {
-		log.Printf("[DevStudio Bridge] Codex could not be started: %v", err)
+		log.Printf("[DevStudio Bridge] Codex could not be started: %s", devStudioLogValue(err))
 		// Free the session first, so the browser can reconnect as soon as
 		// it reads the error.
 		bridge.endSession(session)
@@ -700,7 +700,7 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 		return
 	}
 	if historyErr != nil {
-		log.Printf("[DevStudio Bridge] %v", historyErr)
+		log.Printf("[DevStudio Bridge] %s", devStudioLogValue(historyErr))
 		_ = session.send(devStudioProtocolError{Type: "error", Code: "history_unavailable", Message: "The earlier conversation could not be shown."})
 	}
 	codex.replay(history)

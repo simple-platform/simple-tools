@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -806,6 +808,65 @@ func sessionConnectMessage(instanceID string) map[string]any {
 		"instanceId":      instanceID,
 		"instanceHost":    instanceID + ".simple.lcl",
 		"deployKey":       "test_deploy_key_secret",
+	}
+}
+
+func TestDevStudioLogValueKeepsOneLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"plain text", "inst_acme", "inst_acme"},
+		{"line feed", "a\nforged line", `a\nforged line`},
+		{"carriage return and line feed", "a\r\nb", `a\r\nb`},
+		{"error", errors.New("stat /tmp/x\ny: not a directory"), `stat /tmp/x\ny: not a directory`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := devStudioLogValue(test.value); got != test.want {
+				t.Fatalf("devStudioLogValue(%q) = %q, want %q", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+// The browser names the instance folder, so a line break in it must not
+// start a new log line.
+func TestDevStudioBridgeLogsBrowserValuesOnOneLine(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	baseDir := t.TempDir()
+	blocker := filepath.Join(baseDir, "a-file")
+	if err := os.WriteFile(blocker, []byte("not a folder"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	server := httptest.NewServer(newTestDevStudioBridge(t).handler())
+	t.Cleanup(server.Close)
+	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+	defer func() { _ = connection.Close() }()
+
+	request := sessionConnectMessage("inst_log")
+	request["instancePath"] = filepath.Join(blocker, "x\n[DevStudio Bridge] forged")
+	sendDevStudioMessage(t, connection, request)
+	if message := readDevStudioMessage(t, connection); message["code"] != "workspace_initialization_failed" {
+		t.Fatalf("connect = %v, want workspace_initialization_failed", message)
+	}
+
+	var failures []string
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, "forged") && !strings.Contains(line, "Workspace initialization failed") && !strings.Contains(line, "Session connect") {
+			t.Fatalf("a browser value started its own log line: %q", line)
+		}
+		if strings.Contains(line, "Workspace initialization failed") {
+			failures = append(failures, line)
+		}
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "not a directory") {
+		t.Fatalf("log lines = %q, want the whole failure on one line", failures)
 	}
 }
 
