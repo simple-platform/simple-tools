@@ -653,7 +653,8 @@ func TestDevStudioCodexReadLoopStaysFreeWhileTurnStarts(t *testing.T) {
 	starter.holdTurnOpen = true
 	gate := make(chan struct{})
 	starter.turnStartGate = gate
-	connection, _ := connectDevStudioSession(t, newDevStudioBridgeWithCodexStarter(starter), "inst_free_loop")
+	bridge := newDevStudioBridgeWithCodexStarter(starter)
+	connection, _ := connectDevStudioSession(t, bridge, "inst_free_loop")
 
 	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.start", "text": "Slow start"})
 	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.start", "text": "Second task"})
@@ -663,7 +664,9 @@ func TestDevStudioCodexReadLoopStaysFreeWhileTurnStarts(t *testing.T) {
 	// Codex has the turn but has not named it yet.
 	starter.waitForRequest(t, "turn/start")
 	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.cancel"})
-	time.Sleep(20 * time.Millisecond)
+	waitForDevStudioAdapter(t, bridge, "a cancel recorded before Codex named the turn", func(adapter *devStudioCodexAdapter) bool {
+		return adapter.turn != nil && adapter.turn.cancelRequested && adapter.turn.id == ""
+	})
 	close(gate)
 
 	select {
@@ -1049,7 +1052,8 @@ func TestDevStudioCodexReportsFailuresAfterReady(t *testing.T) {
 	baseDir := setupTestProductionRoot(t, "inst_later_failures")
 	createDevStudioApp(t, baseDir, "inst_later_failures", "app-one")
 	starter := newFakeDevStudioCodexStarter(nil)
-	connection, _ := connectDevStudioSession(t, newDevStudioBridgeWithCodexStarter(starter), "inst_later_failures")
+	bridge := newDevStudioBridgeWithCodexStarter(starter)
+	connection, _ := connectDevStudioSession(t, bridge, "inst_later_failures")
 
 	starter.mu.Lock()
 	starter.failThreadStart = true
@@ -1065,10 +1069,11 @@ func TestDevStudioCodexReportsFailuresAfterReady(t *testing.T) {
 	process := starter.processes[0]
 	starter.mu.Unlock()
 	process.Stop()
-	deadline := time.Now().Add(time.Second)
-	for !process.isStopped() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	// The process is marked stopped at once; the bridge notices a moment
+	// later, when it reads the end of Codex's output.
+	waitForDevStudioAdapter(t, bridge, "Codex stopped", func(adapter *devStudioCodexAdapter) bool {
+		return adapter.connection == nil
+	})
 	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.start", "text": "Go."})
 	assertDevStudioTurnFailed(t, readDevStudioEventsUntil(t, connection, "turn.completed"), "codex_unavailable")
 	if starter.startCount() != 2 {
@@ -1886,6 +1891,30 @@ func TestDevStudioCodexDeployKeyRace(t *testing.T) {
 	}()
 
 	wg.Wait()
+}
+
+// waitForDevStudioAdapter waits until check holds for the Codex adapter of
+// the bridge's session, read under the adapter's lock.
+func waitForDevStudioAdapter(t *testing.T, bridge *devStudioBridge, what string, check func(adapter *devStudioCodexAdapter) bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		bridge.mu.Lock()
+		session := bridge.session
+		bridge.mu.Unlock()
+		if session != nil {
+			if adapter := session.codexAdapter(); adapter != nil {
+				adapter.mu.Lock()
+				done := check(adapter)
+				adapter.mu.Unlock()
+				if done {
+					return
+				}
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("the bridge never reached this state: %s", what)
 }
 
 // assertDevStudioTurnFailed checks that a turn's events end with an error
