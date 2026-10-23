@@ -65,10 +65,14 @@ fi
 # "v*-scl-parser-cli".
 previous=$(git tag -l "v*-${suffix}" --sort=-version:refname | sed -n 1p)
 
+# A merge commit is never listed. Its subject says only that two branches
+# were joined, which tells a reader nothing; the commits it joined are listed
+# on their own.
+
 if [ -n "$previous" ]; then
-  commits=$(git log "${previous}..HEAD" --pretty=format:"* %s (%h)" -- "$path")
+  commits=$(git log --no-merges "${previous}..HEAD" --pretty=format:"* %s (%h)" -- "$path")
 else
-  commits=$(git log --pretty=format:"* %s (%h)" -- "$path")
+  commits=$(git log --no-merges --pretty=format:"* %s (%h)" -- "$path")
 fi
 
 # Another tool's scopes are every tool's, less this tool's own.
