@@ -1,5 +1,7 @@
 import type { SpaceContext } from '@simpleplatform/sdk/space'
+import type { SimpleStatusBadgeTone } from '@simpleplatform/ui-kit'
 import { connect } from '@simpleplatform/sdk/space'
+import { StatusBadge } from '@simpleplatform/ui-kit/react'
 import { useEffect, useState } from 'react'
 
 interface Application {
@@ -17,6 +19,14 @@ query GetApplications {
   }
 }
 `
+
+// The connection's state, shown with the UI Kit's StatusBadge rather than a
+// hand-made pill, so it matches every other status in Simple.
+const CONNECTION: Record<'loading' | 'ready' | 'error', { label: string, tone: SimpleStatusBadgeTone }> = {
+  error: { label: 'Not connected', tone: 'danger' },
+  loading: { label: 'Connecting', tone: 'info' },
+  ready: { label: 'Connected', tone: 'success' },
+}
 
 // Trusted configuration is required when referrer is unavailable.
 const spaceConnection = connect({
@@ -52,7 +62,7 @@ export default function App() {
       {status === 'loading' && <p className="text-muted-foreground">Loading applications…</p>}
       {status === 'error' && <p className="text-destructive">Failed to load data.</p>}
       {status === 'ready' && (
-        <ul className="list-none p-0">
+        <ul className="m-0 list-none rounded-lg border border-border bg-card px-4 py-0">
           {apps.map(app => (
             <li key={app.id} className="flex items-center justify-between py-2 border-b border-border">
               <span className="font-medium">{app.display_name}</span>
@@ -63,11 +73,10 @@ export default function App() {
         </ul>
       )}
 
-      <p className="text-sm text-muted-foreground mt-6">
-        GraphQL:
-        {' '}
-        {status === 'loading' ? '⏳' : status === 'ready' ? '✅ Connected' : '❌ Error'}
-      </p>
+      <div className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
+        GraphQL
+        <StatusBadge label={CONNECTION[status].label} tone={CONNECTION[status].tone} />
+      </div>
     </div>
   )
 }

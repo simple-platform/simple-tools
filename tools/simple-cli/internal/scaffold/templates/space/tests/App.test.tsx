@@ -54,6 +54,15 @@ describe('app', () => {
     })
   })
 
+  it('shows the connection with the UI Kit status badge', async () => {
+    const { container } = render(<App />)
+    await waitFor(() => {
+      const badge = container.querySelector('simple-status-badge')
+      expect(badge?.getAttribute('label')).toBe('Connected')
+      expect(badge?.getAttribute('tone')).toBe('success')
+    })
+  })
+
   it('shows the host-provided Space context', async () => {
     render(<App />)
     await waitFor(() => expect(screen.getByText('Space context: standalone')).toBeDefined())
