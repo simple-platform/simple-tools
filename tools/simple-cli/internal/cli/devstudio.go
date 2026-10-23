@@ -38,6 +38,12 @@ const (
 	devStudioAppsDirectory   = "apps"
 )
 
+// devStudioSessionHandoverWait is how long a new connection waits for a
+// session that is still ending, such as the one a reloading page has just
+// dropped, before it is refused. A real second tab is still refused, only
+// later. A variable so a test can shorten it.
+var devStudioSessionHandoverWait = 2 * time.Second
+
 var (
 	devStudioWorkspaceRoot       = defaultDevStudioWorkspaceRoot()
 	devStudioProductionRoot      = devStudioWorkspaceRoot
@@ -273,11 +279,8 @@ func serveDevStudioWithBridge(ctx context.Context, listener net.Listener, output
 	defer func() {
 		bridge.mu.Lock()
 		session := bridge.session
-		bridge.session = nil
 		bridge.mu.Unlock()
-		if session != nil {
-			session.close()
-		}
+		bridge.endSession(session)
 	}()
 
 	server := &http.Server{Handler: bridge.handler()}
@@ -426,6 +429,9 @@ type devStudioSession struct {
 	send       func(any) error
 	codex      *devStudioCodexAdapter
 	closed     bool
+	// ended is closed once the session has closed and left the bridge, so
+	// a connection waiting for it can take over.
+	ended chan struct{}
 }
 
 func (session *devStudioSession) setCodex(adapter *devStudioCodexAdapter) bool {
@@ -805,36 +811,52 @@ func ensureSingleJSONValue(decoder *json.Decoder) error {
 	return nil
 }
 
+// beginSession takes the bridge's one session slot. A page that drops its
+// connection and reconnects at once can arrive before the bridge has ended
+// the old session, so it waits a short while for that session to end.
 func (bridge *devStudioBridge) beginSession(instanceID, deployKey string, ws *devStudioWorkspace) (*devStudioSession, *devStudioProtocolError) {
-	bridge.mu.Lock()
-	defer bridge.mu.Unlock()
+	wait := time.NewTimer(devStudioSessionHandoverWait)
+	defer wait.Stop()
+	for {
+		bridge.mu.Lock()
+		current := bridge.session
+		if current == nil {
+			session := &devStudioSession{
+				instanceID: instanceID,
+				deployKey:  deployKey,
+				workspace:  ws,
+				ended:      make(chan struct{}),
+			}
+			bridge.session = session
+			bridge.mu.Unlock()
+			return session, nil
+		}
+		bridge.mu.Unlock()
 
-	if bridge.session != nil {
-		return nil, &devStudioProtocolError{
-			Type:    "error",
-			Code:    "session_already_active",
-			Message: "A DevStudio browser session is already active.",
+		select {
+		case <-current.ended:
+		case <-wait.C:
+			return nil, &devStudioProtocolError{
+				Type:    "error",
+				Code:    "session_already_active",
+				Message: "A DevStudio browser session is already active.",
+			}
 		}
 	}
-
-	session := &devStudioSession{
-		instanceID: instanceID,
-		deployKey:  deployKey,
-		workspace:  ws,
-	}
-	bridge.session = session
-	return session, nil
 }
 
+// endSession closes session, stopping its Codex and restoring protected
+// files, and only then frees the slot, so the next session never overlaps it.
 func (bridge *devStudioBridge) endSession(session *devStudioSession) {
+	if session == nil {
+		return
+	}
+	session.close()
 	bridge.mu.Lock()
+	defer bridge.mu.Unlock()
 	if bridge.session == session {
 		bridge.session = nil
-	}
-	bridge.mu.Unlock()
-
-	if session != nil {
-		session.close()
+		close(session.ended)
 	}
 }
 

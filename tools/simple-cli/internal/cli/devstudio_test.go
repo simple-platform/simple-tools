@@ -437,14 +437,17 @@ func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
 		t.Fatalf("type = %q, want session.ready", message["type"])
 	}
 
-	// Check that deployKey is present in internal session state
+	// Check that deployKey is present in internal session state. The key is
+	// guarded by the session's own lock.
 	bridge.mu.Lock()
 	sess := bridge.session
-	var storedKey string
-	if sess != nil {
-		storedKey = sess.deployKey
-	}
 	bridge.mu.Unlock()
+	if sess == nil {
+		t.Fatal("no session after session.ready")
+	}
+	sess.stateMu.Lock()
+	storedKey := sess.deployKey
+	sess.stateMu.Unlock()
 
 	if storedKey != keySecret {
 		t.Fatalf("in-memory deployKey = %q, want %q", storedKey, keySecret)
@@ -452,14 +455,21 @@ func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
 
 	// Close connection and verify key cleared
 	_ = connection.Close()
-	time.Sleep(50 * time.Millisecond)
+	waitForDevStudioSessionEnd(t, sess)
+	sess.stateMu.Lock()
+	keyAfter := sess.deployKey
+	sess.stateMu.Unlock()
+	if keyAfter != "" {
+		t.Fatalf("deployKey after disconnect = %q, want empty", keyAfter)
+	}
+}
 
-	bridge.mu.Lock()
-	sessAfter := bridge.session
-	bridge.mu.Unlock()
-
-	if sessAfter != nil && sessAfter.deployKey != "" {
-		t.Fatalf("deployKey after disconnect = %q, want empty", sessAfter.deployKey)
+func waitForDevStudioSessionEnd(t *testing.T, session *devStudioSession) {
+	t.Helper()
+	select {
+	case <-session.ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the session did not end after its browser disconnected")
 	}
 }
 
@@ -572,6 +582,9 @@ func TestDevStudioBridgeRejectsMalformedMessages(t *testing.T) {
 }
 
 func TestDevStudioBridgeRejectsSecondActiveSession(t *testing.T) {
+	previousWait := devStudioSessionHandoverWait
+	devStudioSessionHandoverWait = 100 * time.Millisecond
+	t.Cleanup(func() { devStudioSessionHandoverWait = previousWait })
 	_, wsURL := startDevStudioBridge(t)
 	first := dialDevStudio(t, wsURL)
 	defer func() { _ = first.Close() }()
@@ -604,6 +617,43 @@ func TestDevStudioBridgeClearsSessionWhenBrowserDisconnects(t *testing.T) {
 	sendDevStudioMessage(t, second, sessionConnectMessage("inst_acme_dev"))
 	if message := readDevStudioMessage(t, second); message["type"] != "session.ready" {
 		t.Fatalf("second type = %q, want session.ready", message["type"])
+	}
+}
+
+// A page that reloads or reconnects can arrive before the bridge has ended
+// its old session; it waits for that session instead of being refused.
+func TestDevStudioBridgeHandsOverToReconnectWaitingForOldSession(t *testing.T) {
+	_, wsURL := startDevStudioBridge(t)
+	first := dialDevStudio(t, wsURL)
+	sendDevStudioMessage(t, first, sessionConnectMessage("inst_acme_dev"))
+	if message := readDevStudioMessage(t, first); message["type"] != "session.ready" {
+		t.Fatalf("first type = %q, want session.ready", message["type"])
+	}
+
+	second := dialDevStudio(t, wsURL)
+	defer func() { _ = second.Close() }()
+	request := sessionConnectMessage("inst_acme_dev")
+	request["deployKey"] = "second_deploy_key"
+	sendDevStudioMessage(t, second, request)
+	// The bridge writes the new key just before it asks for the session, so
+	// once the key is there the second connection is waiting for the first.
+	configPath := filepath.Join(devStudioProductionRoot, "inst_acme_dev", "simple.scl")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		contents, _ := os.ReadFile(configPath)
+		if strings.Contains(string(contents), "second_deploy_key") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second connection never reached the session")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first connection: %v", err)
+	}
+	if message := readDevStudioMessage(t, second); message["type"] != "session.ready" {
+		t.Fatalf("second = %v, want session.ready", message)
 	}
 }
 
@@ -719,11 +769,17 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 	}
 
 	bridge.mu.Lock()
-	if bridge.session == nil || bridge.session.deployKey != secretKey {
-		bridge.mu.Unlock()
-		t.Fatalf("session deployKey = %v, want %q", bridge.session, secretKey)
-	}
+	activeSession := bridge.session
 	bridge.mu.Unlock()
+	if activeSession == nil {
+		t.Fatal("no session after session.ready")
+	}
+	activeSession.stateMu.Lock()
+	activeKey := activeSession.deployKey
+	activeSession.stateMu.Unlock()
+	if activeKey != secretKey {
+		t.Fatalf("session deployKey = %q, want %q", activeKey, secretKey)
+	}
 
 	cancel()
 	if err := <-done; err != nil {
