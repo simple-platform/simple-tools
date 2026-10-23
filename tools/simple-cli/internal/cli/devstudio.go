@@ -193,35 +193,134 @@ func devStudioDefaultCandidateRoots(instanceID string) []string {
 
 func findExistingDevStudioInstanceRoot(instanceID string) (string, bool) {
 	for _, candidate := range devStudioDefaultCandidateRoots(instanceID) {
-		info, err := os.Stat(candidate)
+		root, err := confineDevStudioInstanceRoot(instanceID, candidate)
+		if err != nil {
+			continue
+		}
+		info, err := os.Stat(root)
 		if err == nil && info.IsDir() {
-			return candidate, true
+			return root, true
 		}
 	}
 	return "", false
 }
 
-type devStudioWorkspaceResolver func(instanceID string) (*devStudioWorkspace, error)
-
-// ensureDevStudioInstanceRootAtPath ensures an instance workspace exists at the given path,
-// scaffolding it via scaffold.CreateMonorepoStructure if it does not already exist.
-func ensureDevStudioInstanceRootAtPath(instanceID, targetPath string) (string, error) {
+// confineDevStudioInstanceRoot turns the folder the browser named for an
+// instance into the folder the bridge and Codex will work in, or refuses it.
+// Codex may write anywhere in that folder, so it must be a folder of the
+// instance's own, named after it, inside the person's home folder: never the
+// home folder itself, "/", a folder above home, or a place a symbolic link
+// leads to outside home. Symbolic links are resolved here, once; everything
+// after works from the folder this returns. Each refusal is a plain sentence,
+// because the browser shows it to the person who typed the folder.
+func confineDevStudioInstanceRoot(instanceID, requestedPath string) (string, error) {
 	if !isValidDevStudioInstanceID(instanceID) {
 		return "", fmt.Errorf("invalid instance ID: %q", instanceID)
 	}
-	resolvedPath := expandHome(targetPath)
-	if !filepath.IsAbs(resolvedPath) {
-		abs, err := filepath.Abs(resolvedPath)
+	requested := expandHome(requestedPath)
+	if !filepath.IsAbs(requested) {
+		abs, err := filepath.Abs(requested)
 		if err != nil {
 			return "", fmt.Errorf("invalid instance path: %w", err)
 		}
-		resolvedPath = abs
+		requested = abs
+	}
+	for _, element := range strings.Split(filepath.ToSlash(requested), "/") {
+		if element == ".." {
+			return "", errors.New(`the workspace folder must be a direct path, without ".."`)
+		}
+	}
+	nameRefusal := fmt.Errorf("the workspace folder must be named after the instance, %s, and must not be a link to a folder with another name", instanceID)
+	if filepath.Base(requested) != instanceID {
+		return "", nameRefusal
+	}
+	homeDirectory, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to find your home folder: %w", err)
+	}
+	canonicalHome, err := filepath.EvalSymlinks(homeDirectory)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve your home folder: %w", err)
+	}
+	root, err := devStudioResolve(requested)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Base(root) != instanceID {
+		return "", nameRefusal
+	}
+	// The separator makes this a real containment check: the home folder
+	// itself, "/", every folder above home, and a sibling such as
+	// /Users/alice2 next to /Users/alice all fail it.
+	if !strings.HasPrefix(root, canonicalHome+string(filepath.Separator)) {
+		return "", errors.New("the workspace folder must be inside your home folder, and not the home folder itself")
+	}
+	return root, nil
+}
+
+// devStudioResolve follows every symbolic link in path. Folders at the end of
+// path that do not exist yet keep their names, under the real location of the
+// deepest folder that does, so a folder about to be created is measured where
+// it will really be.
+func devStudioResolve(path string) (string, error) {
+	existing := filepath.Clean(path)
+	var missing []string
+	for {
+		resolved, err := filepath.EvalSymlinks(existing)
+		if err == nil {
+			return filepath.Join(append([]string{resolved}, missing...)...), nil
+		}
+		parent := filepath.Dir(existing)
+		if !errors.Is(err, os.ErrNotExist) || parent == existing {
+			return "", fmt.Errorf("failed to resolve %s: %w", path, err)
+		}
+		missing = append([]string{filepath.Base(existing)}, missing...)
+		existing = parent
+	}
+}
+
+// devStudioPathInside returns the real location of elements under folder, a
+// folder whose symbolic links are already resolved, and refuses one that
+// lands outside it. Codex can write anywhere in an instance folder, links
+// included, while the bridge runs outside Codex's sandbox, so every path the
+// bridge builds there goes through this check: a link the agent planted could
+// otherwise send the bridge's own reads and writes somewhere else.
+func devStudioPathInside(folder string, elements ...string) (string, error) {
+	relative := filepath.Join(elements...)
+	path, err := devStudioResolve(filepath.Join(folder, relative))
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(path, folder+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s leads outside the instance folder", relative)
+	}
+	// A link to something that does not exist resolves to its own name, and
+	// writing to it would create its target wherever it points.
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("%s is a link to something that does not exist", relative)
+	}
+	return path, nil
+}
+
+type devStudioWorkspaceResolver func(instanceID string) (*devStudioWorkspace, error)
+
+// ensureDevStudioInstanceRootAtPath confines the given path and ensures an instance
+// workspace exists there, scaffolding it via scaffold.CreateMonorepoStructure if it
+// does not already exist. It returns the confined root.
+func ensureDevStudioInstanceRootAtPath(instanceID, targetPath string) (string, error) {
+	resolvedPath, err := confineDevStudioInstanceRoot(instanceID, targetPath)
+	if err != nil {
+		return "", err
 	}
 	if info, err := os.Stat(resolvedPath); err == nil {
 		if !info.IsDir() {
 			return "", fmt.Errorf("instance path is not a directory: %s", resolvedPath)
 		}
-		if err := os.MkdirAll(filepath.Join(resolvedPath, devStudioAppsDirectory), 0755); err != nil {
+		appsPath, err := devStudioPathInside(resolvedPath, devStudioAppsDirectory)
+		if err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(appsPath, fsx.DirPerm); err != nil {
 			return "", fmt.Errorf("failed to create instance apps directory: %w", err)
 		}
 		return resolvedPath, nil
@@ -321,10 +420,6 @@ type devStudioWorkspace struct {
 	appDirs      []string
 }
 
-func (workspace *devStudioWorkspace) appPath(appID string) string {
-	return filepath.Join(workspace.instanceRoot, devStudioAppsDirectory, appID)
-}
-
 func resolveDevStudioWorkspace(instanceID string) (*devStudioWorkspace, error) {
 	return resolveDevStudioWorkspaceAtPath(instanceID, "")
 }
@@ -334,18 +429,22 @@ func resolveDevStudioWorkspaceAtPath(instanceID, customPath string) (*devStudioW
 		return nil, fmt.Errorf("invalid instance ID: %q", instanceID)
 	}
 
-	var targetPath string
+	var instanceRoot string
 	if customPath != "" {
-		targetPath = expandHome(customPath)
+		confinedPath, err := confineDevStudioInstanceRoot(instanceID, customPath)
+		if err != nil {
+			return nil, err
+		}
+		instanceRoot = confinedPath
 	} else {
 		foundPath, ok := findExistingDevStudioInstanceRoot(instanceID)
 		if !ok {
 			return nil, fmt.Errorf("instance root directory does not exist: %q", instanceID)
 		}
-		targetPath = foundPath
+		instanceRoot = foundPath
 	}
 
-	info, err := os.Stat(targetPath)
+	info, err := os.Stat(instanceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("instance root directory does not exist: %w", err)
 	}
@@ -353,16 +452,10 @@ func resolveDevStudioWorkspaceAtPath(instanceID, customPath string) (*devStudioW
 		return nil, fmt.Errorf("instance root path is not a directory")
 	}
 
-	canonicalTarget, err := filepath.EvalSymlinks(targetPath)
+	appsRoot, err := devStudioPathInside(instanceRoot, devStudioAppsDirectory)
 	if err != nil {
-		return nil, fmt.Errorf("failed to canonicalize instance root path: %w", err)
+		return nil, fmt.Errorf("apps directory path escapes instance root: %w", err)
 	}
-	canonicalTargetInfo, err := os.Stat(canonicalTarget)
-	if err != nil || !canonicalTargetInfo.IsDir() {
-		return nil, fmt.Errorf("canonical instance root path is not a directory")
-	}
-
-	appsRoot := filepath.Join(canonicalTarget, devStudioAppsDirectory)
 	appsInfo, err := os.Stat(appsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("apps directory does not exist: %w", err)
@@ -370,36 +463,26 @@ func resolveDevStudioWorkspaceAtPath(instanceID, customPath string) (*devStudioW
 	if !appsInfo.IsDir() {
 		return nil, fmt.Errorf("apps path is not a directory")
 	}
-	canonicalAppsRoot, err := filepath.EvalSymlinks(appsRoot)
-	if err != nil {
-		return nil, fmt.Errorf("failed to canonicalize apps directory: %w", err)
-	}
-	appsRel, err := filepath.Rel(canonicalTarget, canonicalAppsRoot)
-	if err != nil || appsRel != devStudioAppsDirectory {
-		return nil, fmt.Errorf("apps directory path escapes instance root")
-	}
 
-	entries, err := os.ReadDir(canonicalAppsRoot)
+	entries, err := os.ReadDir(appsRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read instance root directory: %w", err)
 	}
 
 	var appDirs []string
 	for _, entry := range entries {
-		entryPath := filepath.Join(canonicalAppsRoot, entry.Name())
-		canonicalAppPath, err := filepath.EvalSymlinks(entryPath)
+		appPath, err := devStudioPathInside(appsRoot, entry.Name())
 		if err != nil {
 			continue
 		}
-		appInfo, err := os.Stat(canonicalAppPath)
+		appInfo, err := os.Stat(appPath)
 		if err != nil || !appInfo.IsDir() {
 			continue
 		}
-		appRel, err := filepath.Rel(canonicalAppsRoot, canonicalAppPath)
-		if err != nil || appRel == "." || appRel == ".." || strings.HasPrefix(appRel, ".."+string(filepath.Separator)) || filepath.IsAbs(appRel) {
+		appConfigPath, err := devStudioPathInside(appPath, "app.scl")
+		if err != nil {
 			continue
 		}
-		appConfigPath := filepath.Join(canonicalAppPath, "app.scl")
 		if appConfigInfo, err := os.Stat(appConfigPath); err == nil && !appConfigInfo.IsDir() {
 			appDirs = append(appDirs, entry.Name())
 		}
@@ -407,7 +490,7 @@ func resolveDevStudioWorkspaceAtPath(instanceID, customPath string) (*devStudioW
 
 	return &devStudioWorkspace{
 		instanceID:   instanceID,
-		instanceRoot: canonicalTarget,
+		instanceRoot: instanceRoot,
 		appDirs:      appDirs,
 	}, nil
 }

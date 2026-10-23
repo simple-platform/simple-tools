@@ -1325,7 +1325,10 @@ func TestDevStudioCodexEnvironmentUsesOnlyCurrentDevStudioVariables(t *testing.T
 	t.Setenv("SIMPLE_CLI_HOME", "/read-only/cli-home")
 	t.Setenv("SIMPLE_LOCAL_API_KEY", "old-key")
 	t.Setenv("SIMPLE_INSTANCE_ID", "old-instance")
-	environment := devStudioCodexEnvironment("/workspace/simple-devstudio/inst_current", "inst_current", "current-key")
+	environment, err := devStudioCodexEnvironment("/workspace/simple-devstudio/inst_current", "inst_current", "current-key")
+	if err != nil {
+		t.Fatalf("devStudioCodexEnvironment: %v", err)
+	}
 	var home, cliHome, localAPIKey, instanceID []string
 	for _, item := range environment {
 		if strings.HasPrefix(item, "HOME=") {
@@ -1361,7 +1364,11 @@ func TestDevStudioCodexEnvironmentIncludesCurrentCLIExecutableDirectory(t *testi
 		t.Fatalf("resolve current executable: %v", err)
 	}
 	wantPrefix := "PATH=" + filepath.Dir(executable)
-	for _, item := range devStudioCodexEnvironment("/workspace/simple-devstudio/acme", "acme", "current-key") {
+	environment, err := devStudioCodexEnvironment("/workspace/simple-devstudio/acme", "acme", "current-key")
+	if err != nil {
+		t.Fatalf("devStudioCodexEnvironment: %v", err)
+	}
+	for _, item := range environment {
 		if strings.HasPrefix(item, wantPrefix) {
 			return
 		}
