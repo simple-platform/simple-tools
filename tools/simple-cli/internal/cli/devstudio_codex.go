@@ -147,10 +147,43 @@ func (execDevStudioCodexStarter) Start(config devStudioCodexStartConfig) (devStu
 	return process, nil
 }
 
+// devStudioCodexEnvironment is the environment Codex and the agent's commands
+// run with. Codex's sandbox lets those commands write only inside the
+// instance workspace, so every place a tool writes by default under the home
+// folder is pointed under <instanceRoot>/.simple instead.
 func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) []string {
-	environment := make([]string, 0, len(os.Environ())+5)
+	simpleDir := filepath.Join(workspaceRoot, ".simple")
+	writable := []struct{ name, dir string }{
+		{"XDG_DATA_HOME", filepath.Join(simpleDir, "data")},
+		{"TMPDIR", filepath.Join(simpleDir, "tmp")},
+		// npm and npx; by default ~/.npm.
+		{"npm_config_cache", filepath.Join(simpleDir, "cache", "npm")},
+		// pnpm's package store; by default under PNPM_HOME or ~/Library/pnpm.
+		{"npm_config_store_dir", filepath.Join(simpleDir, "cache", "pnpm-store")},
+		// Other tools' caches, pnpm's own among them.
+		{"XDG_CACHE_HOME", filepath.Join(simpleDir, "cache")},
+		// Cargo's registry and git checkouts for Rust actions; by default ~/.cargo.
+		{"CARGO_HOME", filepath.Join(simpleDir, "cargo")},
+	}
+	// Names are compared in upper case, because npm reads its settings from
+	// the environment in either case.
+	replaced := map[string]bool{
+		"SIMPLE_CLI_HOME":      true,
+		"SIMPLE_LOCAL_API_KEY": true,
+		"SIMPLE_INSTANCE_ID":   true,
+		// Node then reads the system's certificates from the keychain, which
+		// the sandbox denies, and node, npm and pnpm crash. A CA file named in
+		// NODE_EXTRA_CA_CERTS still applies.
+		"NODE_USE_SYSTEM_CA": true,
+	}
+	for _, variable := range writable {
+		replaced[strings.ToUpper(variable.name)] = true
+	}
+
+	environment := make([]string, 0, len(os.Environ())+len(writable)+3)
 	for _, item := range os.Environ() {
-		if strings.HasPrefix(item, "SIMPLE_CLI_HOME=") || strings.HasPrefix(item, "SIMPLE_LOCAL_API_KEY=") || strings.HasPrefix(item, "SIMPLE_INSTANCE_ID=") || strings.HasPrefix(item, "XDG_DATA_HOME=") || strings.HasPrefix(item, "TMPDIR=") {
+		name, _, _ := strings.Cut(item, "=")
+		if replaced[strings.ToUpper(name)] {
 			continue
 		}
 		environment = append(environment, item)
@@ -158,18 +191,16 @@ func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) []st
 	if executable, err := os.Executable(); err == nil {
 		environment = prependDevStudioExecutableDirectory(environment, filepath.Dir(executable))
 	}
-	dataDir := filepath.Join(workspaceRoot, ".simple", "data")
-	tmpDir := filepath.Join(workspaceRoot, ".simple", "tmp")
-	_ = os.MkdirAll(dataDir, 0755)
-	_ = os.MkdirAll(tmpDir, 0755)
-
-	return append(environment,
+	environment = append(environment,
 		"SIMPLE_CLI_HOME="+workspaceRoot,
 		"SIMPLE_LOCAL_API_KEY="+deployKey,
 		"SIMPLE_INSTANCE_ID="+instanceID,
-		"XDG_DATA_HOME="+dataDir,
-		"TMPDIR="+tmpDir,
 	)
+	for _, variable := range writable {
+		_ = os.MkdirAll(variable.dir, fsx.DirPerm)
+		environment = append(environment, variable.name+"="+variable.dir)
+	}
+	return environment
 }
 
 func prependDevStudioExecutableDirectory(environment []string, directory string) []string {

@@ -183,7 +183,7 @@ func ensureNPMPackages() error {
 	// Output is captured rather than inherited: builds run under a progress UI
 	// that repaints in place, and a concurrent write from a child process
 	// corrupts the frame. The output is surfaced only if the install fails.
-	cmd := exec.Command("pnpm", append([]string{"add", "-w", "-D"}, generatorPackages...)...)
+	cmd := exec.Command("pnpm", generatorInstallArgs(workspaceRoot)...)
 	cmd.Dir = workspaceRoot
 
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -191,6 +191,18 @@ func ensureNPMPackages() error {
 	}
 
 	return nil
+}
+
+// generatorInstallArgs are pnpm's arguments for installing the generator's
+// packages at root. pnpm accepts --workspace-root (-w) only at the root of a
+// pnpm workspace and refuses it anywhere else, such as in a single project or
+// a Simple workspace with no manifest yet, where the add creates one.
+func generatorInstallArgs(root string) []string {
+	args := []string{"add", "-D"}
+	if _, err := os.Stat(filepath.Join(root, "pnpm-workspace.yaml")); err == nil {
+		args = []string{"add", "-w", "-D"}
+	}
+	return append(args, generatorPackages...)
 }
 
 // generatorPackagesResolvable reports whether every package the generator
@@ -261,6 +273,18 @@ func findWorkspaceRoot() (string, error) {
 			if standalone == "" {
 				standalone = dir
 			}
+		}
+
+		// A Simple workspace ends at the folder holding its simple.scl, and
+		// with no workspace below, that folder is the root. Above it lie
+		// other projects and the home folder, whose package.json belongs to
+		// something else; installing there changed the person's own manifest,
+		// and DevStudio's sandbox cannot write there at all.
+		if _, err := os.Stat(filepath.Join(dir, "simple.scl")); err == nil {
+			if standalone == "" {
+				standalone = dir
+			}
+			break
 		}
 
 		parent := filepath.Dir(dir)

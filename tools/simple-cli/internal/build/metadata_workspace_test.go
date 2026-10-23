@@ -3,6 +3,7 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -235,5 +236,58 @@ func TestNodeCanResolveDoesNotLookInsideNodeModules(t *testing.T) {
 
 	if !nodeCanResolve(filepath.Join(beside, "node_modules"), "ts-morph") {
 		t.Error("a package installed in the node_modules being walked out of was not found")
+	}
+}
+
+// pnpm refuses --workspace-root (-w) anywhere but the root of a pnpm
+// workspace, such as in a single project or a Simple workspace with no
+// manifest yet, where the add creates one.
+func TestGeneratorInstallUsesWorkspaceRootOnlyInAPnpmWorkspace(t *testing.T) {
+	pnpmWorkspace := t.TempDir()
+	writeFile(t, filepath.Join(pnpmWorkspace, "pnpm-workspace.yaml"), "packages: []\n")
+	simpleWorkspace := t.TempDir()
+	writeFile(t, filepath.Join(simpleWorkspace, "simple.scl"), "tenant acme\n")
+
+	tests := []struct {
+		name string
+		root string
+		want string
+	}{
+		{"a pnpm workspace", pnpmWorkspace, "add -w -D ts-json-schema-generator ts-morph"},
+		{"a Simple workspace with no manifest", simpleWorkspace, "add -D ts-json-schema-generator ts-morph"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := strings.Join(generatorInstallArgs(test.root), " "); got != test.want {
+				t.Fatalf("generatorInstallArgs = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// A Simple workspace ends at the folder holding its simple.scl. Above it lie
+// other projects and the home folder, whose package.json belongs to something
+// else; installing the generator's packages there changed the person's own
+// manifest, and DevStudio's sandbox cannot write there at all.
+func TestWorkspaceRootStopsAtTheSimpleWorkspace(t *testing.T) {
+	for name, manifest := range map[string]string{
+		"a plain manifest above":           `{"name":"home"}`,
+		"a manifest declaring a workspace": `{"name":"home","workspaces":["*"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			instance := filepath.Join(home, "workspace", "acme")
+			action := filepath.Join(instance, "apps", "com.acme.test", "actions", "hello")
+
+			writeFile(t, filepath.Join(home, "package.json"), manifest)
+			writeFile(t, filepath.Join(instance, "simple.scl"), "tenant acme\n")
+			writeFile(t, filepath.Join(action, "package.json"), `{"name":"hello"}`)
+
+			t.Chdir(instance)
+			requireWorkspaceRoot(t, instance, "the Simple workspace, not the manifest above it")
+
+			t.Chdir(action)
+			requireWorkspaceRoot(t, action, "the action itself, not the manifest above the workspace")
+		})
 	}
 }

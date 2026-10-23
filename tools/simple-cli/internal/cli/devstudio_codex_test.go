@@ -1320,6 +1320,48 @@ func TestDevStudioSessionUpdatesExistingDevStudioEnvironment(t *testing.T) {
 	}
 }
 
+// Codex's sandbox lets the agent's commands write only inside the instance
+// workspace, so every tool cache they use must be there, and Node must not be
+// told to read the system's certificates, which the sandbox denies.
+func TestDevStudioCodexEnvironmentKeepsToolCachesInTheWorkspace(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("NODE_USE_SYSTEM_CA", "1")
+	t.Setenv("NODE_EXTRA_CA_CERTS", "/etc/company-ca.pem")
+	t.Setenv("PNPM_HOME", "/Users/someone/Library/pnpm")
+	t.Setenv("NPM_CONFIG_CACHE", "/Users/someone/.npm")
+	t.Setenv("npm_config_store_dir", "/Users/someone/Library/pnpm/store")
+	t.Setenv("XDG_CACHE_HOME", "/Users/someone/.cache")
+	t.Setenv("CARGO_HOME", "/Users/someone/.cargo")
+	environment := devStudioCodexEnvironment(root, "inst_current", "current-key")
+
+	values := map[string][]string{}
+	for _, item := range environment {
+		name, value, _ := strings.Cut(item, "=")
+		values[strings.ToUpper(name)] = append(values[strings.ToUpper(name)], value)
+	}
+	want := map[string]string{
+		"NPM_CONFIG_CACHE":     filepath.Join(root, ".simple", "cache", "npm"),
+		"NPM_CONFIG_STORE_DIR": filepath.Join(root, ".simple", "cache", "pnpm-store"),
+		"XDG_CACHE_HOME":       filepath.Join(root, ".simple", "cache"),
+		"CARGO_HOME":           filepath.Join(root, ".simple", "cargo"),
+		"NODE_EXTRA_CA_CERTS":  "/etc/company-ca.pem",
+		"PNPM_HOME":            "/Users/someone/Library/pnpm",
+	}
+	for name, value := range want {
+		if !sameStrings(values[name], []string{value}) {
+			t.Fatalf("%s = %v, want exactly %q", name, values[name], value)
+		}
+	}
+	if got := values["NODE_USE_SYSTEM_CA"]; len(got) != 0 {
+		t.Fatalf("NODE_USE_SYSTEM_CA = %v, want it left out", got)
+	}
+	for _, name := range []string{"NPM_CONFIG_CACHE", "NPM_CONFIG_STORE_DIR", "CARGO_HOME"} {
+		if info, err := os.Stat(want[name]); err != nil || !info.IsDir() {
+			t.Fatalf("%s folder %q was not created: %v", name, want[name], err)
+		}
+	}
+}
+
 func TestDevStudioCodexEnvironmentUsesOnlyCurrentDevStudioVariables(t *testing.T) {
 	t.Setenv("HOME", "/codex/home")
 	t.Setenv("SIMPLE_CLI_HOME", "/read-only/cli-home")
