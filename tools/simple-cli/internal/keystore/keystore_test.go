@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestGenerateAndSave(t *testing.T) {
@@ -111,5 +112,57 @@ func TestEnvIsolation(t *testing.T) {
 	prodDir := filepath.Join(Dir(), "acme", "prod", "iso999")
 	if devDir == prodDir {
 		t.Error("dev and prod key directories are the same — env isolation is broken")
+	}
+}
+
+func TestIsEnrolledUnderLooksInTheGivenHome(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("SIMPLE_CLI_HOME", workspace)
+	if _, err := GenerateAndSave("acme", "devstudio", "000002"); err != nil {
+		t.Fatalf("GenerateAndSave() error = %v", err)
+	}
+	if err := MarkEnrolled("acme", "devstudio", "000002"); err != nil {
+		t.Fatalf("MarkEnrolled() error = %v", err)
+	}
+
+	t.Setenv("SIMPLE_CLI_HOME", t.TempDir())
+	if IsEnrolled("acme", "devstudio", "000002") {
+		t.Error("IsEnrolled() = true in another home, want false")
+	}
+	if !IsEnrolledUnder(workspace, "acme", "devstudio", "000002") {
+		t.Error("IsEnrolledUnder(workspace) = false, want true")
+	}
+	if IsEnrolledUnder(workspace, "acme", "devstudio", "000003") {
+		t.Error("IsEnrolledUnder(workspace) = true for another key, want false")
+	}
+}
+
+func TestSetAsideRenamesAndNeverDeletes(t *testing.T) {
+	cliHome := t.TempDir()
+	t.Setenv("SIMPLE_CLI_HOME", cliHome)
+	if _, err := GenerateAndSave("acme", "devstudio", "000002"); err != nil {
+		t.Fatalf("GenerateAndSave() error = %v", err)
+	}
+	if err := MarkEnrolled("acme", "devstudio", "000002"); err != nil {
+		t.Fatalf("MarkEnrolled() error = %v", err)
+	}
+
+	at := time.Date(2026, 10, 23, 6, 15, 4, 0, time.FixedZone("PDT", -7*3600))
+	movedTo, err := SetAside("acme", "devstudio", "000002", at)
+	if err != nil {
+		t.Fatalf("SetAside() error = %v", err)
+	}
+	want := filepath.Join(cliHome, ".simple", "keys", "acme", "devstudio", "000002.refused-20261023T131504Z")
+	if movedTo != want {
+		t.Fatalf("SetAside() = %q, want %q", movedTo, want)
+	}
+	if _, err := os.Stat(filepath.Join(movedTo, "private.pem")); err != nil {
+		t.Fatalf("private.pem not kept: %v", err)
+	}
+	if IsEnrolled("acme", "devstudio", "000002") {
+		t.Error("IsEnrolled() = true after SetAside, want false")
+	}
+	if _, err := SetAside("acme", "devstudio", "000002", at); err == nil {
+		t.Error("SetAside() of a missing folder = nil error, want one")
 	}
 }

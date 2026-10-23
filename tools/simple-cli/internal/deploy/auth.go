@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -59,6 +60,35 @@ type Authenticator struct {
 }
 
 // NewAuthenticator creates an Authenticator with default dependencies.
+// refusedKeyClockTolerance is how far this computer's clock may differ from
+// the instance's before a refused key is blamed on the clock instead. The
+// identity service refuses a clock off by more than 60 seconds with the same
+// answer as a bad key.
+const refusedKeyClockTolerance = 30 * time.Second
+
+// loginRefusedError is /auth/login refusing a key with 401.
+type loginRefusedError struct {
+	body []byte
+	// date is the reply's Date header: the instance's clock.
+	date string
+}
+
+func (e *loginRefusedError) Error() string {
+	return fmt.Sprintf("authentication failed (%d): %s", http.StatusUnauthorized, e.body)
+}
+
+// keyRefusedError explains, in words a person can act on, a set-up key the
+// instance refused. movedTo is where the key's folder went, "" if it stayed.
+type keyRefusedError struct {
+	message string
+	movedTo string
+	cause   error
+}
+
+func (e *keyRefusedError) Error() string { return e.message }
+
+func (e *keyRefusedError) Unwrap() error { return e.cause }
+
 func NewAuthenticator() *Authenticator {
 	return &Authenticator{
 		Client:          &http.Client{Timeout: 30 * time.Second},
@@ -107,6 +137,14 @@ func (a *Authenticator) GetJWT(ctx context.Context, endpoint, apiKey, tenantEnvK
 	}
 	token, err := a.enrollAndAuthenticate(ctx, endpoint, apiKey, tenant, env)
 	if err != nil {
+		var refused *keyRefusedError
+		if errors.As(err, &refused) && refused.movedTo != "" {
+			// The cached session belonged to the key just moved aside.
+			a.cache.mu.Lock()
+			delete(a.cache.Tokens, tenantEnvKey)
+			a.cache.mu.Unlock()
+			_ = a.Store.Save(a.cache)
+		}
 		return "", err
 	}
 
@@ -151,7 +189,10 @@ func (a *Authenticator) enrollAndAuthenticate(ctx context.Context, endpoint, raw
 	}
 
 	// Enrollment is idempotent — skip if .enrolled sentinel exists for this env.
-	if !keystore.IsEnrolled(tenant, env, idSuffix) {
+	// A pair enrolled before this run and then refused may be stale; one
+	// enrolled just now is not.
+	wasEnrolled := keystore.IsEnrolled(tenant, env, idSuffix)
+	if !wasEnrolled {
 		var enrollErr error
 		// 2-attempt retry for network resilience
 		for i := 0; i < 2; i++ {
@@ -180,7 +221,51 @@ func (a *Authenticator) enrollAndAuthenticate(ctx context.Context, endpoint, raw
 	}
 
 	// Server expects: "si_<id_suffix>.<compact_signed_jwt>"
-	return a.loginWithPoP(ctx, endpoint, "si_"+idSuffix+"."+popJWT)
+	token, err := a.loginWithPoP(ctx, endpoint, "si_"+idSuffix+"."+popJWT)
+	var refused *loginRefusedError
+	if err != nil && wasEnrolled && errors.As(err, &refused) {
+		return "", a.handleRefusedKey(tenant, env, idSuffix, refused)
+	}
+	return token, err
+}
+
+// handleRefusedKey runs when /auth/login refuses a key pair that was set up
+// before. After a tenant reset or a key revoked on the instance, the pair is
+// stale and every deploy would fail until its folder is gone, so the folder
+// is moved aside, never deleted. Because the instance refuses a wrong clock
+// the same way, it is moved only when the reply's time shows this computer's
+// clock is right.
+func (a *Authenticator) handleRefusedKey(tenant, env, idSuffix string, refused *loginRefusedError) error {
+	keyName := "KEY" + idSuffix
+	instanceTime, err := http.ParseTime(refused.date)
+	if err != nil {
+		return &keyRefusedError{
+			message: fmt.Sprintf("The instance refused this workspace's deploy key %s, and its reply had no time to check this computer's clock against, so the key files were left in place.", keyName),
+			cause:   refused,
+		}
+	}
+	skew := a.TimeNow().Sub(instanceTime)
+	if skew < 0 {
+		skew = -skew
+	}
+	if skew > refusedKeyClockTolerance {
+		return &keyRefusedError{
+			message: fmt.Sprintf("The instance refused this workspace's deploy key %s, but this computer's clock is off by %d seconds, and the instance refuses a clock that far off the same way as a bad key. Correct the clock and try again; the key files were left in place.", keyName, int(skew.Round(time.Second).Seconds())),
+			cause:   refused,
+		}
+	}
+	movedTo, err := keystore.SetAside(tenant, env, idSuffix, a.TimeNow())
+	if err != nil {
+		return &keyRefusedError{
+			message: fmt.Sprintf("The instance no longer accepts this workspace's deploy key %s, and its key files could not be moved aside: %v", keyName, err),
+			cause:   refused,
+		}
+	}
+	return &keyRefusedError{
+		message: fmt.Sprintf("The instance no longer accepts this workspace's deploy key %s, so its key files were moved to %s. Reconnect DevStudio to set up a new key, or put a new key in simple.scl.", keyName, movedTo),
+		movedTo: movedTo,
+		cause:   refused,
+	}
 }
 
 // enrollKey calls POST /auth/api-key/enroll to register this machine's public key.
@@ -243,6 +328,9 @@ func (a *Authenticator) loginWithPoP(ctx context.Context, endpoint, authString s
 		return "", fmt.Errorf("failed to read login response body: %w", err)
 	}
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		return "", &loginRefusedError{body: respBody, date: resp.Header.Get("Date")}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("authentication failed (%d): %s", resp.StatusCode, respBody)
 	}

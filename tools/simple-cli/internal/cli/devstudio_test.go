@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -32,6 +34,8 @@ func setupTestProductionRoot(t *testing.T, instanceIDs ...string) string {
 	oldRoot := devStudioProductionRoot
 	devStudioProductionRoot = dir
 	t.Cleanup(func() { devStudioProductionRoot = oldRoot })
+	// The bridge keeps conversation records under the Simple CLI home.
+	t.Setenv("SIMPLE_CLI_HOME", filepath.Join(dir, "cli-home"))
 
 	for _, id := range instanceIDs {
 		instanceRoot := filepath.Join(dir, id)
@@ -73,7 +77,7 @@ func TestDevStudioServeCommandIsRegistered(t *testing.T) {
 }
 
 func TestDevStudioBridgeStartsOnLoopback(t *testing.T) {
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -277,7 +281,7 @@ func TestDevStudioInjectableResolver(t *testing.T) {
 			}, nil
 		}
 
-		bridge := newDevStudioBridge(customResolver)
+		bridge := newTestDevStudioBridge(t, customResolver)
 		server := httptest.NewServer(bridge.handler())
 		defer server.Close()
 
@@ -301,7 +305,7 @@ func TestDevStudioInjectableResolver(t *testing.T) {
 func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 	t.Run("returns instance_path_required when instance not found in candidate paths", func(t *testing.T) {
 		setupTestProductionRoot(t) // Empty production root
-		bridge := newDevStudioBridge()
+		bridge := newTestDevStudioBridge(t)
 		server := httptest.NewServer(bridge.handler())
 		t.Cleanup(server.Close)
 
@@ -323,7 +327,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 		baseDir := t.TempDir()
 		customInstancePath := filepath.Join(baseDir, "my_custom_instance")
 
-		bridge := newDevStudioBridge()
+		bridge := newTestDevStudioBridge(t)
 		server := httptest.NewServer(bridge.handler())
 		t.Cleanup(server.Close)
 
@@ -333,7 +337,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 
 		connectMsg := map[string]any{
 			"type":            "session.connect",
-			"protocolVersion": 1,
+			"protocolVersion": devStudioProtocolVersion,
 			"instanceId":      "inst_custom_path",
 			"instanceHost":    "inst_custom_path.simple.lcl",
 			"deployKey":       "test_deploy_key_secret",
@@ -372,8 +376,11 @@ func TestDevStudioBridgeHandshake(t *testing.T) {
 	if message["type"] != "session.ready" {
 		t.Fatalf("type = %q, want session.ready", message["type"])
 	}
-	if message["protocolVersion"] != float64(1) {
-		t.Fatalf("protocolVersion = %v, want 1", message["protocolVersion"])
+	if message["protocolVersion"] != float64(2) {
+		t.Fatalf("protocolVersion = %v, want 2", message["protocolVersion"])
+	}
+	if message["threadId"] != "thread_fake" || message["resumed"] != false {
+		t.Fatalf("session.ready conversation = %v, %v, want thread_fake, not resumed", message["threadId"], message["resumed"])
 	}
 	if message["instanceId"] != "inst_acme_dev" {
 		t.Fatalf("instanceId = %q, want inst_acme_dev", message["instanceId"])
@@ -390,24 +397,125 @@ func TestDevStudioBridgeHandshake(t *testing.T) {
 	}
 }
 
-func TestDevStudioBridgeRequiresDeployKey(t *testing.T) {
+// A deploy key's secret is a one-time enrollment code: once the workspace's
+// key pair is set up, the CLI signs in with that pair, and writing another
+// key into simple.scl would make the next deploy use that key up.
+func TestDevStudioBridgeKeepsSetUpWorkspaceKey(t *testing.T) {
+	workspaceKey := "si_000002" + strings.Repeat("a", 64)
+	browserKey := "si_000003" + strings.Repeat("b", 64)
+	config := "tenant acme\n\nenv devstudio {\n  endpoint \"inst_acme_dev.simple.lcl\"\n  api_key \"" + workspaceKey + "\"\n}\n"
+	tests := []struct {
+		name string
+		// pairFor is the id whose key pair is set up in the workspace, or "".
+		pairFor   string
+		key       any
+		omitKey   bool
+		wantWrite bool
+	}{
+		{"set up, other key sent", "000002", browserKey, false, false},
+		{"set up, no key", "000002", nil, true, false},
+		{"not set up, key sent", "", browserKey, false, true},
+		{"not set up, no key", "", nil, true, false},
+		{"not set up, empty key", "", "", false, false},
+		{"only another key set up, key sent", "000009", browserKey, false, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previousLog := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousLog) })
+
+			baseDir := setupTestProductionRoot(t, "inst_acme_dev")
+			instanceRoot := filepath.Join(baseDir, "inst_acme_dev")
+			configPath := filepath.Join(instanceRoot, "simple.scl")
+			if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+				t.Fatalf("write simple.scl: %v", err)
+			}
+			if test.pairFor != "" {
+				pairDir := filepath.Join(instanceRoot, ".simple", "keys", "acme", "devstudio", test.pairFor)
+				if err := os.MkdirAll(pairDir, 0755); err != nil {
+					t.Fatalf("make key pair folder: %v", err)
+				}
+				for _, name := range []string{"private.pem", ".enrolled"} {
+					if err := os.WriteFile(filepath.Join(pairDir, name), []byte("test"), 0600); err != nil {
+						t.Fatalf("write %s: %v", name, err)
+					}
+				}
+			}
+			starter := newFakeDevStudioCodexStarter(nil)
+			server := startDevStudioBridgeServer(t, newDevStudioBridgeWithCodexStarter(starter))
+			connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+			defer func() { _ = connection.Close() }()
+
+			request := sessionConnectMessage("inst_acme_dev")
+			delete(request, "deployKey")
+			if !test.omitKey {
+				request["deployKey"] = test.key
+			}
+			sendDevStudioMessage(t, connection, request)
+			if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
+				t.Fatalf("connect = %v, want session.ready", message)
+			}
+
+			contents, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("read simple.scl: %v", err)
+			}
+			starter.mu.Lock()
+			codexKey := starter.starts[0].DeployKey
+			starter.mu.Unlock()
+			if test.wantWrite {
+				if !strings.Contains(string(contents), `api_key "`+browserKey+`"`) || codexKey != browserKey {
+					t.Fatalf("first-time setup did not take the sent key: Codex key %q, simple.scl:\n%s", codexKey, contents)
+				}
+			} else {
+				if string(contents) != config {
+					t.Fatalf("simple.scl changed:\n%s", contents)
+				}
+				if codexKey != "" {
+					t.Fatalf("Codex was given the key %q, want none", codexKey)
+				}
+			}
+			if strings.Contains(logs.String(), browserKey) {
+				t.Fatalf("the sent key was logged:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+func TestDevStudioSCLTenantAndKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		text       string
+		wantTenant string
+		wantKey    string
+	}{
+		{"quoted key", "tenant acme\nenv devstudio {\n  api_key \"si_x\"\n}\n", "acme", "si_x"},
+		{"other env ignored", "tenant acme\nenv dev {\n  api_key \"si_dev\"\n}\nenv devstudio {\n  api_key 'si_studio'\n}\n", "acme", "si_studio"},
+		{"variable is not a literal", "tenant \"acme\"\nenv devstudio {\n  api_key $SIMPLE_KEY\n}\n", "acme", ""},
+		{"no devstudio block", "tenant acme\nenv dev {\n  api_key \"si_dev\"\n}\n", "acme", ""},
+		{"tenant inside a block ignored", "env devstudio {\n  tenant other\n  api_key si_y\n}\n", "", "si_y"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tenant, key := devStudioSCLTenantAndKey(test.text)
+			if tenant != test.wantTenant || key != test.wantKey {
+				t.Fatalf("devStudioSCLTenantAndKey = %q, %q, want %q, %q", tenant, key, test.wantTenant, test.wantKey)
+			}
+		})
+	}
+}
+
+func TestDevStudioBridgeRejectsBlankDeployKey(t *testing.T) {
 	_, wsURL := startDevStudioBridge(t)
 	connection := dialDevStudio(t, wsURL)
 	defer func() { _ = connection.Close() }()
 
-	// Missing deployKey
-	sendDevStudioMessage(t, connection, map[string]any{
-		"type":            "session.connect",
-		"protocolVersion": 1,
-		"instanceId":      "inst_acme_dev",
-		"instanceHost":    "inst_acme_dev.simple.lcl",
-	})
-
-	message := readDevStudioMessage(t, connection)
-	if message["type"] != "error" {
-		t.Fatalf("type = %q, want error", message["type"])
-	}
-	if message["code"] != "invalid_deploy_key" {
+	request := sessionConnectMessage("inst_acme_dev")
+	request["deployKey"] = "   "
+	sendDevStudioMessage(t, connection, request)
+	if message := readDevStudioMessage(t, connection); message["code"] != "invalid_deploy_key" {
 		t.Fatalf("code = %q, want invalid_deploy_key", message["code"])
 	}
 }
@@ -419,7 +527,7 @@ func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
 	keySecret := "secret_deploy_key_999"
 	sendDevStudioMessage(t, connection, map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      "inst_acme_dev",
 		"instanceHost":    "inst_acme_dev.simple.lcl",
 		"deployKey":       keySecret,
@@ -430,14 +538,17 @@ func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
 		t.Fatalf("type = %q, want session.ready", message["type"])
 	}
 
-	// Check that deployKey is present in internal session state
+	// Check that deployKey is present in internal session state. The key is
+	// guarded by the session's own lock.
 	bridge.mu.Lock()
 	sess := bridge.session
-	var storedKey string
-	if sess != nil {
-		storedKey = sess.deployKey
-	}
 	bridge.mu.Unlock()
+	if sess == nil {
+		t.Fatal("no session after session.ready")
+	}
+	sess.stateMu.Lock()
+	storedKey := sess.deployKey
+	sess.stateMu.Unlock()
 
 	if storedKey != keySecret {
 		t.Fatalf("in-memory deployKey = %q, want %q", storedKey, keySecret)
@@ -445,14 +556,21 @@ func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
 
 	// Close connection and verify key cleared
 	_ = connection.Close()
-	time.Sleep(50 * time.Millisecond)
+	waitForDevStudioSessionEnd(t, sess)
+	sess.stateMu.Lock()
+	keyAfter := sess.deployKey
+	sess.stateMu.Unlock()
+	if keyAfter != "" {
+		t.Fatalf("deployKey after disconnect = %q, want empty", keyAfter)
+	}
+}
 
-	bridge.mu.Lock()
-	sessAfter := bridge.session
-	bridge.mu.Unlock()
-
-	if sessAfter != nil && sessAfter.deployKey != "" {
-		t.Fatalf("deployKey after disconnect = %q, want empty", sessAfter.deployKey)
+func waitForDevStudioSessionEnd(t *testing.T, session *devStudioSession) {
+	t.Helper()
+	select {
+	case <-session.ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the session did not end after its browser disconnected")
 	}
 }
 
@@ -466,17 +584,17 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "invalid protocol version",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 2,
+				"protocolVersion": 1,
 				"instanceId":      "inst_acme_dev",
 				"deployKey":       "test_key",
 			},
-			code: "unsupported_protocol_version",
+			code: "protocol_version_unsupported",
 		},
 		{
 			name: "invalid instance id",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "inst/acme",
 				"deployKey":       "test_key",
 			},
@@ -486,7 +604,7 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "dot dot instance id",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "..",
 				"deployKey":       "test_key",
 			},
@@ -496,7 +614,7 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "instance host does not match instance name",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "acme",
 				"instanceHost":    "other.simple.lcl",
 				"deployKey":       "test_key",
@@ -507,7 +625,7 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "unknown message type",
 			message: map[string]any{
 				"type":            "session.other",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "inst_acme_dev",
 				"deployKey":       "test_key",
 			},
@@ -544,7 +662,7 @@ func TestDevStudioBridgeRejectsMalformedMessages(t *testing.T) {
 		},
 		{
 			name:    "unexpected app context",
-			payload: `{"type":"session.connect","protocolVersion":1,"instanceId":"inst_acme_dev","deployKey":"k","appId":"com.example.app"}`,
+			payload: `{"type":"session.connect","protocolVersion":2,"instanceId":"inst_acme_dev","deployKey":"k","appId":"com.example.app"}`,
 		},
 	}
 
@@ -565,6 +683,9 @@ func TestDevStudioBridgeRejectsMalformedMessages(t *testing.T) {
 }
 
 func TestDevStudioBridgeRejectsSecondActiveSession(t *testing.T) {
+	previousWait := devStudioSessionHandoverWait
+	devStudioSessionHandoverWait = 100 * time.Millisecond
+	t.Cleanup(func() { devStudioSessionHandoverWait = previousWait })
 	_, wsURL := startDevStudioBridge(t)
 	first := dialDevStudio(t, wsURL)
 	defer func() { _ = first.Close() }()
@@ -600,8 +721,45 @@ func TestDevStudioBridgeClearsSessionWhenBrowserDisconnects(t *testing.T) {
 	}
 }
 
+// A page that reloads or reconnects can arrive before the bridge has ended
+// its old session; it waits for that session instead of being refused.
+func TestDevStudioBridgeHandsOverToReconnectWaitingForOldSession(t *testing.T) {
+	_, wsURL := startDevStudioBridge(t)
+	first := dialDevStudio(t, wsURL)
+	sendDevStudioMessage(t, first, sessionConnectMessage("inst_acme_dev"))
+	if message := readDevStudioMessage(t, first); message["type"] != "session.ready" {
+		t.Fatalf("first type = %q, want session.ready", message["type"])
+	}
+
+	second := dialDevStudio(t, wsURL)
+	defer func() { _ = second.Close() }()
+	request := sessionConnectMessage("inst_acme_dev")
+	request["deployKey"] = "second_deploy_key"
+	sendDevStudioMessage(t, second, request)
+	// The bridge writes the new key just before it asks for the session, so
+	// once the key is there the second connection is waiting for the first.
+	configPath := filepath.Join(devStudioProductionRoot, "inst_acme_dev", "simple.scl")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		contents, _ := os.ReadFile(configPath)
+		if strings.Contains(string(contents), "second_deploy_key") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second connection never reached the session")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first connection: %v", err)
+	}
+	if message := readDevStudioMessage(t, second); message["type"] != "session.ready" {
+		t.Fatalf("second = %v, want session.ready", message)
+	}
+}
+
 func TestDevStudioBridgeDoesNotExposeOtherEndpoints(t *testing.T) {
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	server := httptest.NewServer(bridge.handler())
 	defer server.Close()
 
@@ -644,7 +802,7 @@ func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
 	defer cancel()
 	var stdoutBuffer bytes.Buffer
 
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	done := make(chan error, 1)
 	go func() {
 		done <- serveDevStudioWithBridge(ctx, listener, &stdoutBuffer, bridge)
@@ -655,7 +813,7 @@ func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
 
 	sendDevStudioMessage(t, conn, map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      "inst_acme_dev",
 		"instanceHost":    "inst_acme_dev.simple.lcl",
 		"deployKey":       knownSecretKey,
@@ -686,7 +844,7 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var output bytes.Buffer
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 
 	done := make(chan error, 1)
 	go func() {
@@ -700,7 +858,7 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 	secretKey := "shutdown_secret_key_888"
 	sendDevStudioMessage(t, conn, map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      "inst_acme_dev",
 		"instanceHost":    "inst_acme_dev.simple.lcl",
 		"deployKey":       secretKey,
@@ -712,11 +870,17 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 	}
 
 	bridge.mu.Lock()
-	if bridge.session == nil || bridge.session.deployKey != secretKey {
-		bridge.mu.Unlock()
-		t.Fatalf("session deployKey = %v, want %q", bridge.session, secretKey)
-	}
+	activeSession := bridge.session
 	bridge.mu.Unlock()
+	if activeSession == nil {
+		t.Fatal("no session after session.ready")
+	}
+	activeSession.stateMu.Lock()
+	activeKey := activeSession.deployKey
+	activeSession.stateMu.Unlock()
+	if activeKey != secretKey {
+		t.Fatalf("session deployKey = %q, want %q", activeKey, secretKey)
+	}
 
 	cancel()
 	if err := <-done; err != nil {
@@ -732,10 +896,19 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 	}
 }
 
+// newTestDevStudioBridge is a bridge whose sessions start a fake Codex, so
+// no test ever launches the real one, and whose conversation records go to a
+// temporary Simple CLI home, never the real one.
+func newTestDevStudioBridge(t *testing.T, resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
+	t.Helper()
+	t.Setenv("SIMPLE_CLI_HOME", t.TempDir())
+	return newDevStudioBridgeWithCodexStarter(newFakeDevStudioCodexStarter(nil), resolvers...)
+}
+
 func startDevStudioBridge(t *testing.T) (*devStudioBridge, string) {
 	t.Helper()
 	setupTestProductionRoot(t, "inst_acme_dev")
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	server := httptest.NewServer(bridge.handler())
 	t.Cleanup(server.Close)
 
@@ -788,10 +961,69 @@ func readDevStudioMessage(t *testing.T, connection *websocket.Conn) map[string]a
 func sessionConnectMessage(instanceID string) map[string]any {
 	return map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      instanceID,
 		"instanceHost":    instanceID + ".simple.lcl",
 		"deployKey":       "test_deploy_key_secret",
+	}
+}
+
+func TestDevStudioLogValueKeepsOneLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"plain text", "inst_acme", "inst_acme"},
+		{"line feed", "a\nforged line", `a\nforged line`},
+		{"carriage return and line feed", "a\r\nb", `a\r\nb`},
+		{"error", errors.New("stat /tmp/x\ny: not a directory"), `stat /tmp/x\ny: not a directory`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := devStudioLogValue(test.value); got != test.want {
+				t.Fatalf("devStudioLogValue(%q) = %q, want %q", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+// The browser names the instance folder, so a line break in it must not
+// start a new log line.
+func TestDevStudioBridgeLogsBrowserValuesOnOneLine(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	baseDir := t.TempDir()
+	blocker := filepath.Join(baseDir, "a-file")
+	if err := os.WriteFile(blocker, []byte("not a folder"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	server := httptest.NewServer(newTestDevStudioBridge(t).handler())
+	t.Cleanup(server.Close)
+	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+	defer func() { _ = connection.Close() }()
+
+	request := sessionConnectMessage("inst_log")
+	request["instancePath"] = filepath.Join(blocker, "x\n[DevStudio Bridge] forged")
+	sendDevStudioMessage(t, connection, request)
+	if message := readDevStudioMessage(t, connection); message["code"] != "workspace_initialization_failed" {
+		t.Fatalf("connect = %v, want workspace_initialization_failed", message)
+	}
+
+	var failures []string
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, "forged") && !strings.Contains(line, "Workspace initialization failed") && !strings.Contains(line, "Session connect") {
+			t.Fatalf("a browser value started its own log line: %q", line)
+		}
+		if strings.Contains(line, "Workspace initialization failed") {
+			failures = append(failures, line)
+		}
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "not a directory") {
+		t.Fatalf("log lines = %q, want the whole failure on one line", failures)
 	}
 }
 

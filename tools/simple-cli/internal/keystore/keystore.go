@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
+
 	"simple-cli/internal/home"
 )
 
@@ -29,6 +31,11 @@ type Keypair struct {
 // Dir returns ~/.simple/keys — the root directory for all keypairs.
 func Dir() string {
 	homeDir, _ := home.Dir()
+	return keysDir(homeDir)
+}
+
+// keysDir returns the keypair root for the Simple CLI home homeDir.
+func keysDir(homeDir string) string {
 	return filepath.Join(homeDir, ".simple", "keys")
 }
 
@@ -41,7 +48,15 @@ func keyDir(tenant, env, idSuffix string) string {
 // IsEnrolled returns true when both private.pem and the .enrolled sentinel
 // exist for the given tenant, env, and id_suffix.
 func IsEnrolled(tenant, env, idSuffix string) bool {
-	dir := keyDir(tenant, env, idSuffix)
+	homeDir, _ := home.Dir()
+	return IsEnrolledUnder(homeDir, tenant, env, idSuffix)
+}
+
+// IsEnrolledUnder is IsEnrolled for the Simple CLI home homeDir rather than
+// this process's own, such as a DevStudio instance workspace, which is the
+// CLI home of the commands run there.
+func IsEnrolledUnder(homeDir, tenant, env, idSuffix string) bool {
+	dir := filepath.Join(keysDir(homeDir), tenant, env, idSuffix)
 	_, e1 := os.Stat(filepath.Join(dir, "private.pem"))
 	_, e2 := os.Stat(filepath.Join(dir, ".enrolled"))
 	return e1 == nil && e2 == nil
@@ -141,6 +156,19 @@ func GenerateOrLoad(tenant, env, idSuffix string) (*Keypair, error) {
 // POST /auth/api-key/enroll for the given tenant and env.
 func MarkEnrolled(tenant, env, idSuffix string) error {
 	return os.WriteFile(filepath.Join(keyDir(tenant, env, idSuffix), ".enrolled"), []byte{}, 0600)
+}
+
+// SetAside moves the keypair directory for tenant, env and idSuffix to a
+// sibling named <idSuffix>.refused-<UTC time> and returns where it went. It is
+// never deleted, so it can still be looked at; once moved, the pair is no
+// longer found or counted as enrolled.
+func SetAside(tenant, env, idSuffix string, now time.Time) (string, error) {
+	from := keyDir(tenant, env, idSuffix)
+	to := from + ".refused-" + now.UTC().Format("20060102T150405Z")
+	if err := os.Rename(from, to); err != nil {
+		return "", fmt.Errorf("failed to move the key folder aside: %w", err)
+	}
+	return to, nil
 }
 
 // DeleteKey removes the entire env-scoped keypair directory.
