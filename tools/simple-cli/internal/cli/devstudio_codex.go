@@ -270,6 +270,9 @@ type devStudioCodexAdapter struct {
 	instanceID string
 	workspace  *devStudioWorkspace
 	deployKey  string
+	// playbook is the instance's DevStudio playbook, set before Codex starts;
+	// "" when it could not be read.
+	playbook   string
 	send       func(any) error
 	connection *devStudioCodexConnection
 	nextID     int
@@ -689,11 +692,15 @@ func (adapter *devStudioCodexAdapter) startThread() error {
 }
 
 func (adapter *devStudioCodexAdapter) threadParams() map[string]any {
+	instructions := devStudioCodexInstructions(adapter.instanceID, adapter.workspace.instanceRoot)
+	if adapter.playbook != "" {
+		instructions += "\n\nThe DevStudio playbook, kept on the instance:\n\n" + adapter.playbook
+	}
 	return map[string]any{
 		"cwd":                   adapter.workspace.instanceRoot,
 		"approvalPolicy":        "never",
 		"sandbox":               "workspace-write",
-		"developerInstructions": devStudioCodexInstructions(adapter.instanceID, adapter.workspace.instanceRoot),
+		"developerInstructions": instructions,
 		"config":                devStudioCodexThreadConfig(),
 	}
 }
