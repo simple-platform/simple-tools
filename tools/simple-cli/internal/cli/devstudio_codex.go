@@ -675,12 +675,15 @@ func (adapter *devStudioCodexAdapter) readHistory() ([]devStudioCodexTurn, error
 }
 
 // replay sends earlier turns as completed events marked replay, so the
-// browser can rebuild its transcript after a reconnect.
+// browser can rebuild its transcript after a reconnect. Codex gives stored
+// items new ids (item-1, item-2, …) that may repeat across turns, so each
+// replayed id is prefixed with its turn id to keep it unique.
 func (adapter *devStudioCodexAdapter) replay(turns []devStudioCodexTurn) {
 	for _, turn := range turns {
 		for _, raw := range turn.Items {
 			var item devStudioCodexItem
 			if json.Unmarshal(raw, &item) == nil {
+				item.ID = turn.ID + ":" + item.ID
 				adapter.emitItemCompleted(item, true)
 			}
 		}

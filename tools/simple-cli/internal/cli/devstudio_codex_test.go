@@ -852,7 +852,7 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 	starter.history = []map[string]any{{
 		"id": "turn_old", "status": "completed", "durationMs": 900, "error": nil,
 		"items": []map[string]any{
-			{"type": "userMessage", "id": "user_1", "content": []map[string]any{{"type": "text", "text": "Hello"}}},
+			{"type": "userMessage", "id": "item-1", "content": []map[string]any{{"type": "text", "text": "Hello"}}},
 			{"type": "reasoning", "id": "rs_old", "summary": []string{"Looked around"}, "content": []string{}},
 			{"type": "agentMessage", "id": "msg_old", "text": "Reading the apps.", "phase": "commentary"},
 			{"type": "commandExecution", "id": "cmd_old", "command": "/bin/zsh -c 'ls apps'", "cwd": instanceRoot, "status": "completed",
@@ -864,7 +864,9 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 			{"type": "agentMessage", "id": "msg_final", "text": "Done.", "phase": nil},
 		},
 	}, {
-		"id": "turn_cut", "status": "inProgress", "durationMs": nil, "error": nil, "items": []map[string]any{},
+		"id": "turn_cut", "status": "inProgress", "durationMs": nil, "error": nil, "items": []map[string]any{
+			{"type": "userMessage", "id": "item-1", "content": []map[string]any{{"type": "text", "text": "Stopped"}}},
+		},
 	}}
 	connection, ready := connectDevStudioSession(t, newDevStudioBridgeWithCodexStarter(starter), "inst_resume")
 	if ready["threadId"] != "thread_saved" || ready["resumed"] != true {
@@ -878,7 +880,7 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 		t.Fatal("bridge started a new conversation instead of resuming the stored one")
 	}
 
-	wantTypes := []string{"user.message", "reasoning.completed", "message.completed", "command.completed", "files.changed", "research.step", "message.completed", "turn.completed", "turn.completed", "plan.updated"}
+	wantTypes := []string{"user.message", "reasoning.completed", "message.completed", "command.completed", "files.changed", "research.step", "message.completed", "turn.completed", "user.message", "turn.completed", "plan.updated"}
 	var replayed []map[string]any
 	for len(replayed) < len(wantTypes) {
 		replayed = append(replayed, readDevStudioMessage(t, connection))
@@ -888,10 +890,14 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 			t.Fatalf("replayed event %d = %v, want %s with replay", index, event, wantTypes[index])
 		}
 	}
-	if replayed[0]["itemId"] != "user_1" || replayed[0]["text"] != "Hello" {
+	if replayed[0]["itemId"] != "turn_old:item-1" || replayed[0]["text"] != "Hello" {
 		t.Fatalf("replayed user.message = %v", replayed[0])
 	}
-	if plan := replayed[9]; plan["explanation"] != explanation || !sameJSON(plan["steps"], []any{map[string]any{"step": "Read the apps", "status": "completed"}}) {
+	// Both turns stored an item-1; the turn id keeps the two apart.
+	if replayed[8]["itemId"] != "turn_cut:item-1" || replayed[8]["text"] != "Stopped" {
+		t.Fatalf("second turn's user.message = %v", replayed[8])
+	}
+	if plan := replayed[10]; plan["explanation"] != explanation || !sameJSON(plan["steps"], []any{map[string]any{"step": "Read the apps", "status": "completed"}}) {
 		t.Fatalf("replayed plan = %v", plan)
 	}
 	// Shift the indexes below past the user message.
@@ -905,8 +911,11 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 	if replayed[4]["action"] != "open_page" || replayed[4]["url"] != "https://example.com/leads" {
 		t.Fatalf("replayed research.step = %v", replayed[4])
 	}
-	if replayed[6]["turnId"] != "turn_old" || replayed[6]["status"] != "completed" || replayed[7]["status"] != "interrupted" {
-		t.Fatalf("replayed turn ends = %v, %v", replayed[6], replayed[7])
+	if replayed[2]["commandId"] != "turn_old:cmd_old" {
+		t.Fatalf("replayed command id = %v, want it prefixed with its turn id", replayed[2]["commandId"])
+	}
+	if replayed[6]["turnId"] != "turn_old" || replayed[6]["status"] != "completed" || replayed[8]["status"] != "interrupted" {
+		t.Fatalf("replayed turn ends = %v, %v", replayed[6], replayed[8])
 	}
 }
 
