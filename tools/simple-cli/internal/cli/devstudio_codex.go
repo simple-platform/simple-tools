@@ -207,6 +207,7 @@ func (process *execDevStudioCodexProcess) Stop() {
 type devStudioCodexAdapter struct {
 	mu         sync.Mutex
 	writeMu    sync.Mutex
+	storeMu    sync.Mutex
 	starter    devStudioCodexStarter
 	instanceID string
 	workspace  *devStudioWorkspace
@@ -310,11 +311,14 @@ type devStudioJSONRPCEnvelope struct {
 }
 
 type devStudioCodexItem struct {
-	Type             string                         `json:"type"`
-	ID               string                         `json:"id"`
-	Text             string                         `json:"text"`
-	Phase            *string                        `json:"phase"`
-	Summary          []string                       `json:"summary"`
+	Type    string   `json:"type"`
+	ID      string   `json:"id"`
+	Text    string   `json:"text"`
+	Phase   *string  `json:"phase"`
+	Summary []string `json:"summary"`
+	// Content is read only for the person's own messages; a reasoning
+	// item's content is raw reasoning, which is never sent.
+	Content          json.RawMessage                `json:"content"`
 	Command          string                         `json:"command"`
 	Cwd              string                         `json:"cwd"`
 	Status           string                         `json:"status"`
@@ -365,8 +369,22 @@ type devStudioCodexError struct {
 	CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 }
 
+// devStudioThreadRecord is what .simple/devstudio/thread.json holds.
 type devStudioThreadRecord struct {
 	ThreadID string `json:"threadId"`
+	// Plan is the conversation's latest plan. Codex does not keep plans in
+	// its history, so the bridge keeps it for the replay.
+	Plan *devStudioPlan `json:"plan,omitempty"`
+}
+
+type devStudioPlan struct {
+	Explanation *string             `json:"explanation"`
+	Steps       []devStudioPlanStep `json:"steps"`
+}
+
+type devStudioPlanStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
 }
 
 func newDevStudioCodexAdapter(
@@ -553,7 +571,9 @@ func (adapter *devStudioCodexAdapter) attach(process devStudioCodexProcess) (*de
 // openThread resumes the conversation stored for this instance, or starts a
 // new one when there is none or Codex no longer has it.
 func (adapter *devStudioCodexAdapter) openThread() (bool, error) {
+	adapter.storeMu.Lock()
 	stored, err := readDevStudioThreadID(adapter.workspace)
+	adapter.storeMu.Unlock()
 	if err != nil {
 		log.Printf("[DevStudio Bridge] Starting a new conversation: %v", err)
 	}
@@ -582,6 +602,10 @@ func (adapter *devStudioCodexAdapter) openThread() (bool, error) {
 func (adapter *devStudioCodexAdapter) startThread() error {
 	params := adapter.threadParams()
 	params["ephemeral"] = false
+	// Codex 0.144.1 cannot read back a conversation stored in its newer
+	// paginated form (thread/read answers "paginated_threads is not
+	// supported yet"), so the replay needs the legacy form.
+	params["historyMode"] = "legacy"
 	result, err := adapter.call("thread/start", params)
 	if err != nil {
 		return fmt.Errorf("failed to start a Codex conversation: %w", err)
@@ -590,7 +614,12 @@ func (adapter *devStudioCodexAdapter) startThread() error {
 	if err != nil {
 		return err
 	}
-	if err := writeDevStudioThreadID(adapter.workspace, threadID); err != nil {
+	// A new conversation id replaces the stored record, so the previous
+	// conversation's plan goes with it.
+	adapter.storeMu.Lock()
+	err = writeDevStudioThreadID(adapter.workspace, threadID)
+	adapter.storeMu.Unlock()
+	if err != nil {
 		return err
 	}
 	adapter.setThreadID(threadID)
@@ -659,6 +688,49 @@ func (adapter *devStudioCodexAdapter) replay(turns []devStudioCodexTurn) {
 		event["replay"] = true
 		adapter.emit(event)
 	}
+	adapter.replayPlan()
+}
+
+// replayPlan sends the conversation's latest plan, kept by the bridge, once
+// at the end of the replay.
+func (adapter *devStudioCodexAdapter) replayPlan() {
+	adapter.mu.Lock()
+	threadID := adapter.threadID
+	adapter.mu.Unlock()
+	adapter.storeMu.Lock()
+	record, err := readDevStudioThreadRecord(adapter.workspace)
+	adapter.storeMu.Unlock()
+	if err != nil || record.ThreadID != threadID || record.Plan == nil {
+		return
+	}
+	event := devStudioPlanEvent(*record.Plan)
+	event["replay"] = true
+	adapter.emit(event)
+}
+
+// savePlan keeps the latest plan beside the conversation id for the replay.
+func (adapter *devStudioCodexAdapter) savePlan(plan devStudioPlan) {
+	adapter.mu.Lock()
+	threadID := adapter.threadID
+	adapter.mu.Unlock()
+	adapter.storeMu.Lock()
+	defer adapter.storeMu.Unlock()
+	record, err := readDevStudioThreadRecord(adapter.workspace)
+	if err == nil && record.ThreadID == threadID {
+		record.Plan = &plan
+		err = writeDevStudioThreadRecord(adapter.workspace, record)
+	}
+	if err != nil {
+		log.Printf("[DevStudio Bridge] The plan could not be kept for the replay: %v", err)
+	}
+}
+
+func devStudioPlanEvent(plan devStudioPlan) map[string]any {
+	steps := plan.Steps
+	if steps == nil {
+		steps = []devStudioPlanStep{}
+	}
+	return map[string]any{"type": "plan.updated", "explanation": plan.Explanation, "steps": steps}
 }
 
 func (adapter *devStudioCodexAdapter) startTurn(text string) error {
@@ -1161,7 +1233,7 @@ func (adapter *devStudioCodexAdapter) handlePlanUpdated(params json.RawMessage) 
 	if json.Unmarshal(params, &event) != nil {
 		return
 	}
-	steps := make([]map[string]string, 0, len(event.Plan))
+	plan := devStudioPlan{Steps: make([]devStudioPlanStep, 0, len(event.Plan))}
 	for _, step := range event.Plan {
 		status := "pending"
 		switch step.Status {
@@ -1170,13 +1242,14 @@ func (adapter *devStudioCodexAdapter) handlePlanUpdated(params json.RawMessage) 
 		case "completed":
 			status = "completed"
 		}
-		steps = append(steps, map[string]string{"step": adapter.redact(step.Step), "status": status})
+		plan.Steps = append(plan.Steps, devStudioPlanStep{Step: adapter.redact(step.Step), Status: status})
 	}
-	var explanation any
 	if event.Explanation != nil {
-		explanation = adapter.redact(*event.Explanation)
+		explanation := adapter.redact(*event.Explanation)
+		plan.Explanation = &explanation
 	}
-	adapter.emit(map[string]any{"type": "plan.updated", "explanation": explanation, "steps": steps})
+	adapter.emit(devStudioPlanEvent(plan))
+	adapter.savePlan(plan)
 }
 
 func (adapter *devStudioCodexAdapter) handleRequestResolved(params json.RawMessage) {
@@ -1256,6 +1329,12 @@ func (adapter *devStudioCodexAdapter) emitItemStarted(item devStudioCodexItem) {
 func (adapter *devStudioCodexAdapter) emitItemCompleted(item devStudioCodexItem, replay bool) {
 	var event map[string]any
 	switch item.Type {
+	case "userMessage":
+		// Live, the browser already shows what the person sent, and has no
+		// Codex item id to match an echo against.
+		if replay {
+			event = map[string]any{"type": "user.message", "itemId": item.ID, "text": adapter.redact(devStudioUserMessageText(item.Content))}
+		}
 	case "reasoning":
 		event = map[string]any{"type": "reasoning.completed", "itemId": item.ID, "text": adapter.redact(strings.Join(item.Summary, devStudioSummarySeparator))}
 	case "agentMessage":
@@ -1751,29 +1830,59 @@ func devStudioThreadPath(workspace *devStudioWorkspace) string {
 	return filepath.Join(workspace.instanceRoot, ".simple", "devstudio", devStudioThreadFile)
 }
 
+// devStudioUserMessageText is the text of one of the person's messages.
+// Images, skills and mentions have no text and are left out.
+func devStudioUserMessageText(content json.RawMessage) string {
+	var inputs []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(content, &inputs) != nil {
+		return ""
+	}
+	texts := make([]string, 0, len(inputs))
+	for _, input := range inputs {
+		if input.Type == "text" && input.Text != "" {
+			texts = append(texts, input.Text)
+		}
+	}
+	return strings.Join(texts, "\n")
+}
+
 // readDevStudioThreadID returns the conversation stored for this instance,
 // or "" when there is none.
 func readDevStudioThreadID(workspace *devStudioWorkspace) (string, error) {
-	contents, err := os.ReadFile(devStudioThreadPath(workspace))
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("failed to read the stored conversation: %w", err)
-	}
-	var record devStudioThreadRecord
-	if err := json.Unmarshal(contents, &record); err != nil {
-		return "", fmt.Errorf("failed to read the stored conversation: %w", err)
-	}
-	return strings.TrimSpace(record.ThreadID), nil
+	record, err := readDevStudioThreadRecord(workspace)
+	return record.ThreadID, err
 }
 
+// writeDevStudioThreadID stores a conversation id with no plan yet.
 func writeDevStudioThreadID(workspace *devStudioWorkspace, threadID string) error {
+	return writeDevStudioThreadRecord(workspace, devStudioThreadRecord{ThreadID: threadID})
+}
+
+func readDevStudioThreadRecord(workspace *devStudioWorkspace) (devStudioThreadRecord, error) {
+	var record devStudioThreadRecord
+	contents, err := os.ReadFile(devStudioThreadPath(workspace))
+	if errors.Is(err, os.ErrNotExist) {
+		return record, nil
+	}
+	if err != nil {
+		return record, fmt.Errorf("failed to read the stored conversation: %w", err)
+	}
+	if err := json.Unmarshal(contents, &record); err != nil {
+		return devStudioThreadRecord{}, fmt.Errorf("failed to read the stored conversation: %w", err)
+	}
+	record.ThreadID = strings.TrimSpace(record.ThreadID)
+	return record, nil
+}
+
+func writeDevStudioThreadRecord(workspace *devStudioWorkspace, record devStudioThreadRecord) error {
 	path := devStudioThreadPath(workspace)
 	if err := os.MkdirAll(filepath.Dir(path), fsx.DirPerm); err != nil {
 		return fmt.Errorf("failed to store the conversation: %w", err)
 	}
-	contents, err := json.Marshal(devStudioThreadRecord{ThreadID: threadID})
+	contents, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("failed to store the conversation: %w", err)
 	}

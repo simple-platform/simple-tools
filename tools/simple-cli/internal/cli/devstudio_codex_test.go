@@ -341,6 +341,9 @@ func (process *fakeDevStudioCodexProcess) item(method string, item map[string]an
 // a reasoning summary, a commentary note, a command, a file change, a web
 // search and the final answer.
 func (process *fakeDevStudioCodexProcess) emitTurnEvents() {
+	userMessage := map[string]any{"type": "userMessage", "id": "user_1", "content": []map[string]any{{"type": "text", "text": "Change two apps."}}}
+	process.item("item/started", userMessage)
+	process.item("item/completed", userMessage)
 	process.notify("turn/plan/updated", map[string]any{"turnId": "turn_fake", "explanation": nil, "plan": []map[string]any{
 		{"step": "Inspect existing workspace apps", "status": "inProgress"},
 		{"step": "Confirm preferred lead fields", "status": "pending"},
@@ -436,7 +439,8 @@ func TestDevStudioCodexStartsAtConnectAndUsesVerifiedProtocol(t *testing.T) {
 	}
 
 	threadStart, _ := starter.request("thread/start")
-	if threadStart.Params["cwd"] != instanceRoot || threadStart.Params["approvalPolicy"] != "never" || threadStart.Params["sandbox"] != "workspace-write" || threadStart.Params["ephemeral"] != false {
+	if threadStart.Params["cwd"] != instanceRoot || threadStart.Params["approvalPolicy"] != "never" || threadStart.Params["sandbox"] != "workspace-write" ||
+		threadStart.Params["ephemeral"] != false || threadStart.Params["historyMode"] != "legacy" {
 		t.Fatalf("thread/start params = %v", threadStart.Params)
 	}
 	config, _ := threadStart.Params["config"].(map[string]any)
@@ -583,9 +587,16 @@ func TestDevStudioCodexMapsTurnEventsToProtocolVersion2(t *testing.T) {
 			t.Fatalf("raw reasoning text reached the browser: %v", event)
 		}
 	}
+	if hasDevStudioEvent(events, "user.message") {
+		t.Fatalf("the person's own message was echoed live: %v", events)
+	}
 	completed := events[len(events)-1]
 	if completed["turnId"] != "turn_fake" || completed["status"] != "completed" || completed["durationMs"] != float64(1234) || completed["error"] != nil {
 		t.Fatalf("turn.completed = %v", completed)
+	}
+	record, err := readDevStudioThreadRecord(&devStudioWorkspace{instanceRoot: instanceRoot})
+	if err != nil || record.ThreadID != "thread_fake" || record.Plan == nil || len(record.Plan.Steps) != 2 || record.Plan.Steps[0].Status != "in_progress" {
+		t.Fatalf("stored record = %+v, %v, want the latest plan beside the conversation id", record, err)
 	}
 }
 
@@ -830,7 +841,11 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 	baseDir := setupTestProductionRoot(t, "inst_resume")
 	createDevStudioApp(t, baseDir, "inst_resume", "app-one")
 	instanceRoot := filepath.Join(baseDir, "inst_resume")
-	if err := writeDevStudioThreadID(&devStudioWorkspace{instanceRoot: instanceRoot}, "thread_saved"); err != nil {
+	explanation := "Smallest change first"
+	if err := writeDevStudioThreadRecord(&devStudioWorkspace{instanceRoot: instanceRoot}, devStudioThreadRecord{
+		ThreadID: "thread_saved",
+		Plan:     &devStudioPlan{Explanation: &explanation, Steps: []devStudioPlanStep{{Step: "Read the apps", Status: "completed"}}},
+	}); err != nil {
 		t.Fatalf("store conversation: %v", err)
 	}
 	starter := newFakeDevStudioCodexStarter(nil)
@@ -863,16 +878,24 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 		t.Fatal("bridge started a new conversation instead of resuming the stored one")
 	}
 
+	wantTypes := []string{"user.message", "reasoning.completed", "message.completed", "command.completed", "files.changed", "research.step", "message.completed", "turn.completed", "turn.completed", "plan.updated"}
 	var replayed []map[string]any
-	for len(replayed) < 8 {
+	for len(replayed) < len(wantTypes) {
 		replayed = append(replayed, readDevStudioMessage(t, connection))
 	}
-	wantTypes := []string{"reasoning.completed", "message.completed", "command.completed", "files.changed", "research.step", "message.completed", "turn.completed", "turn.completed"}
 	for index, event := range replayed {
 		if event["type"] != wantTypes[index] || event["replay"] != true {
 			t.Fatalf("replayed event %d = %v, want %s with replay", index, event, wantTypes[index])
 		}
 	}
+	if replayed[0]["itemId"] != "user_1" || replayed[0]["text"] != "Hello" {
+		t.Fatalf("replayed user.message = %v", replayed[0])
+	}
+	if plan := replayed[9]; plan["explanation"] != explanation || !sameJSON(plan["steps"], []any{map[string]any{"step": "Read the apps", "status": "completed"}}) {
+		t.Fatalf("replayed plan = %v", plan)
+	}
+	// Shift the indexes below past the user message.
+	replayed = replayed[1:]
 	if replayed[2]["command"] != "ls apps" || !sameJSON(replayed[2]["actions"], []any{map[string]any{"type": "listFiles", "command": "ls apps", "path": "apps"}}) {
 		t.Fatalf("replayed command = %v", replayed[2])
 	}
@@ -911,18 +934,26 @@ func TestDevStudioCodexConversationNewStartsFreshConversation(t *testing.T) {
 	workspace := &devStudioWorkspace{instanceRoot: filepath.Join(baseDir, "inst_new_conversation")}
 	starter := newFakeDevStudioCodexStarter(nil)
 	connection, _ := connectDevStudioSession(t, newDevStudioBridgeWithCodexStarter(starter), "inst_new_conversation")
+	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.start", "text": "Plan something."})
+	readDevStudioEvent(t, connection, "turn.completed")
+	if record, err := readDevStudioThreadRecord(workspace); err != nil || record.Plan == nil {
+		t.Fatalf("stored record = %+v, %v, want a plan before conversation.new", record, err)
+	}
 
 	sendDevStudioMessage(t, connection, map[string]any{"type": "conversation.new"})
 	if started := readDevStudioMessage(t, connection); started["type"] != "conversation.started" || started["threadId"] != "thread_fake_2" {
 		t.Fatalf("answer to conversation.new = %v", started)
 	}
-	if stored, err := readDevStudioThreadID(workspace); err != nil || stored != "thread_fake_2" {
-		t.Fatalf("stored conversation = %q, %v, want thread_fake_2", stored, err)
+	if record, err := readDevStudioThreadRecord(workspace); err != nil || record.ThreadID != "thread_fake_2" || record.Plan != nil {
+		t.Fatalf("stored record = %+v, %v, want thread_fake_2 with no plan", record, err)
 	}
 	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.start", "text": "Fresh start."})
 	readDevStudioEvent(t, connection, "turn.completed")
-	if turnStart, _ := starter.request("turn/start"); turnStart.Params["threadId"] != "thread_fake_2" {
-		t.Fatalf("turn/start params = %v, want the new conversation", turnStart.Params)
+	starter.mu.Lock()
+	lastTurn := starter.requests[len(starter.requests)-1]
+	starter.mu.Unlock()
+	if lastTurn.Method != "turn/start" || lastTurn.Params["threadId"] != "thread_fake_2" {
+		t.Fatalf("last request = %v, want turn/start on the new conversation", lastTurn)
 	}
 }
 
