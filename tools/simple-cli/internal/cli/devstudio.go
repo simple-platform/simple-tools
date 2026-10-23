@@ -33,7 +33,7 @@ const (
 	devStudioDefaultPort     = "47831"
 	devStudioHealthPath      = "/health"
 	devStudioWebSocketPath   = "/v1/devstudio"
-	devStudioProtocolVersion = 1
+	devStudioProtocolVersion = 2
 	devStudioMaxMessageSize  = 16 * 1024
 	devStudioAppsDirectory   = "apps"
 )
@@ -486,12 +486,18 @@ type devStudioSessionReady struct {
 	ProtocolVersion   int    `json:"protocolVersion"`
 	InstanceID        string `json:"instanceId"`
 	InstanceRootReady bool   `json:"instanceRootReady"`
+	ThreadID          string `json:"threadId"`
+	// Resumed means the instance's earlier Codex conversation was resumed and
+	// is replayed right after this message.
+	Resumed bool `json:"resumed"`
 }
 
 type devStudioProtocolError struct {
 	Type    string `json:"type"`
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// WillRetry is always false for errors the bridge itself reports.
+	WillRetry bool `json:"willRetry"`
 }
 
 func newDevStudioBridge(resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
@@ -660,14 +666,44 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 		return
 	}
 
-	if err := connection.WriteJSON(devStudioSessionReady{
+	// Codex starts with the session, not on the first message, so that
+	// session.ready can name the conversation and no Codex startup ever runs
+	// inside the read loop below.
+	threadID, resumed, err := codex.connect()
+	if err != nil {
+		log.Printf("[DevStudio Bridge] Codex could not be started: %v", err)
+		// Free the session first, so the browser can reconnect as soon as
+		// it reads the error.
+		bridge.endSession(session)
+		session.writerMu.Lock()
+		bridge.closeWithError(connection, devStudioProtocolError{
+			Type:    "error",
+			Code:    "codex_unavailable",
+			Message: "Codex could not be started for this DevStudio session.",
+		})
+		session.writerMu.Unlock()
+		return
+	}
+	var history []devStudioCodexTurn
+	var historyErr error
+	if resumed {
+		history, historyErr = codex.readHistory()
+	}
+	if err := session.send(devStudioSessionReady{
 		Type:              "session.ready",
 		ProtocolVersion:   devStudioProtocolVersion,
 		InstanceID:        session.instanceID,
 		InstanceRootReady: true,
+		ThreadID:          threadID,
+		Resumed:           resumed,
 	}); err != nil {
 		return
 	}
+	if historyErr != nil {
+		log.Printf("[DevStudio Bridge] %v", historyErr)
+		_ = session.send(devStudioProtocolError{Type: "error", Code: "history_unavailable", Message: "The earlier conversation could not be shown."})
+	}
+	codex.replay(history)
 
 	for {
 		messageType, payload, err := connection.ReadMessage()
@@ -729,7 +765,7 @@ func readDevStudioConnectRequest(connection *websocket.Conn) (devStudioConnectRe
 	if request.ProtocolVersion != devStudioProtocolVersion {
 		return devStudioConnectRequest{}, &devStudioProtocolError{
 			Type:    "error",
-			Code:    "unsupported_protocol_version",
+			Code:    "protocol_version_unsupported",
 			Message: "This DevStudio protocol version is not supported.",
 		}
 	}

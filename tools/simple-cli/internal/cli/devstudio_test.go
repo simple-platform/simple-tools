@@ -73,7 +73,7 @@ func TestDevStudioServeCommandIsRegistered(t *testing.T) {
 }
 
 func TestDevStudioBridgeStartsOnLoopback(t *testing.T) {
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -277,7 +277,7 @@ func TestDevStudioInjectableResolver(t *testing.T) {
 			}, nil
 		}
 
-		bridge := newDevStudioBridge(customResolver)
+		bridge := newTestDevStudioBridge(customResolver)
 		server := httptest.NewServer(bridge.handler())
 		defer server.Close()
 
@@ -301,7 +301,7 @@ func TestDevStudioInjectableResolver(t *testing.T) {
 func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 	t.Run("returns instance_path_required when instance not found in candidate paths", func(t *testing.T) {
 		setupTestProductionRoot(t) // Empty production root
-		bridge := newDevStudioBridge()
+		bridge := newTestDevStudioBridge()
 		server := httptest.NewServer(bridge.handler())
 		t.Cleanup(server.Close)
 
@@ -323,7 +323,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 		baseDir := t.TempDir()
 		customInstancePath := filepath.Join(baseDir, "my_custom_instance")
 
-		bridge := newDevStudioBridge()
+		bridge := newTestDevStudioBridge()
 		server := httptest.NewServer(bridge.handler())
 		t.Cleanup(server.Close)
 
@@ -333,7 +333,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 
 		connectMsg := map[string]any{
 			"type":            "session.connect",
-			"protocolVersion": 1,
+			"protocolVersion": devStudioProtocolVersion,
 			"instanceId":      "inst_custom_path",
 			"instanceHost":    "inst_custom_path.simple.lcl",
 			"deployKey":       "test_deploy_key_secret",
@@ -372,8 +372,11 @@ func TestDevStudioBridgeHandshake(t *testing.T) {
 	if message["type"] != "session.ready" {
 		t.Fatalf("type = %q, want session.ready", message["type"])
 	}
-	if message["protocolVersion"] != float64(1) {
-		t.Fatalf("protocolVersion = %v, want 1", message["protocolVersion"])
+	if message["protocolVersion"] != float64(2) {
+		t.Fatalf("protocolVersion = %v, want 2", message["protocolVersion"])
+	}
+	if message["threadId"] != "thread_fake" || message["resumed"] != false {
+		t.Fatalf("session.ready conversation = %v, %v, want thread_fake, not resumed", message["threadId"], message["resumed"])
 	}
 	if message["instanceId"] != "inst_acme_dev" {
 		t.Fatalf("instanceId = %q, want inst_acme_dev", message["instanceId"])
@@ -398,7 +401,7 @@ func TestDevStudioBridgeRequiresDeployKey(t *testing.T) {
 	// Missing deployKey
 	sendDevStudioMessage(t, connection, map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      "inst_acme_dev",
 		"instanceHost":    "inst_acme_dev.simple.lcl",
 	})
@@ -419,7 +422,7 @@ func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
 	keySecret := "secret_deploy_key_999"
 	sendDevStudioMessage(t, connection, map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      "inst_acme_dev",
 		"instanceHost":    "inst_acme_dev.simple.lcl",
 		"deployKey":       keySecret,
@@ -466,17 +469,17 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "invalid protocol version",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 2,
+				"protocolVersion": 1,
 				"instanceId":      "inst_acme_dev",
 				"deployKey":       "test_key",
 			},
-			code: "unsupported_protocol_version",
+			code: "protocol_version_unsupported",
 		},
 		{
 			name: "invalid instance id",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "inst/acme",
 				"deployKey":       "test_key",
 			},
@@ -486,7 +489,7 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "dot dot instance id",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "..",
 				"deployKey":       "test_key",
 			},
@@ -496,7 +499,7 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "instance host does not match instance name",
 			message: map[string]any{
 				"type":            "session.connect",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "acme",
 				"instanceHost":    "other.simple.lcl",
 				"deployKey":       "test_key",
@@ -507,7 +510,7 @@ func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
 			name: "unknown message type",
 			message: map[string]any{
 				"type":            "session.other",
-				"protocolVersion": 1,
+				"protocolVersion": devStudioProtocolVersion,
 				"instanceId":      "inst_acme_dev",
 				"deployKey":       "test_key",
 			},
@@ -544,7 +547,7 @@ func TestDevStudioBridgeRejectsMalformedMessages(t *testing.T) {
 		},
 		{
 			name:    "unexpected app context",
-			payload: `{"type":"session.connect","protocolVersion":1,"instanceId":"inst_acme_dev","deployKey":"k","appId":"com.example.app"}`,
+			payload: `{"type":"session.connect","protocolVersion":2,"instanceId":"inst_acme_dev","deployKey":"k","appId":"com.example.app"}`,
 		},
 	}
 
@@ -601,7 +604,7 @@ func TestDevStudioBridgeClearsSessionWhenBrowserDisconnects(t *testing.T) {
 }
 
 func TestDevStudioBridgeDoesNotExposeOtherEndpoints(t *testing.T) {
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge()
 	server := httptest.NewServer(bridge.handler())
 	defer server.Close()
 
@@ -644,7 +647,7 @@ func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
 	defer cancel()
 	var stdoutBuffer bytes.Buffer
 
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge()
 	done := make(chan error, 1)
 	go func() {
 		done <- serveDevStudioWithBridge(ctx, listener, &stdoutBuffer, bridge)
@@ -655,7 +658,7 @@ func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
 
 	sendDevStudioMessage(t, conn, map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      "inst_acme_dev",
 		"instanceHost":    "inst_acme_dev.simple.lcl",
 		"deployKey":       knownSecretKey,
@@ -686,7 +689,7 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var output bytes.Buffer
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge()
 
 	done := make(chan error, 1)
 	go func() {
@@ -700,7 +703,7 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 	secretKey := "shutdown_secret_key_888"
 	sendDevStudioMessage(t, conn, map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      "inst_acme_dev",
 		"instanceHost":    "inst_acme_dev.simple.lcl",
 		"deployKey":       secretKey,
@@ -732,10 +735,16 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 	}
 }
 
+// newTestDevStudioBridge is a bridge whose sessions start a fake Codex, so
+// no test ever launches the real one.
+func newTestDevStudioBridge(resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
+	return newDevStudioBridgeWithCodexStarter(newFakeDevStudioCodexStarter(nil), resolvers...)
+}
+
 func startDevStudioBridge(t *testing.T) (*devStudioBridge, string) {
 	t.Helper()
 	setupTestProductionRoot(t, "inst_acme_dev")
-	bridge := newDevStudioBridge()
+	bridge := newTestDevStudioBridge()
 	server := httptest.NewServer(bridge.handler())
 	t.Cleanup(server.Close)
 
@@ -788,7 +797,7 @@ func readDevStudioMessage(t *testing.T, connection *websocket.Conn) map[string]a
 func sessionConnectMessage(instanceID string) map[string]any {
 	return map[string]any{
 		"type":            "session.connect",
-		"protocolVersion": 1,
+		"protocolVersion": devStudioProtocolVersion,
 		"instanceId":      instanceID,
 		"instanceHost":    instanceID + ".simple.lcl",
 		"deployKey":       "test_deploy_key_secret",

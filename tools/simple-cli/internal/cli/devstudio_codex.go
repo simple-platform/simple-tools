@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -15,9 +16,11 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"simple-cli/internal/fsx"
 )
@@ -25,12 +28,72 @@ import (
 var (
 	devStudioEnvBlockPattern = regexp.MustCompile(`^(\s*)env\s+devstudio\s*\{\s*(?:#.*)?$`)
 	devStudioFieldPattern    = regexp.MustCompile(`^(\s*)(endpoint|api_key)\s+.*$`)
+	// devStudioShellWrapperPattern matches the shell Codex runs a command
+	// through, such as /bin/zsh -c '…' or bash -lc "…".
+	devStudioShellWrapperPattern = regexp.MustCompile(`(?s)^(?:\S*/)?(?:zsh|bash|sh) -l?c (.+)$`)
 )
 
 const (
 	devStudioCodexExecutable = "codex"
 	devStudioCodexTimeout    = 30 * time.Second
+	// devStudioDiffLimit caps each file diff sent to the browser, in characters.
+	devStudioDiffLimit = 20000
+	// devStudioThreadFile stores the instance's Codex conversation id, under
+	// <instanceRoot>/.simple/devstudio, so a reconnect resumes it.
+	devStudioThreadFile = "thread.json"
+	// devStudioSummarySeparator joins the parts of a reasoning summary.
+	devStudioSummarySeparator      = "\n\n"
+	devStudioJSONRPCInvalidParams  = -32602
+	devStudioJSONRPCMethodNotFound = -32601
 )
+
+var (
+	errDevStudioSessionClosed    = errors.New("session_closed")
+	errDevStudioTurnActive       = errors.New("turn_already_active")
+	errDevStudioUnknownQuestion  = errors.New("unknown_question")
+	errDevStudioCodexUnavailable = errors.New("codex_unavailable")
+	// errDevStudioCodexRejected means Codex answered a call with an error.
+	errDevStudioCodexRejected = errors.New("codex_request_failed")
+	errDevStudioCodexTimeout  = errors.New("codex_request_timeout")
+)
+
+// devStudioCodexOptOutNotifications are Codex notifications DevStudio never
+// shows. Opting out keeps them off the pipe; raw reasoning text is among
+// them, so it can never reach the browser.
+var devStudioCodexOptOutNotifications = []string{
+	"account/rateLimits/updated",
+	"account/updated",
+	"app/list/updated",
+	"item/fileChange/outputDelta",
+	"item/fileChange/patchUpdated",
+	"item/plan/delta",
+	"item/reasoning/textDelta",
+	"mcpServer/startupStatus/updated",
+	"rawResponseItem/completed",
+	"remoteControl/status/changed",
+	"skills/changed",
+	"thread/settings/updated",
+	"thread/started",
+	"thread/status/changed",
+	"thread/tokenUsage/updated",
+	"turn/diff/updated",
+}
+
+// devStudioCodexThreadConfig is the Codex configuration every DevStudio
+// conversation runs with, on start and on resume.
+func devStudioCodexThreadConfig() map[string]any {
+	return map[string]any{
+		"web_search": "live",
+		// Lets the agent ask the person a question inside a normal turn, so
+		// its skills decide when to ask.
+		"features.default_mode_request_user_input": true,
+		"suppress_unstable_features_warning":       true,
+		"model_reasoning_summary":                  "concise",
+		// Codex has no metadata for some deployed models and then sends no
+		// reasoning summary unless told the model supports one.
+		"model_supports_reasoning_summaries": true,
+	}
+}
 
 type devStudioCodexStarter interface {
 	Start(devStudioCodexStartConfig) (devStudioCodexProcess, error)
@@ -137,24 +200,71 @@ func (process *execDevStudioCodexProcess) Stop() {
 	})
 }
 
+// devStudioCodexAdapter drives one Codex app-server for one browser session
+// and translates what Codex reports into bridge protocol events. It holds
+// mechanism only: what the agent does, and when it asks the person, belongs
+// in the agent's skills.
 type devStudioCodexAdapter struct {
 	mu         sync.Mutex
-	turnMu     sync.Mutex
 	writeMu    sync.Mutex
 	starter    devStudioCodexStarter
 	instanceID string
 	workspace  *devStudioWorkspace
 	deployKey  string
 	send       func(any) error
-	process    devStudioCodexProcess
-	encoder    *json.Encoder
-	pending    map[int]chan devStudioJSONRPCResponse
+	connection *devStudioCodexConnection
 	nextID     int
 	threadID   string
-	turnID     string
-	active     bool
-	closed     bool
-	protected  map[string]devStudioProtectedFile
+	// busy is claimed in the browser read loop before any Codex call, so a
+	// second turn or a conversation switch is refused at once.
+	busy      bool
+	turn      *devStudioTurn
+	status    string
+	questions map[string]devStudioOpenQuestion
+	phases    map[string]string
+	commands  map[string]devStudioStartedCommand
+	closed    bool
+}
+
+// devStudioCodexConnection is one running Codex process. Replies to the
+// bridge's own calls are matched in pending by their id.
+type devStudioCodexConnection struct {
+	process devStudioCodexProcess
+	encoder *json.Encoder
+	pending map[string]chan devStudioJSONRPCResponse
+}
+
+// devStudioTurn is the turn the browser started. Codex names it only once it
+// has accepted it, so a cancel that arrives earlier is remembered and sent
+// as soon as the id is known.
+type devStudioTurn struct {
+	id              string
+	startedAt       time.Time
+	announced       bool
+	cancelRequested bool
+	interruptSent   bool
+	protected       map[string]devStudioProtectedFile
+}
+
+type devStudioTurnError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+type devStudioProtectedFile struct {
+	contents []byte
+	hash     string
+	mode     os.FileMode
+}
+
+type devStudioOpenQuestion struct {
+	id         json.RawMessage
+	connection *devStudioCodexConnection
+}
+
+type devStudioStartedCommand struct {
+	command string
+	actions []map[string]any
 }
 
 type devStudioJSONRPCRequest struct {
@@ -170,16 +280,27 @@ type devStudioJSONRPCNotification struct {
 	Params  any    `json:"params"`
 }
 
+// devStudioJSONRPCReply answers a request Codex sent. The id is the raw JSON
+// Codex used, so 0 and string ids go back exactly as received.
+type devStudioJSONRPCReply struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      json.RawMessage        `json:"id"`
+	Result  any                    `json:"result,omitempty"`
+	Error   *devStudioJSONRPCError `json:"error,omitempty"`
+}
+
+type devStudioJSONRPCError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 type devStudioJSONRPCResponse struct {
-	ID     int             `json:"id"`
-	Result json.RawMessage `json:"result"`
-	Error  *struct {
-		Message string `json:"message"`
-	} `json:"error"`
+	Result json.RawMessage
+	Err    error
 }
 
 type devStudioJSONRPCEnvelope struct {
-	ID     *int            `json:"id"`
+	ID     json.RawMessage `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
 	Result json.RawMessage `json:"result"`
@@ -188,10 +309,64 @@ type devStudioJSONRPCEnvelope struct {
 	} `json:"error"`
 }
 
-type devStudioProtectedFile struct {
-	contents []byte
-	hash     string
-	mode     os.FileMode
+type devStudioCodexItem struct {
+	Type             string                         `json:"type"`
+	ID               string                         `json:"id"`
+	Text             string                         `json:"text"`
+	Phase            *string                        `json:"phase"`
+	Summary          []string                       `json:"summary"`
+	Command          string                         `json:"command"`
+	Cwd              string                         `json:"cwd"`
+	Status           string                         `json:"status"`
+	CommandActions   []devStudioCodexCommandAction  `json:"commandActions"`
+	AggregatedOutput *string                        `json:"aggregatedOutput"`
+	ExitCode         *int                           `json:"exitCode"`
+	DurationMs       *int64                         `json:"durationMs"`
+	Changes          []devStudioCodexFileChange     `json:"changes"`
+	Query            string                         `json:"query"`
+	Action           *devStudioCodexWebSearchAction `json:"action"`
+}
+
+type devStudioCodexCommandAction struct {
+	Type    string  `json:"type"`
+	Command string  `json:"command"`
+	Name    string  `json:"name"`
+	Path    *string `json:"path"`
+	Query   *string `json:"query"`
+}
+
+type devStudioCodexFileChange struct {
+	Path string `json:"path"`
+	Diff string `json:"diff"`
+	Kind struct {
+		Type     string  `json:"type"`
+		MovePath *string `json:"move_path"`
+	} `json:"kind"`
+}
+
+type devStudioCodexWebSearchAction struct {
+	Type    string  `json:"type"`
+	Query   *string `json:"query"`
+	URL     *string `json:"url"`
+	Pattern *string `json:"pattern"`
+}
+
+type devStudioCodexTurn struct {
+	ID         string               `json:"id"`
+	Status     string               `json:"status"`
+	DurationMs *int64               `json:"durationMs"`
+	Error      *devStudioCodexError `json:"error"`
+	// Items stay raw so one item the bridge cannot read does not drop the turn.
+	Items []json.RawMessage `json:"items"`
+}
+
+type devStudioCodexError struct {
+	Message        string          `json:"message"`
+	CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
+}
+
+type devStudioThreadRecord struct {
+	ThreadID string `json:"threadId"`
 }
 
 func newDevStudioCodexAdapter(
@@ -207,14 +382,16 @@ func newDevStudioCodexAdapter(
 		workspace:  workspace,
 		deployKey:  deployKey,
 		send:       send,
-		pending:    make(map[int]chan devStudioJSONRPCResponse),
+		questions:  make(map[string]devStudioOpenQuestion),
+		phases:     make(map[string]string),
+		commands:   make(map[string]devStudioStartedCommand),
 	}
 }
 
 func (session *devStudioSession) handleBrowserMessage(payload []byte) *devStudioProtocolError {
 	adapter := session.codexAdapter()
 	if adapter == nil {
-		return &devStudioProtocolError{Type: "error", Code: "session_closed", Message: "The DevStudio session is closed."}
+		return newDevStudioProtocolError("session_closed", "The DevStudio session is closed.")
 	}
 	var message map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
@@ -229,6 +406,8 @@ func (session *devStudioSession) handleBrowserMessage(payload []byte) *devStudio
 		return devStudioInvalidMessageError()
 	}
 
+	// Every case returns at once: anything that waits on Codex runs outside
+	// the read loop, so a cancel is always read.
 	switch messageType {
 	case "turn.start":
 		if len(message) != 2 {
@@ -236,61 +415,292 @@ func (session *devStudioSession) handleBrowserMessage(payload []byte) *devStudio
 		}
 		var text string
 		if rawText, ok := message["text"]; !ok || json.Unmarshal(rawText, &text) != nil || strings.TrimSpace(text) == "" {
-			return &devStudioProtocolError{Type: "error", Code: "invalid_turn", Message: "A non-empty chat request is required."}
+			return newDevStudioProtocolError("invalid_turn", "A non-empty chat request is required.")
 		}
-		if err := adapter.startTurn(text); err != nil {
-			return &devStudioProtocolError{Type: "error", Code: devStudioTurnErrorCode(err), Message: devStudioTurnErrorMessage(err)}
-		}
-		return nil
+		return devStudioAdapterError(adapter.startTurn(text))
 	case "turn.cancel":
 		if len(message) != 1 {
 			return devStudioInvalidMessageError()
 		}
-		if err := adapter.cancelTurn(); err != nil {
-			if strings.Contains(err.Error(), "no_active_turn") {
-				return nil
-			}
-			return &devStudioProtocolError{Type: "error", Code: devStudioTurnErrorCode(err), Message: devStudioTurnErrorMessage(err)}
+		return devStudioAdapterError(adapter.cancelTurn())
+	case "question.answer":
+		if len(message) != 3 {
+			return devStudioInvalidMessageError()
 		}
-		return nil
+		var requestID string
+		var answers map[string][]string
+		if json.Unmarshal(message["requestId"], &requestID) != nil || requestID == "" ||
+			json.Unmarshal(message["answers"], &answers) != nil || answers == nil {
+			return devStudioInvalidMessageError()
+		}
+		return devStudioAdapterError(adapter.answerQuestion(requestID, answers))
+	case "conversation.new":
+		if len(message) != 1 {
+			return devStudioInvalidMessageError()
+		}
+		return devStudioAdapterError(adapter.newConversation())
 	default:
-		return &devStudioProtocolError{Type: "error", Code: "unsupported_message_type", Message: "This message type is not supported."}
+		return newDevStudioProtocolError("unsupported_message_type", "This message type is not supported.")
 	}
+}
+
+func newDevStudioProtocolError(code, message string) *devStudioProtocolError {
+	return &devStudioProtocolError{Type: "error", Code: code, Message: message}
 }
 
 func devStudioInvalidMessageError() *devStudioProtocolError {
-	return &devStudioProtocolError{Type: "error", Code: "invalid_message", Message: "The bridge received an invalid message."}
+	return newDevStudioProtocolError("invalid_message", "The bridge received an invalid message.")
 }
 
-func (adapter *devStudioCodexAdapter) startTurn(text string) error {
-	adapter.turnMu.Lock()
-	defer adapter.turnMu.Unlock()
+func devStudioAdapterError(err error) *devStudioProtocolError {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, errDevStudioTurnActive):
+		return newDevStudioProtocolError("turn_already_active", "A DevStudio turn is already active.")
+	case errors.Is(err, errDevStudioUnknownQuestion):
+		return newDevStudioProtocolError("unknown_question", "This question is no longer open.")
+	case errors.Is(err, errDevStudioSessionClosed):
+		return newDevStudioProtocolError("session_closed", "The DevStudio session is closed.")
+	default:
+		return newDevStudioProtocolError("codex_unavailable", "Codex is not available for this DevStudio session.")
+	}
+}
 
+// connect starts Codex and opens this instance's conversation, resuming the
+// stored one when there is one. The session calls it before session.ready,
+// because session.ready carries the conversation id.
+func (adapter *devStudioCodexAdapter) connect() (string, bool, error) {
+	resumed, err := adapter.ensureCodex()
+	if err != nil {
+		return "", false, err
+	}
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.threadID, resumed, nil
+}
+
+// ensureCodex starts Codex when no process is running: at connect, and again
+// on the next turn after Codex stopped. It reports whether a stored
+// conversation was resumed.
+func (adapter *devStudioCodexAdapter) ensureCodex() (bool, error) {
 	adapter.mu.Lock()
 	if adapter.closed {
 		adapter.mu.Unlock()
-		return errors.New("session_closed")
+		return false, errDevStudioSessionClosed
 	}
-	if adapter.active {
+	if adapter.connection != nil {
 		adapter.mu.Unlock()
-		return errors.New("turn_active")
+		return false, nil
 	}
+	deployKey := adapter.deployKey
 	adapter.mu.Unlock()
 
-	if err := adapter.ensureProcessAndThread(); err != nil {
+	process, err := adapter.starter.Start(devStudioCodexStartConfig{
+		WorkspaceRoot: adapter.workspace.instanceRoot,
+		InstanceID:    adapter.instanceID,
+		DeployKey:     deployKey,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to start Codex: %w", err)
+	}
+	connection, err := adapter.attach(process)
+	if err != nil {
+		return false, err
+	}
+	if _, err := adapter.call("initialize", map[string]any{
+		"clientInfo": map[string]string{"name": "simple-devstudio", "version": "2"},
+		"capabilities": map[string]any{
+			"experimentalApi":           true,
+			"requestAttestation":        false,
+			"optOutNotificationMethods": devStudioCodexOptOutNotifications,
+		},
+	}); err != nil {
+		adapter.dropConnection(connection)
+		return false, fmt.Errorf("failed to initialize Codex: %w", err)
+	}
+	if err := adapter.notify("initialized", map[string]any{}); err != nil {
+		adapter.dropConnection(connection)
+		return false, fmt.Errorf("failed to initialize Codex: %w", err)
+	}
+	resumed, err := adapter.openThread()
+	if err != nil {
+		adapter.dropConnection(connection)
+		return false, err
+	}
+	return resumed, nil
+}
+
+// attach makes process the adapter's Codex connection and starts reading it.
+func (adapter *devStudioCodexAdapter) attach(process devStudioCodexProcess) (*devStudioCodexConnection, error) {
+	connection := &devStudioCodexConnection{
+		process: process,
+		encoder: json.NewEncoder(process.Input()),
+		pending: make(map[string]chan devStudioJSONRPCResponse),
+	}
+	adapter.mu.Lock()
+	if adapter.closed {
+		adapter.mu.Unlock()
+		process.Stop()
+		return nil, errDevStudioSessionClosed
+	}
+	adapter.connection = connection
+	adapter.mu.Unlock()
+	go adapter.readCodexOutput(connection)
+	return connection, nil
+}
+
+// openThread resumes the conversation stored for this instance, or starts a
+// new one when there is none or Codex no longer has it.
+func (adapter *devStudioCodexAdapter) openThread() (bool, error) {
+	stored, err := readDevStudioThreadID(adapter.workspace)
+	if err != nil {
+		log.Printf("[DevStudio Bridge] Starting a new conversation: %v", err)
+	}
+	if stored != "" {
+		params := adapter.threadParams()
+		params["threadId"] = stored
+		result, err := adapter.call("thread/resume", params)
+		switch {
+		case err == nil:
+			threadID, err := devStudioThreadIDFrom(result)
+			if err != nil {
+				return false, err
+			}
+			adapter.setThreadID(threadID)
+			return true, nil
+		case !errors.Is(err, errDevStudioCodexRejected):
+			return false, fmt.Errorf("failed to resume the Codex conversation: %w", err)
+		}
+		// Codex answered that it no longer has this conversation, for
+		// example because its history was deleted.
+		log.Printf("[DevStudio Bridge] Codex could not resume the stored conversation; starting a new one")
+	}
+	return false, adapter.startThread()
+}
+
+func (adapter *devStudioCodexAdapter) startThread() error {
+	params := adapter.threadParams()
+	params["ephemeral"] = false
+	result, err := adapter.call("thread/start", params)
+	if err != nil {
+		return fmt.Errorf("failed to start a Codex conversation: %w", err)
+	}
+	threadID, err := devStudioThreadIDFrom(result)
+	if err != nil {
 		return err
+	}
+	if err := writeDevStudioThreadID(adapter.workspace, threadID); err != nil {
+		return err
+	}
+	adapter.setThreadID(threadID)
+	return nil
+}
+
+func (adapter *devStudioCodexAdapter) threadParams() map[string]any {
+	return map[string]any{
+		"cwd":                   adapter.workspace.instanceRoot,
+		"approvalPolicy":        "never",
+		"sandbox":               "workspace-write",
+		"developerInstructions": devStudioCodexInstructions(adapter.instanceID, adapter.workspace.instanceRoot),
+		"config":                devStudioCodexThreadConfig(),
+	}
+}
+
+func (adapter *devStudioCodexAdapter) setThreadID(threadID string) {
+	adapter.mu.Lock()
+	adapter.threadID = threadID
+	adapter.mu.Unlock()
+}
+
+func devStudioThreadIDFrom(result json.RawMessage) (string, error) {
+	var response struct {
+		Thread struct {
+			ID string `json:"id"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &response); err != nil || response.Thread.ID == "" {
+		return "", errors.New("codex returned a conversation without an id")
+	}
+	return response.Thread.ID, nil
+}
+
+// readHistory reads the resumed conversation's turns, to replay them.
+func (adapter *devStudioCodexAdapter) readHistory() ([]devStudioCodexTurn, error) {
+	adapter.mu.Lock()
+	threadID := adapter.threadID
+	adapter.mu.Unlock()
+	result, err := adapter.call("thread/read", map[string]any{"threadId": threadID, "includeTurns": true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to read the Codex conversation: %w", err)
+	}
+	var response struct {
+		Thread struct {
+			Turns []devStudioCodexTurn `json:"turns"`
+		} `json:"thread"`
+	}
+	if err := json.Unmarshal(result, &response); err != nil {
+		return nil, fmt.Errorf("failed to read the Codex conversation: %w", err)
+	}
+	return response.Thread.Turns, nil
+}
+
+// replay sends earlier turns as completed events marked replay, so the
+// browser can rebuild its transcript after a reconnect.
+func (adapter *devStudioCodexAdapter) replay(turns []devStudioCodexTurn) {
+	for _, turn := range turns {
+		for _, raw := range turn.Items {
+			var item devStudioCodexItem
+			if json.Unmarshal(raw, &item) == nil {
+				adapter.emitItemCompleted(item, true)
+			}
+		}
+		event := adapter.turnCompletedEvent(turn.ID, devStudioTurnStatus(turn.Status), turn.DurationMs, adapter.codexTurnError(turn.Error))
+		event["replay"] = true
+		adapter.emit(event)
+	}
+}
+
+func (adapter *devStudioCodexAdapter) startTurn(text string) error {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if adapter.closed {
+		return errDevStudioSessionClosed
+	}
+	if adapter.busy {
+		return errDevStudioTurnActive
+	}
+	adapter.busy = true
+	turn := &devStudioTurn{startedAt: time.Now()}
+	adapter.turn = turn
+	go adapter.runTurn(turn, text)
+	return nil
+}
+
+func (adapter *devStudioCodexAdapter) runTurn(turn *devStudioTurn, text string) {
+	if _, err := adapter.ensureCodex(); err != nil {
+		log.Printf("[DevStudio Bridge] Codex could not be started for a turn: %v", err)
+		adapter.finishTurn(turn, "failed", nil, &devStudioTurnError{Code: "codex_unavailable", Message: "Codex could not be started for this turn."}, true)
+		return
 	}
 	protected, err := snapshotDevStudioProtectedFiles(adapter.workspace)
 	if err != nil {
-		return fmt.Errorf("protected_snapshot: %w", err)
+		adapter.finishTurn(turn, "failed", nil, &devStudioTurnError{Code: "protected_snapshot_failed", Message: "Protected instruction files could not be checked before the turn."}, true)
+		return
 	}
 	adapter.mu.Lock()
-	adapter.protected = protected
-	adapter.active = true
+	if adapter.turn != turn {
+		adapter.mu.Unlock()
+		return
+	}
+	turn.protected = protected
+	cancelled := turn.cancelRequested
 	threadID := adapter.threadID
 	adapter.mu.Unlock()
-	adapter.emitStatus("reading_instructions")
-	adapter.emitStatus("thinking")
+	if cancelled {
+		adapter.finishTurn(turn, "interrupted", nil, nil, false)
+		return
+	}
 
 	result, err := adapter.call("turn/start", map[string]any{
 		"threadId":       threadID,
@@ -303,427 +713,847 @@ func (adapter *devStudioCodexAdapter) startTurn(text string) error {
 		},
 		"input": []map[string]string{{"type": "text", "text": text}},
 	})
-	if err != nil {
-		_, _, _ = adapter.endActiveTurn()
-		return err
-	}
 	var response struct {
 		Turn struct {
 			ID string `json:"id"`
 		} `json:"turn"`
 	}
-	if err := json.Unmarshal(result, &response); err != nil || response.Turn.ID == "" {
-		_, _, _ = adapter.endActiveTurn()
-		return errors.New("invalid_turn_response")
+	if err == nil && (json.Unmarshal(result, &response) != nil || response.Turn.ID == "") {
+		err = errors.New("codex returned a turn without an id")
 	}
-
-	adapter.mu.Lock()
-	if adapter.active {
-		adapter.turnID = response.Turn.ID
+	if err != nil {
+		log.Printf("[DevStudio Bridge] Codex could not start a turn: %v", err)
+		adapter.finishTurn(turn, "failed", nil, &devStudioTurnError{Code: "codex_unavailable", Message: "Codex could not start this turn."}, true)
+		return
 	}
-	adapter.mu.Unlock()
-	return nil
+	adapter.setTurnID(turn, response.Turn.ID)
 }
 
-func (adapter *devStudioCodexAdapter) ensureProcessAndThread() error {
+// setTurnID records the id Codex gave the turn, from whichever comes first:
+// the turn/start reply or the turn/started notification. A cancel that came
+// before the id is sent now.
+func (adapter *devStudioCodexAdapter) setTurnID(turn *devStudioTurn, turnID string) {
 	adapter.mu.Lock()
-	if adapter.process != nil && adapter.threadID != "" {
+	if adapter.turn != turn || turnID == "" {
 		adapter.mu.Unlock()
-		return nil
+		return
 	}
-	deployKey := adapter.deployKey
+	if turn.id == "" {
+		turn.id = turnID
+	}
+	interrupt := turn.cancelRequested && !turn.interruptSent
+	turn.interruptSent = turn.interruptSent || interrupt
+	threadID, id := adapter.threadID, turn.id
 	adapter.mu.Unlock()
-
-	process, err := adapter.starter.Start(devStudioCodexStartConfig{
-		WorkspaceRoot: adapter.workspace.instanceRoot,
-		InstanceID:    adapter.instanceID,
-		DeployKey:     deployKey,
-	})
-	if err != nil {
-		return fmt.Errorf("codex_start: %w", err)
+	if interrupt {
+		go adapter.interrupt(threadID, id)
 	}
+}
 
+func (adapter *devStudioCodexAdapter) cancelTurn() error {
 	adapter.mu.Lock()
 	if adapter.closed {
 		adapter.mu.Unlock()
-		process.Stop()
-		return errors.New("session_closed")
+		return errDevStudioSessionClosed
 	}
-	adapter.process = process
-	adapter.encoder = json.NewEncoder(process.Input())
+	turn := adapter.turn
+	if turn == nil {
+		// Nothing is running: the turn ended before the cancel arrived.
+		adapter.mu.Unlock()
+		return nil
+	}
+	turn.cancelRequested = true
+	interrupt := turn.id != "" && !turn.interruptSent
+	turn.interruptSent = turn.interruptSent || interrupt
+	threadID, turnID := adapter.threadID, turn.id
 	adapter.mu.Unlock()
-	go adapter.readCodexOutput(process.Output())
-
-	if _, err := adapter.call("initialize", map[string]any{
-		"clientInfo": map[string]string{"name": "simple-devstudio", "version": "1"},
-	}); err != nil {
-		adapter.stopAndClearProcess()
-		return fmt.Errorf("codex_initialize: %w", err)
+	if interrupt {
+		go adapter.interrupt(threadID, turnID)
 	}
-	if err := adapter.notify("initialized", map[string]any{}); err != nil {
-		adapter.stopAndClearProcess()
-		return fmt.Errorf("codex_initialized: %w", err)
-	}
-	adapter.emitStatus("inspecting_workspace")
-	result, err := adapter.call("thread/start", map[string]any{
-		"cwd":                   adapter.workspace.instanceRoot,
-		"approvalPolicy":        "never",
-		"sandbox":               "workspace-write",
-		"developerInstructions": devStudioCodexInstructions(adapter.instanceID, adapter.workspace.instanceRoot),
-		"ephemeral":             true,
-	})
-	if err != nil {
-		adapter.stopAndClearProcess()
-		return fmt.Errorf("codex_thread_start: %w", err)
-	}
-	var response struct {
-		Thread struct {
-			ID string `json:"id"`
-		} `json:"thread"`
-	}
-	if err := json.Unmarshal(result, &response); err != nil || response.Thread.ID == "" {
-		adapter.stopAndClearProcess()
-		return errors.New("invalid_thread_response")
-	}
-	adapter.mu.Lock()
-	adapter.threadID = response.Thread.ID
-	adapter.mu.Unlock()
 	return nil
 }
 
-func (adapter *devStudioCodexAdapter) stopAndClearProcess() {
-	adapter.mu.Lock()
-	process := adapter.process
-	adapter.process = nil
-	adapter.encoder = nil
-	adapter.threadID = ""
-	pending := adapter.pending
-	adapter.pending = make(map[int]chan devStudioJSONRPCResponse)
-	adapter.mu.Unlock()
+// interrupt asks Codex to stop the turn. Codex then ends it with
+// turn/completed, status interrupted.
+func (adapter *devStudioCodexAdapter) interrupt(threadID, turnID string) {
+	if _, err := adapter.call("turn/interrupt", map[string]string{"threadId": threadID, "turnId": turnID}); err != nil {
+		log.Printf("[DevStudio Bridge] Codex did not accept the cancel: %v", err)
+	}
+}
 
-	for _, response := range pending {
-		response <- devStudioJSONRPCResponse{
-			Error: &struct {
-				Message string `json:"message"`
-			}{Message: "codex_unavailable"},
+func (adapter *devStudioCodexAdapter) newConversation() error {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if adapter.closed {
+		return errDevStudioSessionClosed
+	}
+	if adapter.busy {
+		return errDevStudioTurnActive
+	}
+	adapter.busy = true
+	go adapter.runNewConversation()
+	return nil
+}
+
+func (adapter *devStudioCodexAdapter) runNewConversation() {
+	_, err := adapter.ensureCodex()
+	if err == nil {
+		err = adapter.startThread()
+	}
+	adapter.mu.Lock()
+	adapter.busy = false
+	threadID := adapter.threadID
+	closed := adapter.closed
+	adapter.mu.Unlock()
+	if closed {
+		return
+	}
+	if err != nil {
+		log.Printf("[DevStudio Bridge] Codex could not start a new conversation: %v", err)
+		adapter.emitError("codex_unavailable", "Codex could not start a new conversation.")
+		return
+	}
+	adapter.emit(map[string]any{"type": "conversation.started", "threadId": threadID})
+}
+
+func (adapter *devStudioCodexAdapter) answerQuestion(requestID string, answers map[string][]string) error {
+	adapter.mu.Lock()
+	if adapter.closed {
+		adapter.mu.Unlock()
+		return errDevStudioSessionClosed
+	}
+	question, ok := adapter.questions[requestID]
+	delete(adapter.questions, requestID)
+	adapter.mu.Unlock()
+	if !ok {
+		return errDevStudioUnknownQuestion
+	}
+
+	result := make(map[string]any, len(answers))
+	for questionID, values := range answers {
+		if values == nil {
+			values = []string{}
 		}
+		result[questionID] = map[string][]string{"answers": values}
 	}
-	if process != nil {
-		process.Stop()
+	if err := adapter.reply(question.connection, question.id, map[string]any{"answers": result}, nil); err != nil {
+		return fmt.Errorf("%w: %w", errDevStudioCodexUnavailable, err)
 	}
+	adapter.emit(map[string]any{"type": "question.resolved", "requestId": requestID})
+	adapter.emitStatus("thinking")
+	return nil
 }
 
 func (adapter *devStudioCodexAdapter) call(method string, params any) (json.RawMessage, error) {
 	adapter.mu.Lock()
-	if adapter.closed || adapter.encoder == nil {
+	connection := adapter.connection
+	if adapter.closed {
 		adapter.mu.Unlock()
-		return nil, errors.New("session_closed")
+		return nil, errDevStudioSessionClosed
 	}
-	encoder := adapter.encoder
+	if connection == nil {
+		adapter.mu.Unlock()
+		return nil, errDevStudioCodexUnavailable
+	}
 	adapter.nextID++
 	id := adapter.nextID
+	key := strconv.Itoa(id)
 	response := make(chan devStudioJSONRPCResponse, 1)
-	adapter.pending[id] = response
+	connection.pending[key] = response
 	adapter.mu.Unlock()
 
-	adapter.writeMu.Lock()
-	err := encoder.Encode(devStudioJSONRPCRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
-	adapter.writeMu.Unlock()
-	if err != nil {
+	if err := adapter.write(connection, devStudioJSONRPCRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
 		adapter.mu.Lock()
-		delete(adapter.pending, id)
+		delete(connection.pending, key)
 		adapter.mu.Unlock()
-		return nil, fmt.Errorf("codex_write: %w", err)
+		return nil, fmt.Errorf("failed to write to Codex: %w", err)
 	}
 
+	timer := time.NewTimer(devStudioCodexTimeout)
+	defer timer.Stop()
 	select {
 	case result := <-response:
-		if result.Error != nil {
-			return nil, errors.New("codex_request_failed")
-		}
-		return result.Result, nil
-	case <-time.After(devStudioCodexTimeout):
+		return result.Result, result.Err
+	case <-timer.C:
 		adapter.mu.Lock()
-		delete(adapter.pending, id)
+		delete(connection.pending, key)
 		adapter.mu.Unlock()
-		return nil, errors.New("codex_request_timeout")
+		return nil, errDevStudioCodexTimeout
 	}
 }
 
 func (adapter *devStudioCodexAdapter) notify(method string, params any) error {
 	adapter.mu.Lock()
-	if adapter.closed || adapter.encoder == nil {
-		adapter.mu.Unlock()
-		return errors.New("session_closed")
-	}
-	encoder := adapter.encoder
+	connection := adapter.connection
 	adapter.mu.Unlock()
-	adapter.writeMu.Lock()
-	defer adapter.writeMu.Unlock()
-	return encoder.Encode(devStudioJSONRPCNotification{JSONRPC: "2.0", Method: method, Params: params})
+	if connection == nil {
+		return errDevStudioCodexUnavailable
+	}
+	return adapter.write(connection, devStudioJSONRPCNotification{JSONRPC: "2.0", Method: method, Params: params})
 }
 
-func (adapter *devStudioCodexAdapter) readCodexOutput(output io.ReadCloser) {
+func (adapter *devStudioCodexAdapter) reply(connection *devStudioCodexConnection, id json.RawMessage, result any, rpcError *devStudioJSONRPCError) error {
+	return adapter.write(connection, devStudioJSONRPCReply{JSONRPC: "2.0", ID: id, Result: result, Error: rpcError})
+}
+
+func (adapter *devStudioCodexAdapter) write(connection *devStudioCodexConnection, message any) error {
+	adapter.writeMu.Lock()
+	defer adapter.writeMu.Unlock()
+	return connection.encoder.Encode(message)
+}
+
+// readCodexOutput reads one Codex process until it stops. A message with a
+// method is from Codex: with an id it is a request that must be answered,
+// without one a notification. A message with only an id answers a call.
+func (adapter *devStudioCodexAdapter) readCodexOutput(connection *devStudioCodexConnection) {
+	output := connection.process.Output()
 	defer func() { _ = output.Close() }()
 	decoder := json.NewDecoder(bufio.NewReader(output))
 	for {
 		var envelope devStudioJSONRPCEnvelope
 		if err := decoder.Decode(&envelope); err != nil {
-			adapter.handleCodexExit()
+			adapter.handleCodexExit(connection)
 			return
 		}
-		if envelope.ID != nil {
-			adapter.mu.Lock()
-			response := adapter.pending[*envelope.ID]
-			delete(adapter.pending, *envelope.ID)
-			adapter.mu.Unlock()
-			if response != nil {
-				response <- devStudioJSONRPCResponse{ID: *envelope.ID, Result: envelope.Result, Error: envelope.Error}
-			}
-			continue
-		}
-		if envelope.Method != "" {
+		hasID := len(envelope.ID) > 0 && string(envelope.ID) != "null"
+		switch {
+		case envelope.Method != "" && hasID:
+			adapter.handleCodexRequest(connection, envelope.ID, envelope.Method, envelope.Params)
+		case envelope.Method != "":
 			adapter.handleCodexNotification(envelope.Method, envelope.Params)
+		case hasID:
+			adapter.resolveCall(connection, envelope)
 		}
 	}
 }
 
-func (adapter *devStudioCodexAdapter) handleCodexExit() {
+func (adapter *devStudioCodexAdapter) resolveCall(connection *devStudioCodexConnection, envelope devStudioJSONRPCEnvelope) {
+	key := devStudioRequestKey(envelope.ID)
 	adapter.mu.Lock()
-	process := adapter.process
-	adapter.process = nil
-	adapter.encoder = nil
-	adapter.threadID = ""
-	closed := adapter.closed
-	pending := adapter.pending
-	adapter.pending = make(map[int]chan devStudioJSONRPCResponse)
+	response := connection.pending[key]
+	delete(connection.pending, key)
 	adapter.mu.Unlock()
-
-	for _, response := range pending {
-		response <- devStudioJSONRPCResponse{
-			Error: &struct {
-				Message string `json:"message"`
-			}{Message: "codex_unavailable"},
-		}
-	}
-	if process != nil {
-		process.Stop()
-	}
-
-	changed, active, err := adapter.endActiveTurn()
-	if !active || closed {
+	if response == nil {
 		return
+	}
+	if envelope.Error != nil {
+		response <- devStudioJSONRPCResponse{Err: fmt.Errorf("%w: %s", errDevStudioCodexRejected, adapter.redact(envelope.Error.Message))}
+		return
+	}
+	response <- devStudioJSONRPCResponse{Result: envelope.Result}
+}
+
+// handleCodexRequest answers every request Codex sends, or Codex waits on it
+// forever. Questions go to the browser; approvals are declined, because the
+// approval policy is never; anything else is refused.
+func (adapter *devStudioCodexAdapter) handleCodexRequest(connection *devStudioCodexConnection, id json.RawMessage, method string, params json.RawMessage) {
+	var err error
+	switch method {
+	case "item/tool/requestUserInput":
+		adapter.askQuestion(connection, id, params)
+		return
+	case "item/commandExecution/requestApproval", "item/fileChange/requestApproval":
+		err = adapter.reply(connection, id, map[string]string{"decision": "decline"}, nil)
+	case "execCommandApproval", "applyPatchApproval":
+		err = adapter.reply(connection, id, map[string]string{"decision": "denied"}, nil)
+	case "item/permissions/requestApproval":
+		err = adapter.reply(connection, id, map[string]any{"permissions": map[string]any{}, "scope": "turn"}, nil)
+	default:
+		err = adapter.reply(connection, id, nil, &devStudioJSONRPCError{Code: devStudioJSONRPCMethodNotFound, Message: "DevStudio does not handle " + method + "."})
 	}
 	if err != nil {
-		adapter.emitError("protected_file_restore_failed", "Protected instruction files changed and could not be restored.")
+		log.Printf("[DevStudio Bridge] Failed to answer the Codex request %s: %v", method, err)
+	}
+}
+
+func (adapter *devStudioCodexAdapter) askQuestion(connection *devStudioCodexConnection, id json.RawMessage, params json.RawMessage) {
+	var request struct {
+		ItemID    string `json:"itemId"`
+		Questions []struct {
+			ID       string `json:"id"`
+			Header   string `json:"header"`
+			Question string `json:"question"`
+			IsOther  bool   `json:"isOther"`
+			IsSecret bool   `json:"isSecret"`
+			Options  *[]struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	if json.Unmarshal(params, &request) != nil || len(request.Questions) == 0 {
+		if err := adapter.reply(connection, id, nil, &devStudioJSONRPCError{Code: devStudioJSONRPCInvalidParams, Message: "DevStudio could not read this question."}); err != nil {
+			log.Printf("[DevStudio Bridge] Failed to refuse a Codex question: %v", err)
+		}
 		return
 	}
-	if len(changed) > 0 {
-		adapter.emitError("protected_files_modified", "Protected instruction files were restored: "+strings.Join(changed, ", "))
-		return
+
+	questions := make([]map[string]any, 0, len(request.Questions))
+	for _, question := range request.Questions {
+		var options any
+		if question.Options != nil {
+			list := make([]map[string]string, 0, len(*question.Options))
+			for _, option := range *question.Options {
+				list = append(list, map[string]string{"label": adapter.redact(option.Label), "description": adapter.redact(option.Description)})
+			}
+			options = list
+		}
+		questions = append(questions, map[string]any{
+			"id":       question.ID,
+			"header":   adapter.redact(question.Header),
+			"question": adapter.redact(question.Question),
+			"isOther":  question.IsOther,
+			"isSecret": question.IsSecret,
+			"options":  options,
+		})
 	}
-	adapter.emitError("codex_unavailable", "Codex stopped before the turn completed.")
+	requestID := devStudioRequestKey(id)
+	adapter.mu.Lock()
+	adapter.questions[requestID] = devStudioOpenQuestion{id: append(json.RawMessage(nil), id...), connection: connection}
+	adapter.mu.Unlock()
+	adapter.emitStatus("waiting_for_answer")
+	adapter.emit(map[string]any{"type": "question.asked", "requestId": requestID, "itemId": request.ItemID, "questions": questions})
+}
+
+// devStudioRequestKey is the text of a JSON-RPC id, so the number 0 and the
+// string "0" stay different keys.
+func devStudioRequestKey(id json.RawMessage) string {
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, id); err != nil {
+		return string(id)
+	}
+	return compact.String()
 }
 
 func (adapter *devStudioCodexAdapter) handleCodexNotification(method string, params json.RawMessage) {
+	if !adapter.isCurrentThread(params) {
+		return
+	}
 	switch method {
+	case "turn/started":
+		adapter.handleTurnStarted(params)
+	case "turn/completed":
+		adapter.handleTurnCompleted(params)
+	case "turn/plan/updated":
+		adapter.handlePlanUpdated(params)
+	case "item/started", "item/completed":
+		var event struct {
+			Item devStudioCodexItem `json:"item"`
+		}
+		if json.Unmarshal(params, &event) != nil || event.Item.ID == "" {
+			return
+		}
+		if method == "item/started" {
+			adapter.emitItemStarted(event.Item)
+		} else {
+			adapter.emitItemCompleted(event.Item, false)
+		}
 	case "item/agentMessage/delta":
 		var event struct {
-			Delta string `json:"delta"`
+			ItemID string `json:"itemId"`
+			Delta  string `json:"delta"`
+		}
+		if json.Unmarshal(params, &event) != nil || event.Delta == "" {
+			return
+		}
+		adapter.mu.Lock()
+		phase, ok := adapter.phases[event.ItemID]
+		adapter.mu.Unlock()
+		if !ok {
+			phase = "final_answer"
+		}
+		adapter.emit(map[string]any{"type": "message.delta", "itemId": event.ItemID, "phase": phase, "text": adapter.redact(event.Delta)})
+	case "item/reasoning/summaryPartAdded":
+		var event struct {
+			ItemID       string `json:"itemId"`
+			SummaryIndex int    `json:"summaryIndex"`
+		}
+		// Parts after the first are separated the way reasoning.completed
+		// joins them, so the deltas add up to the completed text.
+		if json.Unmarshal(params, &event) == nil && event.SummaryIndex > 0 {
+			adapter.emit(map[string]any{"type": "reasoning.delta", "itemId": event.ItemID, "text": devStudioSummarySeparator})
+		}
+	case "item/reasoning/summaryTextDelta":
+		var event struct {
+			ItemID string `json:"itemId"`
+			Delta  string `json:"delta"`
 		}
 		if json.Unmarshal(params, &event) == nil && event.Delta != "" {
-			_ = adapter.send(map[string]string{"type": "message.delta", "text": adapter.redact(event.Delta)})
+			adapter.emit(map[string]any{"type": "reasoning.delta", "itemId": event.ItemID, "text": adapter.redact(event.Delta)})
 		}
-	case "turn/started":
-		adapter.emitStatus("thinking")
 	case "item/commandExecution/outputDelta":
 		var event struct {
 			ItemID string `json:"itemId"`
 			Delta  string `json:"delta"`
 		}
 		if json.Unmarshal(params, &event) == nil && event.ItemID != "" && event.Delta != "" {
-			_ = adapter.send(map[string]string{
-				"type":      "command.output",
-				"commandId": event.ItemID,
-				"text":      adapter.redact(event.Delta),
-			})
+			adapter.emit(map[string]any{"type": "command.output", "commandId": event.ItemID, "text": adapter.redact(event.Delta)})
 		}
-	case "item/started":
-		adapter.handleCodexItem(params)
-	case "item/completed":
-		adapter.handleCodexItem(params)
-	case "turn/completed":
-		adapter.finishTurn()
+	case "serverRequest/resolved":
+		adapter.handleRequestResolved(params)
 	case "error":
-		adapter.failTurn("codex_turn_failed", "Codex could not complete the turn.")
+		adapter.handleCodexError(params)
 	}
 }
 
-func (adapter *devStudioCodexAdapter) handleCodexItem(params json.RawMessage) {
+// isCurrentThread drops notifications about other Codex conversations, such
+// as a helper agent's, so their turn ending does not end the person's turn.
+func (adapter *devStudioCodexAdapter) isCurrentThread(params json.RawMessage) bool {
 	var event struct {
-		Item struct {
-			ID       string `json:"id"`
-			Type     string `json:"type"`
-			Command  string `json:"command"`
-			Output   string `json:"aggregatedOutput"`
-			ExitCode *int   `json:"exitCode"`
-			Changes  []struct {
-				Path string `json:"path"`
-			} `json:"changes"`
-		} `json:"item"`
+		ThreadID string `json:"threadId"`
+	}
+	if json.Unmarshal(params, &event) != nil || event.ThreadID == "" {
+		return true
+	}
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return event.ThreadID == adapter.threadID
+}
+
+func (adapter *devStudioCodexAdapter) handleTurnStarted(params json.RawMessage) {
+	var event struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	if json.Unmarshal(params, &event) != nil || event.Turn.ID == "" {
+		return
+	}
+	adapter.mu.Lock()
+	turn := adapter.turn
+	if turn == nil || turn.announced || (turn.id != "" && turn.id != event.Turn.ID) {
+		adapter.mu.Unlock()
+		return
+	}
+	turn.announced = true
+	adapter.mu.Unlock()
+	adapter.setTurnID(turn, event.Turn.ID)
+	adapter.emit(map[string]any{"type": "turn.started", "turnId": event.Turn.ID})
+	adapter.emitStatus("thinking")
+}
+
+func (adapter *devStudioCodexAdapter) handleTurnCompleted(params json.RawMessage) {
+	var event struct {
+		Turn devStudioCodexTurn `json:"turn"`
 	}
 	if json.Unmarshal(params, &event) != nil {
 		return
 	}
-	switch event.Item.Type {
-	case "commandExecution":
-		adapter.emitStatus("running_command")
-		if event.Item.ID != "" {
-			payload := map[string]any{
-				"type":      "command.started",
-				"commandId": event.Item.ID,
-				"command":   adapter.redact(event.Item.Command),
-			}
-			if event.Item.ExitCode != nil {
-				payload["type"] = "command.completed"
-				payload["exitCode"] = *event.Item.ExitCode
-				if event.Item.Output != "" {
-					payload["output"] = adapter.redact(event.Item.Output)
-				}
-			}
-			_ = adapter.send(payload)
+	adapter.mu.Lock()
+	turn := adapter.turn
+	if turn == nil || (turn.id != "" && turn.id != event.Turn.ID) {
+		adapter.mu.Unlock()
+		return
+	}
+	adapter.mu.Unlock()
+	// Codex already sent its own error notification for a failed turn.
+	adapter.finishTurn(turn, devStudioTurnStatus(event.Turn.Status), event.Turn.DurationMs, adapter.codexTurnError(event.Turn.Error), false)
+}
+
+func (adapter *devStudioCodexAdapter) handlePlanUpdated(params json.RawMessage) {
+	var event struct {
+		Explanation *string `json:"explanation"`
+		Plan        []struct {
+			Step   string `json:"step"`
+			Status string `json:"status"`
+		} `json:"plan"`
+	}
+	if json.Unmarshal(params, &event) != nil {
+		return
+	}
+	steps := make([]map[string]string, 0, len(event.Plan))
+	for _, step := range event.Plan {
+		status := "pending"
+		switch step.Status {
+		case "inProgress":
+			status = "in_progress"
+		case "completed":
+			status = "completed"
 		}
-	case "fileChange":
-		adapter.emitStatus("editing")
-		paths := adapter.relativePaths(event.Item.Changes)
-		if len(paths) > 0 {
-			_ = adapter.send(map[string]any{"type": "files.changed", "paths": paths})
-		}
-	case "collabAgentToolCall":
-		adapter.emitStatus("delegating")
-	case "reasoning":
+		steps = append(steps, map[string]string{"step": adapter.redact(step.Step), "status": status})
+	}
+	var explanation any
+	if event.Explanation != nil {
+		explanation = adapter.redact(*event.Explanation)
+	}
+	adapter.emit(map[string]any{"type": "plan.updated", "explanation": explanation, "steps": steps})
+}
+
+func (adapter *devStudioCodexAdapter) handleRequestResolved(params json.RawMessage) {
+	var event struct {
+		RequestID json.RawMessage `json:"requestId"`
+	}
+	if json.Unmarshal(params, &event) != nil || len(event.RequestID) == 0 {
+		return
+	}
+	requestID := devStudioRequestKey(event.RequestID)
+	adapter.mu.Lock()
+	_, open := adapter.questions[requestID]
+	delete(adapter.questions, requestID)
+	adapter.mu.Unlock()
+	if open {
+		adapter.emit(map[string]any{"type": "question.resolved", "requestId": requestID})
 		adapter.emitStatus("thinking")
 	}
 }
 
-func (adapter *devStudioCodexAdapter) relativePaths(changes []struct {
-	Path string `json:"path"`
-}) []string {
-	paths := make([]string, 0, len(changes))
-	for _, change := range changes {
-		if relative, ok := devStudioRelativePath(adapter.workspace.instanceRoot, change.Path); ok {
-			paths = append(paths, relative)
+// handleCodexError passes a Codex error on. With willRetry Codex is retrying
+// and the turn goes on; without it, turn/completed with failed follows.
+func (adapter *devStudioCodexAdapter) handleCodexError(params json.RawMessage) {
+	var event struct {
+		Error     devStudioCodexError `json:"error"`
+		WillRetry bool                `json:"willRetry"`
+	}
+	if json.Unmarshal(params, &event) != nil {
+		return
+	}
+	adapter.emit(map[string]any{
+		"type":      "error",
+		"code":      devStudioCodexErrorCode(event.Error.CodexErrorInfo),
+		"message":   adapter.redact(event.Error.Message),
+		"willRetry": event.WillRetry,
+	})
+	if event.WillRetry {
+		adapter.emitStatus("retrying")
+	}
+}
+
+func (adapter *devStudioCodexAdapter) emitItemStarted(item devStudioCodexItem) {
+	switch item.Type {
+	case "reasoning":
+		adapter.emitStatus("thinking")
+		adapter.emit(map[string]any{"type": "reasoning.started", "itemId": item.ID})
+	case "agentMessage":
+		phase := devStudioMessagePhase(item.Phase)
+		adapter.mu.Lock()
+		adapter.phases[item.ID] = phase
+		adapter.mu.Unlock()
+		adapter.emit(map[string]any{"type": "message.started", "itemId": item.ID, "phase": phase})
+	case "commandExecution":
+		command := adapter.commandSummary(item)
+		adapter.mu.Lock()
+		adapter.commands[item.ID] = command
+		adapter.mu.Unlock()
+		adapter.emitStatus(devStudioCommandStatus(command.actions))
+		adapter.emit(map[string]any{
+			"type":      "command.started",
+			"commandId": item.ID,
+			"command":   command.command,
+			"actions":   command.actions,
+			"cwd":       devStudioNullablePath(adapter.workspace.instanceRoot, adapter.workspace.instanceRoot, item.Cwd),
+		})
+	case "fileChange":
+		adapter.emitStatus("editing")
+	case "webSearch":
+		adapter.emitStatus("searching_web")
+	case "collabAgentToolCall":
+		adapter.emitStatus("delegating")
+	}
+}
+
+// emitItemCompleted sends the event for a finished item, live or, with
+// replay, from the stored conversation.
+func (adapter *devStudioCodexAdapter) emitItemCompleted(item devStudioCodexItem, replay bool) {
+	var event map[string]any
+	switch item.Type {
+	case "reasoning":
+		event = map[string]any{"type": "reasoning.completed", "itemId": item.ID, "text": adapter.redact(strings.Join(item.Summary, devStudioSummarySeparator))}
+	case "agentMessage":
+		adapter.mu.Lock()
+		delete(adapter.phases, item.ID)
+		adapter.mu.Unlock()
+		event = map[string]any{"type": "message.completed", "itemId": item.ID, "phase": devStudioMessagePhase(item.Phase), "text": adapter.redact(item.Text)}
+	case "commandExecution":
+		adapter.mu.Lock()
+		delete(adapter.commands, item.ID)
+		adapter.mu.Unlock()
+		command := adapter.commandSummary(item)
+		output := ""
+		if item.AggregatedOutput != nil {
+			output = adapter.redact(*item.AggregatedOutput)
+		}
+		event = map[string]any{
+			"type":       "command.completed",
+			"commandId":  item.ID,
+			"command":    command.command,
+			"actions":    command.actions,
+			"status":     devStudioCommandCompletionStatus(item.Status),
+			"exitCode":   item.ExitCode,
+			"durationMs": item.DurationMs,
+			"output":     output,
+		}
+	case "fileChange":
+		changes := adapter.fileChanges(item.Changes)
+		if len(changes) == 0 {
+			break
+		}
+		event = map[string]any{"type": "files.changed", "itemId": item.ID, "status": devStudioFileChangeStatus(item.Status), "changes": changes}
+	case "webSearch":
+		event = adapter.researchStep(item)
+	}
+	if event != nil {
+		if replay {
+			event["replay"] = true
+		}
+		adapter.emit(event)
+	}
+	switch item.Type {
+	case "commandExecution", "fileChange", "webSearch", "collabAgentToolCall":
+		if !replay {
+			adapter.emitStatus("thinking")
 		}
 	}
-	sort.Strings(paths)
-	return paths
 }
 
-func (adapter *devStudioCodexAdapter) cancelTurn() error {
-	adapter.turnMu.Lock()
-	defer adapter.turnMu.Unlock()
+func (adapter *devStudioCodexAdapter) commandSummary(item devStudioCodexItem) devStudioStartedCommand {
+	root := adapter.workspace.instanceRoot
+	base := root
+	if item.Cwd != "" {
+		base = item.Cwd
+	}
+	actions := make([]map[string]any, 0, len(item.CommandActions))
+	for _, action := range item.CommandActions {
+		entry := map[string]any{"type": action.Type, "command": adapter.redact(action.Command)}
+		switch action.Type {
+		case "read":
+			entry["path"] = devStudioNullablePath(root, base, devStudioString(action.Path))
+			entry["name"] = adapter.redact(action.Name)
+		case "listFiles":
+			entry["path"] = devStudioNullablePath(root, base, devStudioString(action.Path))
+		case "search":
+			var query any
+			if action.Query != nil {
+				query = adapter.redact(*action.Query)
+			}
+			entry["query"] = query
+			entry["path"] = devStudioNullablePath(root, base, devStudioString(action.Path))
+		default:
+			entry["type"] = "unknown"
+		}
+		actions = append(actions, entry)
+	}
+	return devStudioStartedCommand{command: adapter.redact(devStudioUnwrapShellCommand(item.Command)), actions: actions}
+}
+
+func (adapter *devStudioCodexAdapter) fileChanges(changes []devStudioCodexFileChange) []map[string]any {
+	root := adapter.workspace.instanceRoot
+	result := make([]map[string]any, 0, len(changes))
+	for _, change := range changes {
+		path, ok := devStudioDisplayPath(root, root, change.Path)
+		if !ok {
+			continue
+		}
+		diff, truncated := devStudioTruncate(adapter.redact(change.Diff), devStudioDiffLimit)
+		entry := map[string]any{"path": path, "kind": change.Kind.Type, "diff": diff, "diffTruncated": truncated}
+		if change.Kind.MovePath != nil {
+			if movePath, ok := devStudioDisplayPath(root, root, *change.Kind.MovePath); ok {
+				entry["movePath"] = movePath
+			}
+		}
+		result = append(result, entry)
+	}
+	sort.SliceStable(result, func(left, right int) bool {
+		return result[left]["path"].(string) < result[right]["path"].(string)
+	})
+	return result
+}
+
+func (adapter *devStudioCodexAdapter) researchStep(item devStudioCodexItem) map[string]any {
+	action := "other"
+	var query, url *string
+	if item.Action != nil {
+		switch item.Action.Type {
+		case "search":
+			action, query = "search", item.Action.Query
+		case "openPage":
+			action, url = "open_page", item.Action.URL
+		case "findInPage":
+			action, url, query = "find_in_page", item.Action.URL, item.Action.Pattern
+		}
+	}
+	if action == "search" && devStudioString(query) == "" {
+		query = &item.Query
+	}
+	event := map[string]any{"type": "research.step", "itemId": item.ID, "action": action}
+	if text := devStudioString(query); text != "" {
+		event["query"] = adapter.redact(text)
+	}
+	if text := devStudioString(url); text != "" {
+		event["url"] = adapter.redact(text)
+	}
+	return event
+}
+
+// finishTurn ends the browser's turn once, whichever path gets there first:
+// Codex's turn/completed, a failure while starting it, Codex stopping, or
+// the session closing. Protected instruction files are restored first, and a
+// restore turns the outcome into a failure the person sees.
+func (adapter *devStudioCodexAdapter) finishTurn(turn *devStudioTurn, status string, durationMs *int64, failure *devStudioTurnError, announce bool) {
 	adapter.mu.Lock()
-	if adapter.closed {
+	if turn == nil || adapter.turn != turn {
 		adapter.mu.Unlock()
-		return errors.New("session_closed")
+		return
 	}
-	if !adapter.active || adapter.threadID == "" || adapter.turnID == "" {
-		adapter.mu.Unlock()
-		return errors.New("no_active_turn")
-	}
-	threadID, turnID := adapter.threadID, adapter.turnID
+	adapter.turn = nil
+	adapter.busy = false
+	adapter.status = ""
+	questions := adapter.questions
+	adapter.questions = make(map[string]devStudioOpenQuestion)
+	commands := adapter.commands
+	adapter.commands = make(map[string]devStudioStartedCommand)
+	closed := adapter.closed
+	turnID := turn.id
 	adapter.mu.Unlock()
-	if _, err := adapter.call("turn/interrupt", map[string]string{"threadId": threadID, "turnId": turnID}); err != nil {
-		return err
+
+	changed, err := restoreChangedDevStudioProtectedFiles(adapter.workspace, turn.protected)
+	if closed {
+		return
 	}
-	return nil
+	switch {
+	case err != nil:
+		status, announce = "failed", true
+		failure = &devStudioTurnError{Code: "protected_file_restore_failed", Message: "Protected instruction files changed and could not be restored."}
+	case len(changed) > 0:
+		status, announce = "failed", true
+		failure = &devStudioTurnError{Code: "protected_files_modified", Message: "Protected instruction files were restored: " + strings.Join(changed, ", ")}
+	}
+
+	for _, requestID := range devStudioSortedKeys(questions) {
+		adapter.emit(map[string]any{"type": "question.resolved", "requestId": requestID})
+	}
+	for _, commandID := range devStudioSortedKeys(commands) {
+		command := commands[commandID]
+		adapter.emit(map[string]any{
+			"type":       "command.completed",
+			"commandId":  commandID,
+			"command":    command.command,
+			"actions":    command.actions,
+			"status":     "interrupted",
+			"exitCode":   nil,
+			"durationMs": nil,
+			"output":     "",
+		})
+	}
+	if failure != nil && announce {
+		adapter.emitError(failure.Code, failure.Message)
+	}
+	if durationMs == nil {
+		elapsed := time.Since(turn.startedAt).Milliseconds()
+		durationMs = &elapsed
+	}
+	adapter.emit(adapter.turnCompletedEvent(turnID, status, durationMs, failure))
 }
 
-func (adapter *devStudioCodexAdapter) finishTurn() {
-	changed, active, err := adapter.endActiveTurn()
-	if !active {
-		return
+func (adapter *devStudioCodexAdapter) turnCompletedEvent(turnID, status string, durationMs *int64, failure *devStudioTurnError) map[string]any {
+	var id any
+	if turnID != "" {
+		id = turnID
 	}
-	if err != nil {
-		adapter.emitError("protected_file_restore_failed", "Protected instruction files changed and could not be restored.")
-		return
+	event := map[string]any{"type": "turn.completed", "turnId": id, "status": status, "durationMs": durationMs}
+	if failure != nil {
+		event["error"] = failure
 	}
-	if len(changed) > 0 {
-		adapter.emitError("protected_files_modified", "Protected instruction files were restored: "+strings.Join(changed, ", "))
-		return
-	}
-	adapter.emitStatus("complete")
-	_ = adapter.send(map[string]any{"type": "turn.completed", "success": true})
+	return event
 }
 
-func (adapter *devStudioCodexAdapter) failTurn(code, message string) {
-	changed, active, err := adapter.endActiveTurn()
-	if !active {
-		return
+func (adapter *devStudioCodexAdapter) codexTurnError(codexError *devStudioCodexError) *devStudioTurnError {
+	if codexError == nil {
+		return nil
 	}
-	if err != nil {
-		adapter.emitError("protected_file_restore_failed", "Protected instruction files changed and could not be restored.")
-		return
-	}
-	if len(changed) > 0 {
-		adapter.emitError("protected_files_modified", "Protected instruction files were restored: "+strings.Join(changed, ", "))
-		return
-	}
-	adapter.emitError(code, message)
+	return &devStudioTurnError{Code: devStudioCodexErrorCode(codexError.CodexErrorInfo), Message: adapter.redact(codexError.Message)}
 }
 
-func (adapter *devStudioCodexAdapter) endActiveTurn() ([]string, bool, error) {
+// handleCodexExit runs when a Codex process stops. Its open calls fail at
+// once, and a turn it was running ends as failed. The next turn starts Codex
+// again and resumes the stored conversation.
+func (adapter *devStudioCodexAdapter) handleCodexExit(connection *devStudioCodexConnection) {
 	adapter.mu.Lock()
-	if !adapter.active {
-		adapter.mu.Unlock()
-		return nil, false, nil
+	pending := connection.pending
+	connection.pending = make(map[string]chan devStudioJSONRPCResponse)
+	current := adapter.connection == connection
+	if current {
+		adapter.connection = nil
 	}
-	adapter.active = false
-	adapter.turnID = ""
-	before := adapter.protected
-	adapter.protected = nil
+	turn := adapter.turn
+	closed := adapter.closed
 	adapter.mu.Unlock()
-	changed, err := restoreChangedDevStudioProtectedFiles(adapter.workspace, before)
-	return changed, true, err
+
+	failDevStudioPendingCalls(pending, errDevStudioCodexUnavailable)
+	connection.process.Stop()
+	if !current || closed || turn == nil {
+		return
+	}
+	adapter.finishTurn(turn, "failed", nil, &devStudioTurnError{Code: "codex_unavailable", Message: "Codex stopped before the turn completed."}, true)
+}
+
+// dropConnection stops a Codex process that failed while starting.
+func (adapter *devStudioCodexAdapter) dropConnection(connection *devStudioCodexConnection) {
+	adapter.mu.Lock()
+	if adapter.connection == connection {
+		adapter.connection = nil
+	}
+	pending := connection.pending
+	connection.pending = make(map[string]chan devStudioJSONRPCResponse)
+	adapter.mu.Unlock()
+	failDevStudioPendingCalls(pending, errDevStudioCodexUnavailable)
+	connection.process.Stop()
+}
+
+func failDevStudioPendingCalls(pending map[string]chan devStudioJSONRPCResponse, err error) {
+	for _, response := range pending {
+		response <- devStudioJSONRPCResponse{Err: err}
+	}
 }
 
 func (adapter *devStudioCodexAdapter) close() {
-	_, _, _ = adapter.endActiveTurn()
 	adapter.mu.Lock()
 	if adapter.closed {
 		adapter.mu.Unlock()
 		return
 	}
 	adapter.closed = true
-	adapter.active = false
-	process := adapter.process
-	adapter.process = nil
-	adapter.encoder = nil
-	adapter.threadID = ""
-	adapter.turnID = ""
-	adapter.deployKey = ""
-	pending := adapter.pending
-	adapter.pending = make(map[int]chan devStudioJSONRPCResponse)
+	turn := adapter.turn
+	connection := adapter.connection
+	adapter.connection = nil
 	adapter.mu.Unlock()
-	for _, response := range pending {
-		response <- devStudioJSONRPCResponse{
-			Error: &struct {
-				Message string `json:"message"`
-			}{Message: "session_closed"},
-		}
+
+	// Restores protected files; nothing is sent, the browser is gone.
+	adapter.finishTurn(turn, "interrupted", nil, nil, false)
+	adapter.mu.Lock()
+	adapter.deployKey = ""
+	var pending map[string]chan devStudioJSONRPCResponse
+	if connection != nil {
+		pending = connection.pending
+		connection.pending = make(map[string]chan devStudioJSONRPCResponse)
 	}
-	if process != nil {
-		process.Stop()
+	adapter.mu.Unlock()
+	failDevStudioPendingCalls(pending, errDevStudioSessionClosed)
+	if connection != nil {
+		connection.process.Stop()
 	}
 }
 
+// emitStatus says what the agent is doing now. It is sent only while a turn
+// the browser has been told about runs, and only when it changes.
 func (adapter *devStudioCodexAdapter) emitStatus(status string) {
-	_ = adapter.send(map[string]string{"type": "status.changed", "status": status})
+	adapter.mu.Lock()
+	if adapter.turn == nil || !adapter.turn.announced || adapter.status == status {
+		adapter.mu.Unlock()
+		return
+	}
+	adapter.status = status
+	adapter.mu.Unlock()
+	adapter.emit(map[string]string{"type": "status.changed", "status": status})
 }
 
 func (adapter *devStudioCodexAdapter) emitError(code, message string) {
-	adapter.emitStatus("error")
-	_ = adapter.send(map[string]string{"type": "error", "code": code, "message": message})
+	adapter.emit(map[string]any{"type": "error", "code": code, "message": message, "willRetry": false})
+}
+
+func (adapter *devStudioCodexAdapter) emit(event any) {
+	if adapter.send != nil {
+		_ = adapter.send(event)
+	}
 }
 
 func (adapter *devStudioCodexAdapter) redact(value string) string {
@@ -736,30 +1566,221 @@ func (adapter *devStudioCodexAdapter) redact(value string) string {
 	return strings.ReplaceAll(value, deployKey, "[redacted]")
 }
 
-func devStudioTurnErrorCode(err error) string {
-	switch {
-	case strings.Contains(err.Error(), "turn_active"):
-		return "turn_already_active"
-	case strings.Contains(err.Error(), "no_active_turn"):
-		return "no_active_turn"
-	case strings.Contains(err.Error(), "session_closed"):
-		return "session_closed"
+func devStudioMessagePhase(phase *string) string {
+	if phase != nil && *phase == "commentary" {
+		return "commentary"
+	}
+	return "final_answer"
+}
+
+func devStudioTurnStatus(status string) string {
+	switch status {
+	case "completed", "failed":
+		return status
 	default:
-		return "codex_unavailable"
+		// A turn stored while still running was cut off when Codex stopped.
+		return "interrupted"
 	}
 }
 
-func devStudioTurnErrorMessage(err error) string {
-	switch devStudioTurnErrorCode(err) {
-	case "turn_already_active":
-		return "A DevStudio turn is already active."
-	case "no_active_turn":
-		return "There is no active DevStudio turn to cancel."
-	case "session_closed":
-		return "The DevStudio session is closed."
+func devStudioCommandCompletionStatus(status string) string {
+	switch status {
+	case "completed", "failed", "declined":
+		return status
 	default:
-		return "Codex could not be started for this DevStudio turn."
+		return "interrupted"
 	}
+}
+
+func devStudioFileChangeStatus(status string) string {
+	switch status {
+	case "completed", "declined":
+		return status
+	default:
+		return "failed"
+	}
+}
+
+// devStudioCommandStatus tells what a command is for from Codex's parsed
+// actions: reading instruction files, looking around, or running something.
+func devStudioCommandStatus(actions []map[string]any) string {
+	if len(actions) == 0 {
+		return "running_command"
+	}
+	status := "inspecting_workspace"
+	for _, action := range actions {
+		switch action["type"] {
+		case "read":
+			if path, ok := action["path"].(string); ok && devStudioProtectedRelativePath(path) {
+				status = "reading_instructions"
+			}
+		case "listFiles", "search":
+		default:
+			return "running_command"
+		}
+	}
+	return status
+}
+
+// devStudioCodexErrorCode names a Codex error by its kind, such as
+// usageLimitExceeded or responseStreamDisconnected.
+func devStudioCodexErrorCode(info json.RawMessage) string {
+	var name string
+	if json.Unmarshal(info, &name) == nil && name != "" {
+		return name
+	}
+	var variants map[string]json.RawMessage
+	if json.Unmarshal(info, &variants) == nil && len(variants) == 1 {
+		for name := range variants {
+			return name
+		}
+	}
+	return "codex_error"
+}
+
+// devStudioUnwrapShellCommand removes the shell Codex runs a command through,
+// such as /bin/zsh -c '…', leaving the command the agent wrote. A command
+// that is not exactly one wrapped shell word is returned unchanged.
+func devStudioUnwrapShellCommand(command string) string {
+	matches := devStudioShellWrapperPattern.FindStringSubmatch(command)
+	if matches == nil {
+		return command
+	}
+	word, ok := devStudioShellWord(matches[1])
+	if !ok || strings.TrimSpace(word) == "" {
+		return command
+	}
+	return word
+}
+
+// devStudioShellWord unquotes text that must be a single shell word made of
+// single-quoted, double-quoted and plain parts.
+func devStudioShellWord(text string) (string, bool) {
+	var word strings.Builder
+	for index := 0; index < len(text); {
+		switch character := text[index]; {
+		case character == '\'':
+			end := strings.IndexByte(text[index+1:], '\'')
+			if end < 0 {
+				return "", false
+			}
+			word.WriteString(text[index+1 : index+1+end])
+			index += end + 2
+		case character == '"':
+			index++
+			closed := false
+			for index < len(text) && !closed {
+				switch {
+				case text[index] == '"':
+					closed = true
+					index++
+				case text[index] == '\\' && index+1 < len(text) && strings.IndexByte("$`\"\\\n", text[index+1]) >= 0:
+					word.WriteByte(text[index+1])
+					index += 2
+				default:
+					word.WriteByte(text[index])
+					index++
+				}
+			}
+			if !closed {
+				return "", false
+			}
+		case character == '\\' && index+1 < len(text):
+			word.WriteByte(text[index+1])
+			index += 2
+		case character == ' ' || character == '\t' || character == '\n':
+			return "", false
+		default:
+			word.WriteByte(character)
+			index++
+		}
+	}
+	return word.String(), true
+}
+
+// devStudioDisplayPath gives path relative to the instance root. A relative
+// path is resolved against base, a command's working directory. The root
+// itself is "."; a path outside the root has no display path.
+func devStudioDisplayPath(root, base, path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(path) {
+		if !filepath.IsAbs(base) {
+			base = filepath.Join(root, base)
+		}
+		path = filepath.Join(base, path)
+	}
+	if filepath.Clean(path) == filepath.Clean(root) {
+		return ".", true
+	}
+	return devStudioRelativePath(root, path)
+}
+
+func devStudioNullablePath(root, base, path string) any {
+	if relative, ok := devStudioDisplayPath(root, base, path); ok {
+		return relative
+	}
+	return nil
+}
+
+func devStudioString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func devStudioTruncate(text string, limit int) (string, bool) {
+	if len(text) <= limit || utf8.RuneCountInString(text) <= limit {
+		return text, false
+	}
+	return string([]rune(text)[:limit]), true
+}
+
+func devStudioSortedKeys[V any](values map[string]V) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func devStudioThreadPath(workspace *devStudioWorkspace) string {
+	return filepath.Join(workspace.instanceRoot, ".simple", "devstudio", devStudioThreadFile)
+}
+
+// readDevStudioThreadID returns the conversation stored for this instance,
+// or "" when there is none.
+func readDevStudioThreadID(workspace *devStudioWorkspace) (string, error) {
+	contents, err := os.ReadFile(devStudioThreadPath(workspace))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to read the stored conversation: %w", err)
+	}
+	var record devStudioThreadRecord
+	if err := json.Unmarshal(contents, &record); err != nil {
+		return "", fmt.Errorf("failed to read the stored conversation: %w", err)
+	}
+	return strings.TrimSpace(record.ThreadID), nil
+}
+
+func writeDevStudioThreadID(workspace *devStudioWorkspace, threadID string) error {
+	path := devStudioThreadPath(workspace)
+	if err := os.MkdirAll(filepath.Dir(path), fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to store the conversation: %w", err)
+	}
+	contents, err := json.Marshal(devStudioThreadRecord{ThreadID: threadID})
+	if err != nil {
+		return fmt.Errorf("failed to store the conversation: %w", err)
+	}
+	if err := os.WriteFile(path, append(contents, '\n'), fsx.FilePerm); err != nil {
+		return fmt.Errorf("failed to store the conversation: %w", err)
+	}
+	return nil
 }
 
 func devStudioCodexInstructions(instanceID, instanceRoot string) string {
