@@ -739,6 +739,12 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 	if keptWorkspaceKey {
 		requestMessage.DeployKey = ""
 	}
+	// A workspace made by an older CLI lacks root files a new one is
+	// scaffolded with. Without them the session still runs as before, so a
+	// failure here is only logged.
+	if err := ensureDevStudioWorkspaceFiles(ws); err != nil {
+		log.Printf("[DevStudio Bridge] The workspace's missing root files could not be added: %s", devStudioLogValue(err))
+	}
 
 	session, protocolError := bridge.beginSession(requestMessage.InstanceID, requestMessage.DeployKey, ws)
 	if protocolError != nil {
