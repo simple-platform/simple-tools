@@ -9,7 +9,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@simpleplatform/sdk": "^2.3.0",
+    "@simpleplatform/sdk": "^3.0.4",
+    "@simpleplatform/ui-kit": "^0.2.1",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },
