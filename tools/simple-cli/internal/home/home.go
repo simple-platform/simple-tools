@@ -31,14 +31,26 @@ var (
 // DevStudio sets SIMPLE_CLI_HOME to the writable instance workspace while
 // preserving HOME for Codex's own authentication and configuration.
 func Dir() (string, error) {
-	if configured := strings.TrimSpace(os.Getenv("SIMPLE_CLI_HOME")); configured != "" {
+	if configured := configuredDir(); configured != "" {
 		return configured, nil
 	}
 	return os.UserHomeDir()
 }
 
+// configuredDir is SIMPLE_CLI_HOME, or "" when it is not set.
+func configuredDir() string {
+	return strings.TrimSpace(os.Getenv("SIMPLE_CLI_HOME"))
+}
+
 // ToolEnv returns an environment slice suitable for running external or self-extracting tools (such as scl-parser).
 // It ensures that XDG_DATA_HOME and TMPDIR are set to writable directories within the Simple CLI directory.
+//
+// When SIMPLE_CLI_HOME is set, the tool's HOME is moved under it as well.
+// DevStudio sets it to the instance workspace, the only place Codex's sandbox
+// lets a command write, and scl-parser writes its unpacked runtime under
+// HOME on every run (on macOS, ~/Library/Application Support/.burrito), so
+// with the real HOME every run fails with "PermissionDenied". The CLI's own
+// HOME is left alone.
 func ToolEnv() []string {
 	env := os.Environ()
 	homeDir, err := Dir()
@@ -51,18 +63,31 @@ func ToolEnv() []string {
 	_ = os.MkdirAll(dataDir, 0755)
 	_ = os.MkdirAll(tmpDir, 0755)
 
+	toolHome := ""
+	if configured := configuredDir(); configured != "" {
+		toolHome = filepath.Join(configured, ".simple", "home")
+		_ = os.MkdirAll(toolHome, fsx.DirPerm)
+	}
+
 	var filtered []string
 	for _, item := range env {
 		if strings.HasPrefix(item, "XDG_DATA_HOME=") || strings.HasPrefix(item, "TMPDIR=") {
 			continue
 		}
+		if toolHome != "" && strings.HasPrefix(item, "HOME=") {
+			continue
+		}
 		filtered = append(filtered, item)
 	}
 
-	return append(filtered,
+	filtered = append(filtered,
 		fmt.Sprintf("XDG_DATA_HOME=%s", dataDir),
 		fmt.Sprintf("TMPDIR=%s", tmpDir),
 	)
+	if toolHome != "" {
+		filtered = append(filtered, "HOME="+toolHome)
+	}
+	return filtered
 }
 
 // ToolCommand creates an *exec.Cmd configured with ToolEnv for running internal CLI tools.
