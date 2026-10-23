@@ -113,3 +113,25 @@ func TestEnvIsolation(t *testing.T) {
 		t.Error("dev and prod key directories are the same — env isolation is broken")
 	}
 }
+
+func TestIsEnrolledUnderLooksInTheGivenHome(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("SIMPLE_CLI_HOME", workspace)
+	if _, err := GenerateAndSave("acme", "devstudio", "000002"); err != nil {
+		t.Fatalf("GenerateAndSave() error = %v", err)
+	}
+	if err := MarkEnrolled("acme", "devstudio", "000002"); err != nil {
+		t.Fatalf("MarkEnrolled() error = %v", err)
+	}
+
+	t.Setenv("SIMPLE_CLI_HOME", t.TempDir())
+	if IsEnrolled("acme", "devstudio", "000002") {
+		t.Error("IsEnrolled() = true in another home, want false")
+	}
+	if !IsEnrolledUnder(workspace, "acme", "devstudio", "000002") {
+		t.Error("IsEnrolledUnder(workspace) = false, want true")
+	}
+	if IsEnrolledUnder(workspace, "acme", "devstudio", "000003") {
+		t.Error("IsEnrolledUnder(workspace) = true for another key, want false")
+	}
+}

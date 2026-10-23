@@ -22,8 +22,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/home"
+	"simple-cli/internal/keystore"
 )
 
 var (
@@ -32,6 +34,8 @@ var (
 	// devStudioShellWrapperPattern matches the shell Codex runs a command
 	// through, such as /bin/zsh -c '…' or bash -lc "…".
 	devStudioShellWrapperPattern = regexp.MustCompile(`(?s)^(?:\S*/)?(?:zsh|bash|sh) -l?c (.+)$`)
+	devStudioTenantPattern       = regexp.MustCompile(`^\s*tenant\s+(\S+)`)
+	devStudioAPIKeyPattern       = regexp.MustCompile(`^\s*api_key\s+(\S+)`)
 )
 
 const (
@@ -2038,6 +2042,68 @@ func ensureDevStudioSCLConfiguration(workspace *devStudioWorkspace, instanceHost
 		return fmt.Errorf("failed to create workspace configuration: %w", err)
 	}
 	return nil
+}
+
+// devStudioWorkspaceHasSetUpKey reports whether the workspace's simple.scl
+// names a literal si_ key for env devstudio whose key pair is already set up
+// in the workspace, the CLI home of the commands DevStudio runs. The CLI then
+// signs in with that key pair, and the key's text only finds the pair.
+func devStudioWorkspaceHasSetUpKey(workspace *devStudioWorkspace) bool {
+	contents, err := os.ReadFile(filepath.Join(workspace.instanceRoot, "simple.scl"))
+	if err != nil {
+		return false
+	}
+	tenant, apiKey := devStudioSCLTenantAndKey(string(contents))
+	if !isValidDevStudioInstanceID(tenant) || !strings.HasPrefix(apiKey, "si_") {
+		return false
+	}
+	// The tenant and id name folders, so both must be plain names.
+	idSuffix, err := deploy.ParseIDSuffix(apiKey)
+	if err != nil || !isValidDevStudioInstanceID(idSuffix) {
+		return false
+	}
+	return keystore.IsEnrolledUnder(workspace.instanceRoot, tenant, "devstudio", idSuffix)
+}
+
+// devStudioSCLTenantAndKey reads the tenant and the env devstudio api_key
+// from simple.scl text, each "" when missing or not a literal.
+func devStudioSCLTenantAndKey(text string) (string, string) {
+	tenant, apiKey := "", ""
+	lines := strings.Split(text, "\n")
+	depth := 0
+	for index := 0; index < len(lines); index++ {
+		line := lines[index]
+		if depth == 0 {
+			if matches := devStudioTenantPattern.FindStringSubmatch(line); matches != nil && tenant == "" {
+				tenant = devStudioSCLLiteral(matches[1])
+			}
+			if devStudioEnvBlockPattern.MatchString(line) {
+				if end, err := devStudioEnvironmentEnd(lines, index); err == nil {
+					for _, field := range lines[index+1 : end] {
+						if matches := devStudioAPIKeyPattern.FindStringSubmatch(field); matches != nil {
+							apiKey = devStudioSCLLiteral(matches[1])
+						}
+					}
+					index = end
+					continue
+				}
+			}
+		}
+		depth += strings.Count(line, "{") - strings.Count(line, "}")
+	}
+	return tenant, apiKey
+}
+
+// devStudioSCLLiteral is an SCL value without its quotes, or "" when it names
+// an environment variable ($NAME) rather than holding a literal.
+func devStudioSCLLiteral(value string) string {
+	if strings.HasPrefix(value, "$") {
+		return ""
+	}
+	if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+		return value[1 : len(value)-1]
+	}
+	return value
 }
 
 func ensureDevStudioEnvironment(contents []byte, instanceHost, deployKey string) ([]byte, error) {

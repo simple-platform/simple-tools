@@ -397,24 +397,125 @@ func TestDevStudioBridgeHandshake(t *testing.T) {
 	}
 }
 
-func TestDevStudioBridgeRequiresDeployKey(t *testing.T) {
+// A deploy key's secret is a one-time enrollment code: once the workspace's
+// key pair is set up, the CLI signs in with that pair, and writing another
+// key into simple.scl would make the next deploy use that key up.
+func TestDevStudioBridgeKeepsSetUpWorkspaceKey(t *testing.T) {
+	workspaceKey := "si_000002" + strings.Repeat("a", 64)
+	browserKey := "si_000003" + strings.Repeat("b", 64)
+	config := "tenant acme\n\nenv devstudio {\n  endpoint \"inst_acme_dev.simple.lcl\"\n  api_key \"" + workspaceKey + "\"\n}\n"
+	tests := []struct {
+		name string
+		// pairFor is the id whose key pair is set up in the workspace, or "".
+		pairFor   string
+		key       any
+		omitKey   bool
+		wantWrite bool
+	}{
+		{"set up, other key sent", "000002", browserKey, false, false},
+		{"set up, no key", "000002", nil, true, false},
+		{"not set up, key sent", "", browserKey, false, true},
+		{"not set up, no key", "", nil, true, false},
+		{"not set up, empty key", "", "", false, false},
+		{"only another key set up, key sent", "000009", browserKey, false, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previousLog := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousLog) })
+
+			baseDir := setupTestProductionRoot(t, "inst_acme_dev")
+			instanceRoot := filepath.Join(baseDir, "inst_acme_dev")
+			configPath := filepath.Join(instanceRoot, "simple.scl")
+			if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+				t.Fatalf("write simple.scl: %v", err)
+			}
+			if test.pairFor != "" {
+				pairDir := filepath.Join(instanceRoot, ".simple", "keys", "acme", "devstudio", test.pairFor)
+				if err := os.MkdirAll(pairDir, 0755); err != nil {
+					t.Fatalf("make key pair folder: %v", err)
+				}
+				for _, name := range []string{"private.pem", ".enrolled"} {
+					if err := os.WriteFile(filepath.Join(pairDir, name), []byte("test"), 0600); err != nil {
+						t.Fatalf("write %s: %v", name, err)
+					}
+				}
+			}
+			starter := newFakeDevStudioCodexStarter(nil)
+			server := startDevStudioBridgeServer(t, newDevStudioBridgeWithCodexStarter(starter))
+			connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+			defer func() { _ = connection.Close() }()
+
+			request := sessionConnectMessage("inst_acme_dev")
+			delete(request, "deployKey")
+			if !test.omitKey {
+				request["deployKey"] = test.key
+			}
+			sendDevStudioMessage(t, connection, request)
+			if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
+				t.Fatalf("connect = %v, want session.ready", message)
+			}
+
+			contents, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("read simple.scl: %v", err)
+			}
+			starter.mu.Lock()
+			codexKey := starter.starts[0].DeployKey
+			starter.mu.Unlock()
+			if test.wantWrite {
+				if !strings.Contains(string(contents), `api_key "`+browserKey+`"`) || codexKey != browserKey {
+					t.Fatalf("first-time setup did not take the sent key: Codex key %q, simple.scl:\n%s", codexKey, contents)
+				}
+			} else {
+				if string(contents) != config {
+					t.Fatalf("simple.scl changed:\n%s", contents)
+				}
+				if codexKey != "" {
+					t.Fatalf("Codex was given the key %q, want none", codexKey)
+				}
+			}
+			if strings.Contains(logs.String(), browserKey) {
+				t.Fatalf("the sent key was logged:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+func TestDevStudioSCLTenantAndKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		text       string
+		wantTenant string
+		wantKey    string
+	}{
+		{"quoted key", "tenant acme\nenv devstudio {\n  api_key \"si_x\"\n}\n", "acme", "si_x"},
+		{"other env ignored", "tenant acme\nenv dev {\n  api_key \"si_dev\"\n}\nenv devstudio {\n  api_key 'si_studio'\n}\n", "acme", "si_studio"},
+		{"variable is not a literal", "tenant \"acme\"\nenv devstudio {\n  api_key $SIMPLE_KEY\n}\n", "acme", ""},
+		{"no devstudio block", "tenant acme\nenv dev {\n  api_key \"si_dev\"\n}\n", "acme", ""},
+		{"tenant inside a block ignored", "env devstudio {\n  tenant other\n  api_key si_y\n}\n", "", "si_y"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tenant, key := devStudioSCLTenantAndKey(test.text)
+			if tenant != test.wantTenant || key != test.wantKey {
+				t.Fatalf("devStudioSCLTenantAndKey = %q, %q, want %q, %q", tenant, key, test.wantTenant, test.wantKey)
+			}
+		})
+	}
+}
+
+func TestDevStudioBridgeRejectsBlankDeployKey(t *testing.T) {
 	_, wsURL := startDevStudioBridge(t)
 	connection := dialDevStudio(t, wsURL)
 	defer func() { _ = connection.Close() }()
 
-	// Missing deployKey
-	sendDevStudioMessage(t, connection, map[string]any{
-		"type":            "session.connect",
-		"protocolVersion": devStudioProtocolVersion,
-		"instanceId":      "inst_acme_dev",
-		"instanceHost":    "inst_acme_dev.simple.lcl",
-	})
-
-	message := readDevStudioMessage(t, connection)
-	if message["type"] != "error" {
-		t.Fatalf("type = %q, want error", message["type"])
-	}
-	if message["code"] != "invalid_deploy_key" {
+	request := sessionConnectMessage("inst_acme_dev")
+	request["deployKey"] = "   "
+	sendDevStudioMessage(t, connection, request)
+	if message := readDevStudioMessage(t, connection); message["code"] != "invalid_deploy_key" {
 		t.Fatalf("code = %q, want invalid_deploy_key", message["code"])
 	}
 }

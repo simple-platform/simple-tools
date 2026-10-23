@@ -453,10 +453,12 @@ func (session *devStudioSession) codexAdapter() *devStudioCodexAdapter {
 	return session.codex
 }
 
+// deployKeyForCodex returns the key the browser sent, which is empty when it
+// sent none, and false once the session is closed.
 func (session *devStudioSession) deployKeyForCodex() (string, bool) {
 	session.stateMu.Lock()
 	defer session.stateMu.Unlock()
-	if session.closed || session.deployKey == "" {
+	if session.closed {
 		return "", false
 	}
 	return session.deployKey, true
@@ -636,13 +638,24 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 		}
 	}
 
-	if err := ensureDevStudioSCLConfiguration(ws, requestMessage.InstanceHost, requestMessage.DeployKey); err != nil {
-		bridge.closeWithError(connection, devStudioProtocolError{
-			Type:    "error",
-			Code:    "workspace_configuration_failed",
-			Message: "The instance workspace could not be prepared for DevStudio.",
-		})
-		return
+	// Once the workspace's key pair is set up, the CLI signs in with it for
+	// as long as the key lives, so the browser's key is ignored: written to
+	// simple.scl, the next deploy would use it up, and it may be someone
+	// else's. It is not written, logged or given to Codex. Only a workspace
+	// with no set-up key takes the browser's key, the first time; with none
+	// sent either, simple.scl is left as it is.
+	if devStudioWorkspaceHasSetUpKey(ws) {
+		requestMessage.DeployKey = ""
+	}
+	if requestMessage.DeployKey != "" {
+		if err := ensureDevStudioSCLConfiguration(ws, requestMessage.InstanceHost, requestMessage.DeployKey); err != nil {
+			bridge.closeWithError(connection, devStudioProtocolError{
+				Type:    "error",
+				Code:    "workspace_configuration_failed",
+				Message: "The instance workspace could not be prepared for DevStudio.",
+			})
+			return
+		}
 	}
 
 	session, protocolError := bridge.beginSession(requestMessage.InstanceID, requestMessage.DeployKey, ws)
@@ -789,7 +802,8 @@ func readDevStudioConnectRequest(connection *websocket.Conn) (devStudioConnectRe
 			Message: "The instance host is invalid.",
 		}
 	}
-	if strings.TrimSpace(request.DeployKey) == "" {
+	// The key may be left out or empty; a key of only spaces is a mistake.
+	if request.DeployKey != "" && strings.TrimSpace(request.DeployKey) == "" {
 		return devStudioConnectRequest{}, &devStudioProtocolError{
 			Type:    "error",
 			Code:    "invalid_deploy_key",

@@ -29,6 +29,11 @@ type Keypair struct {
 // Dir returns ~/.simple/keys — the root directory for all keypairs.
 func Dir() string {
 	homeDir, _ := home.Dir()
+	return keysDir(homeDir)
+}
+
+// keysDir returns the keypair root for the Simple CLI home homeDir.
+func keysDir(homeDir string) string {
 	return filepath.Join(homeDir, ".simple", "keys")
 }
 
@@ -41,7 +46,15 @@ func keyDir(tenant, env, idSuffix string) string {
 // IsEnrolled returns true when both private.pem and the .enrolled sentinel
 // exist for the given tenant, env, and id_suffix.
 func IsEnrolled(tenant, env, idSuffix string) bool {
-	dir := keyDir(tenant, env, idSuffix)
+	homeDir, _ := home.Dir()
+	return IsEnrolledUnder(homeDir, tenant, env, idSuffix)
+}
+
+// IsEnrolledUnder is IsEnrolled for the Simple CLI home homeDir rather than
+// this process's own, such as a DevStudio instance workspace, which is the
+// CLI home of the commands run there.
+func IsEnrolledUnder(homeDir, tenant, env, idSuffix string) bool {
+	dir := filepath.Join(keysDir(homeDir), tenant, env, idSuffix)
 	_, e1 := os.Stat(filepath.Join(dir, "private.pem"))
 	_, e2 := os.Stat(filepath.Join(dir, ".enrolled"))
 	return e1 == nil && e2 == nil
