@@ -501,6 +501,9 @@ type devStudioBridge struct {
 	upgrader     websocket.Upgrader
 	resolver     devStudioWorkspaceResolver
 	codexStarter devStudioCodexStarter
+	// knowledgeFetcher reads the instance's DevStudio playbook and skills at
+	// connect; nil reads nothing.
+	knowledgeFetcher devStudioKnowledgeFetcher
 }
 
 type devStudioSession struct {
@@ -592,7 +595,9 @@ type devStudioProtocolError struct {
 }
 
 func newDevStudioBridge(resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
-	return newDevStudioBridgeWithCodexStarter(newExecDevStudioCodexStarter(), resolvers...)
+	bridge := newDevStudioBridgeWithCodexStarter(newExecDevStudioCodexStarter(), resolvers...)
+	bridge.knowledgeFetcher = fetchDevStudioKnowledge
+	return bridge
 }
 
 func newDevStudioBridgeWithCodexStarter(starter devStudioCodexStarter, resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
@@ -772,6 +777,9 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 		codex.close()
 		return
 	}
+	// Before Codex starts, so it finds the skills and its conversation
+	// opens with the playbook.
+	codex.playbook = bridge.deliverKnowledge(session.workspace, deployKey)
 
 	// Codex starts with the session, not on the first message, so that
 	// session.ready can name the conversation and no Codex startup ever runs
