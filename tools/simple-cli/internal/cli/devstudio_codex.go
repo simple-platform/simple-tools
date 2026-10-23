@@ -23,6 +23,7 @@ import (
 	"unicode/utf8"
 
 	"simple-cli/internal/fsx"
+	"simple-cli/internal/home"
 )
 
 var (
@@ -39,7 +40,7 @@ const (
 	// devStudioDiffLimit caps each file diff sent to the browser, in characters.
 	devStudioDiffLimit = 20000
 	// devStudioThreadFile stores the instance's Codex conversation id, under
-	// <instanceRoot>/.simple/devstudio, so a reconnect resumes it.
+	// ~/.simple/devstudio/<instanceId>, so a reconnect resumes it.
 	devStudioThreadFile = "thread.json"
 	// devStudioSummarySeparator joins the parts of a reasoning summary.
 	devStudioSummarySeparator      = "\n\n"
@@ -369,9 +370,13 @@ type devStudioCodexError struct {
 	CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 }
 
-// devStudioThreadRecord is what .simple/devstudio/thread.json holds.
+// devStudioThreadRecord is what ~/.simple/devstudio/<instanceId>/thread.json
+// holds.
 type devStudioThreadRecord struct {
 	ThreadID string `json:"threadId"`
+	// InstanceRoot is the canonical instance folder the conversation belongs
+	// to, so two folders for one instance never share a conversation.
+	InstanceRoot string `json:"instanceRoot"`
 	// Plan is the conversation's latest plan. Codex does not keep plans in
 	// its history, so the bridge keeps it for the replay.
 	Plan *devStudioPlan `json:"plan,omitempty"`
@@ -1829,8 +1834,21 @@ func devStudioSortedKeys[V any](values map[string]V) []string {
 	return keys
 }
 
-func devStudioThreadPath(workspace *devStudioWorkspace) string {
-	return filepath.Join(workspace.instanceRoot, ".simple", "devstudio", devStudioThreadFile)
+// devStudioThreadPath is where the bridge keeps an instance's conversation:
+// in its own folder, never in the workspace. Codex's sandbox lets the agent
+// write anywhere in the workspace, symlinks included, while the bridge runs
+// outside that sandbox.
+func devStudioThreadPath(instanceID string) (string, error) {
+	// The id names a folder, so it is checked here, beside that use, as well
+	// as when the browser connects.
+	if instanceID == "." || instanceID == ".." || !devStudioInstanceIDPattern.MatchString(instanceID) {
+		return "", fmt.Errorf("invalid instance ID: %q", instanceID)
+	}
+	homeDir, err := home.Dir()
+	if err != nil {
+		return "", fmt.Errorf("failed to find the Simple CLI home: %w", err)
+	}
+	return filepath.Join(homeDir, ".simple", "devstudio", instanceID, devStudioThreadFile), nil
 }
 
 // devStudioUserMessageText is the text of one of the person's messages.
@@ -1852,11 +1870,19 @@ func devStudioUserMessageText(content json.RawMessage) string {
 	return strings.Join(texts, "\n")
 }
 
-// readDevStudioThreadID returns the conversation stored for this instance,
-// or "" when there is none.
+// readDevStudioThreadID returns the conversation stored for this instance
+// folder, or "" when there is none. A conversation stored for another folder
+// of the same instance is not returned.
 func readDevStudioThreadID(workspace *devStudioWorkspace) (string, error) {
 	record, err := readDevStudioThreadRecord(workspace)
-	return record.ThreadID, err
+	if err != nil || record.ThreadID == "" {
+		return "", err
+	}
+	if record.InstanceRoot != workspace.instanceRoot {
+		log.Printf("[DevStudio Bridge] The stored conversation belongs to another folder of this instance; starting a new one")
+		return "", nil
+	}
+	return record.ThreadID, nil
 }
 
 // writeDevStudioThreadID stores a conversation id with no plan yet.
@@ -1866,7 +1892,11 @@ func writeDevStudioThreadID(workspace *devStudioWorkspace, threadID string) erro
 
 func readDevStudioThreadRecord(workspace *devStudioWorkspace) (devStudioThreadRecord, error) {
 	var record devStudioThreadRecord
-	contents, err := os.ReadFile(devStudioThreadPath(workspace))
+	path, err := devStudioThreadPath(workspace.instanceID)
+	if err != nil {
+		return record, err
+	}
+	contents, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return record, nil
 	}
@@ -1880,8 +1910,13 @@ func readDevStudioThreadRecord(workspace *devStudioWorkspace) (devStudioThreadRe
 	return record, nil
 }
 
+// writeDevStudioThreadRecord stores record for this instance folder.
 func writeDevStudioThreadRecord(workspace *devStudioWorkspace, record devStudioThreadRecord) error {
-	path := devStudioThreadPath(workspace)
+	path, err := devStudioThreadPath(workspace.instanceID)
+	if err != nil {
+		return err
+	}
+	record.InstanceRoot = workspace.instanceRoot
 	if err := os.MkdirAll(filepath.Dir(path), fsx.DirPerm); err != nil {
 		return fmt.Errorf("failed to store the conversation: %w", err)
 	}

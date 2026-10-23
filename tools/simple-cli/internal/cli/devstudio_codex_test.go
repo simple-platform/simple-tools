@@ -453,9 +453,12 @@ func TestDevStudioCodexStartsAtConnectAndUsesVerifiedProtocol(t *testing.T) {
 			t.Fatalf("thread/start config %s = %v, want %v", key, config[key], want)
 		}
 	}
-	stored, err := os.ReadFile(filepath.Join(instanceRoot, ".simple", "devstudio", "thread.json"))
-	if err != nil || !strings.Contains(string(stored), `"threadId":"thread_fake"`) {
-		t.Fatalf("stored conversation = %q, %v", stored, err)
+	record, err := readDevStudioThreadRecord(&devStudioWorkspace{instanceID: "inst_codex", instanceRoot: instanceRoot})
+	if err != nil || record.ThreadID != "thread_fake" || record.InstanceRoot != instanceRoot {
+		t.Fatalf("stored conversation = %+v, %v", record, err)
+	}
+	if _, err := os.Stat(filepath.Join(instanceRoot, ".simple", "devstudio")); !os.IsNotExist(err) {
+		t.Fatalf("the bridge wrote its record inside the workspace the agent can edit: %v", err)
 	}
 
 	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.start", "text": "Inspect both applications."})
@@ -594,7 +597,7 @@ func TestDevStudioCodexMapsTurnEventsToProtocolVersion2(t *testing.T) {
 	if completed["turnId"] != "turn_fake" || completed["status"] != "completed" || completed["durationMs"] != float64(1234) || completed["error"] != nil {
 		t.Fatalf("turn.completed = %v", completed)
 	}
-	record, err := readDevStudioThreadRecord(&devStudioWorkspace{instanceRoot: instanceRoot})
+	record, err := readDevStudioThreadRecord(&devStudioWorkspace{instanceID: "inst_events", instanceRoot: instanceRoot})
 	if err != nil || record.ThreadID != "thread_fake" || record.Plan == nil || len(record.Plan.Steps) != 2 || record.Plan.Steps[0].Status != "in_progress" {
 		t.Fatalf("stored record = %+v, %v, want the latest plan beside the conversation id", record, err)
 	}
@@ -842,7 +845,7 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 	createDevStudioApp(t, baseDir, "inst_resume", "app-one")
 	instanceRoot := filepath.Join(baseDir, "inst_resume")
 	explanation := "Smallest change first"
-	if err := writeDevStudioThreadRecord(&devStudioWorkspace{instanceRoot: instanceRoot}, devStudioThreadRecord{
+	if err := writeDevStudioThreadRecord(&devStudioWorkspace{instanceID: "inst_resume", instanceRoot: instanceRoot}, devStudioThreadRecord{
 		ThreadID: "thread_saved",
 		Plan:     &devStudioPlan{Explanation: &explanation, Steps: []devStudioPlanStep{{Step: "Read the apps", Status: "completed"}}},
 	}); err != nil {
@@ -922,7 +925,7 @@ func TestDevStudioCodexResumesStoredConversationAndReplaysIt(t *testing.T) {
 func TestDevStudioCodexStartsNewConversationWhenStoredOneIsGone(t *testing.T) {
 	baseDir := setupTestProductionRoot(t, "inst_gone")
 	createDevStudioApp(t, baseDir, "inst_gone", "app-one")
-	workspace := &devStudioWorkspace{instanceRoot: filepath.Join(baseDir, "inst_gone")}
+	workspace := &devStudioWorkspace{instanceID: "inst_gone", instanceRoot: filepath.Join(baseDir, "inst_gone")}
 	if err := writeDevStudioThreadID(workspace, "thread_deleted"); err != nil {
 		t.Fatalf("store conversation: %v", err)
 	}
@@ -937,10 +940,45 @@ func TestDevStudioCodexStartsNewConversationWhenStoredOneIsGone(t *testing.T) {
 	}
 }
 
+// Two folders can hold the same instance; each keeps its own conversation.
+func TestDevStudioCodexDoesNotResumeAnotherFoldersConversation(t *testing.T) {
+	baseDir := setupTestProductionRoot(t, "inst_moved")
+	createDevStudioApp(t, baseDir, "inst_moved", "app-one")
+	instanceRoot := filepath.Join(baseDir, "inst_moved")
+	if err := writeDevStudioThreadID(&devStudioWorkspace{instanceID: "inst_moved", instanceRoot: "/elsewhere/inst_moved"}, "thread_elsewhere"); err != nil {
+		t.Fatalf("store conversation: %v", err)
+	}
+	starter := newFakeDevStudioCodexStarter(nil)
+	_, ready := connectDevStudioSession(t, newDevStudioBridgeWithCodexStarter(starter), "inst_moved")
+	if ready["threadId"] != "thread_fake" || ready["resumed"] != false {
+		t.Fatalf("session.ready = %v, want a new conversation", ready)
+	}
+	if _, resumed := starter.request("thread/resume"); resumed {
+		t.Fatal("the bridge resumed a conversation stored for another folder")
+	}
+	record, err := readDevStudioThreadRecord(&devStudioWorkspace{instanceID: "inst_moved", instanceRoot: instanceRoot})
+	if err != nil || record.ThreadID != "thread_fake" || record.InstanceRoot != instanceRoot {
+		t.Fatalf("stored record = %+v, %v, want this folder's new conversation", record, err)
+	}
+}
+
+func TestDevStudioThreadPathStaysInTheCLIHome(t *testing.T) {
+	cliHome := t.TempDir()
+	t.Setenv("SIMPLE_CLI_HOME", cliHome)
+	if path, err := devStudioThreadPath("inst_acme"); err != nil || path != filepath.Join(cliHome, ".simple", "devstudio", "inst_acme", "thread.json") {
+		t.Fatalf("devStudioThreadPath = %q, %v", path, err)
+	}
+	for _, instanceID := range []string{"", ".", "..", "../outside", "a/b", `a\b`} {
+		if path, err := devStudioThreadPath(instanceID); err == nil {
+			t.Fatalf("devStudioThreadPath(%q) = %q, want an error", instanceID, path)
+		}
+	}
+}
+
 func TestDevStudioCodexConversationNewStartsFreshConversation(t *testing.T) {
 	baseDir := setupTestProductionRoot(t, "inst_new_conversation")
 	createDevStudioApp(t, baseDir, "inst_new_conversation", "app-one")
-	workspace := &devStudioWorkspace{instanceRoot: filepath.Join(baseDir, "inst_new_conversation")}
+	workspace := &devStudioWorkspace{instanceID: "inst_new_conversation", instanceRoot: filepath.Join(baseDir, "inst_new_conversation")}
 	starter := newFakeDevStudioCodexStarter(nil)
 	connection, _ := connectDevStudioSession(t, newDevStudioBridgeWithCodexStarter(starter), "inst_new_conversation")
 	sendDevStudioMessage(t, connection, map[string]any{"type": "turn.start", "text": "Plan something."})
@@ -969,7 +1007,7 @@ func TestDevStudioCodexConversationNewStartsFreshConversation(t *testing.T) {
 func TestDevStudioCodexReportsUnreadableHistoryAfterReady(t *testing.T) {
 	baseDir := setupTestProductionRoot(t, "inst_no_history")
 	createDevStudioApp(t, baseDir, "inst_no_history", "app-one")
-	if err := writeDevStudioThreadID(&devStudioWorkspace{instanceRoot: filepath.Join(baseDir, "inst_no_history")}, "thread_saved"); err != nil {
+	if err := writeDevStudioThreadID(&devStudioWorkspace{instanceID: "inst_no_history", instanceRoot: filepath.Join(baseDir, "inst_no_history")}, "thread_saved"); err != nil {
 		t.Fatalf("store conversation: %v", err)
 	}
 	starter := newFakeDevStudioCodexStarter(nil)

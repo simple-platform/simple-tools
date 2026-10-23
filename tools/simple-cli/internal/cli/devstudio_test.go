@@ -32,6 +32,8 @@ func setupTestProductionRoot(t *testing.T, instanceIDs ...string) string {
 	oldRoot := devStudioProductionRoot
 	devStudioProductionRoot = dir
 	t.Cleanup(func() { devStudioProductionRoot = oldRoot })
+	// The bridge keeps conversation records under the Simple CLI home.
+	t.Setenv("SIMPLE_CLI_HOME", filepath.Join(dir, "cli-home"))
 
 	for _, id := range instanceIDs {
 		instanceRoot := filepath.Join(dir, id)
@@ -73,7 +75,7 @@ func TestDevStudioServeCommandIsRegistered(t *testing.T) {
 }
 
 func TestDevStudioBridgeStartsOnLoopback(t *testing.T) {
-	bridge := newTestDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -277,7 +279,7 @@ func TestDevStudioInjectableResolver(t *testing.T) {
 			}, nil
 		}
 
-		bridge := newTestDevStudioBridge(customResolver)
+		bridge := newTestDevStudioBridge(t, customResolver)
 		server := httptest.NewServer(bridge.handler())
 		defer server.Close()
 
@@ -301,7 +303,7 @@ func TestDevStudioInjectableResolver(t *testing.T) {
 func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 	t.Run("returns instance_path_required when instance not found in candidate paths", func(t *testing.T) {
 		setupTestProductionRoot(t) // Empty production root
-		bridge := newTestDevStudioBridge()
+		bridge := newTestDevStudioBridge(t)
 		server := httptest.NewServer(bridge.handler())
 		t.Cleanup(server.Close)
 
@@ -323,7 +325,7 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 		baseDir := t.TempDir()
 		customInstancePath := filepath.Join(baseDir, "my_custom_instance")
 
-		bridge := newTestDevStudioBridge()
+		bridge := newTestDevStudioBridge(t)
 		server := httptest.NewServer(bridge.handler())
 		t.Cleanup(server.Close)
 
@@ -604,7 +606,7 @@ func TestDevStudioBridgeClearsSessionWhenBrowserDisconnects(t *testing.T) {
 }
 
 func TestDevStudioBridgeDoesNotExposeOtherEndpoints(t *testing.T) {
-	bridge := newTestDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	server := httptest.NewServer(bridge.handler())
 	defer server.Close()
 
@@ -647,7 +649,7 @@ func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
 	defer cancel()
 	var stdoutBuffer bytes.Buffer
 
-	bridge := newTestDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	done := make(chan error, 1)
 	go func() {
 		done <- serveDevStudioWithBridge(ctx, listener, &stdoutBuffer, bridge)
@@ -689,7 +691,7 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var output bytes.Buffer
-	bridge := newTestDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 
 	done := make(chan error, 1)
 	go func() {
@@ -736,15 +738,18 @@ func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
 }
 
 // newTestDevStudioBridge is a bridge whose sessions start a fake Codex, so
-// no test ever launches the real one.
-func newTestDevStudioBridge(resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
+// no test ever launches the real one, and whose conversation records go to a
+// temporary Simple CLI home, never the real one.
+func newTestDevStudioBridge(t *testing.T, resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
+	t.Helper()
+	t.Setenv("SIMPLE_CLI_HOME", t.TempDir())
 	return newDevStudioBridgeWithCodexStarter(newFakeDevStudioCodexStarter(nil), resolvers...)
 }
 
 func startDevStudioBridge(t *testing.T) (*devStudioBridge, string) {
 	t.Helper()
 	setupTestProductionRoot(t, "inst_acme_dev")
-	bridge := newTestDevStudioBridge()
+	bridge := newTestDevStudioBridge(t)
 	server := httptest.NewServer(bridge.handler())
 	t.Cleanup(server.Close)
 
