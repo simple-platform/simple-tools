@@ -126,7 +126,12 @@ func (execDevStudioCodexStarter) Start(config devStudioCodexStartConfig) (devStu
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, devStudioCodexExecutable, "app-server", "--stdio")
 	cmd.Dir = config.WorkspaceRoot
-	cmd.Env = devStudioCodexEnvironment(config.WorkspaceRoot, config.InstanceID, config.DeployKey)
+	environment, err := devStudioCodexEnvironment(config.WorkspaceRoot, config.InstanceID, config.DeployKey)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("failed to prepare the Codex environment: %w", err)
+	}
+	cmd.Env = environment
 
 	input, err := cmd.StdinPipe()
 	if err != nil {
@@ -147,7 +152,7 @@ func (execDevStudioCodexStarter) Start(config devStudioCodexStartConfig) (devStu
 	return process, nil
 }
 
-func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) []string {
+func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) ([]string, error) {
 	environment := make([]string, 0, len(os.Environ())+5)
 	for _, item := range os.Environ() {
 		if strings.HasPrefix(item, "SIMPLE_CLI_HOME=") || strings.HasPrefix(item, "SIMPLE_LOCAL_API_KEY=") || strings.HasPrefix(item, "SIMPLE_INSTANCE_ID=") || strings.HasPrefix(item, "XDG_DATA_HOME=") || strings.HasPrefix(item, "TMPDIR=") {
@@ -158,8 +163,14 @@ func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) []st
 	if executable, err := os.Executable(); err == nil {
 		environment = prependDevStudioExecutableDirectory(environment, filepath.Dir(executable))
 	}
-	dataDir := filepath.Join(workspaceRoot, ".simple", "data")
-	tmpDir := filepath.Join(workspaceRoot, ".simple", "tmp")
+	dataDir, err := devStudioPathInside(workspaceRoot, ".simple", "data")
+	if err != nil {
+		return nil, err
+	}
+	tmpDir, err := devStudioPathInside(workspaceRoot, ".simple", "tmp")
+	if err != nil {
+		return nil, err
+	}
 	_ = os.MkdirAll(dataDir, 0755)
 	_ = os.MkdirAll(tmpDir, 0755)
 
@@ -169,7 +180,7 @@ func devStudioCodexEnvironment(workspaceRoot, instanceID, deployKey string) []st
 		"SIMPLE_INSTANCE_ID="+instanceID,
 		"XDG_DATA_HOME="+dataDir,
 		"TMPDIR="+tmpDir,
-	)
+	), nil
 }
 
 func prependDevStudioExecutableDirectory(environment []string, directory string) []string {
@@ -2028,7 +2039,10 @@ func formatSCLValue(val string) string {
 // whether the workspace keeps its own set-up key; simple.scl is then left as
 // it is, and so it is when there is no key to write.
 func ensureDevStudioSCLConfiguration(workspace *devStudioWorkspace, instanceHost, deployKey string) (bool, error) {
-	path := filepath.Join(workspace.instanceRoot, "simple.scl")
+	path, err := devStudioPathInside(workspace.instanceRoot, "simple.scl")
+	if err != nil {
+		return false, fmt.Errorf("failed to locate workspace configuration: %w", err)
+	}
 	contents, err := os.ReadFile(path)
 	if err == nil && devStudioSCLHasSetUpKey(workspace, contents) {
 		return true, nil
@@ -2068,7 +2082,16 @@ func devStudioSCLHasSetUpKey(workspace *devStudioWorkspace, contents []byte) boo
 	if err != nil || !isValidDevStudioInstanceID(idSuffix) {
 		return false
 	}
-	return keystore.IsEnrolledUnder(workspace.instanceRoot, tenant, "devstudio", idSuffix)
+	for _, file := range keystore.EnrolledFiles(tenant, "devstudio", idSuffix) {
+		path, err := devStudioPathInside(workspace.instanceRoot, file)
+		if err != nil {
+			return false
+		}
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // devStudioSCLTenantAndKey reads the tenant and the env devstudio api_key
@@ -2194,7 +2217,10 @@ func snapshotDevStudioProtectedFiles(workspace *devStudioWorkspace) (map[string]
 	}
 	snapshot := make(map[string]devStudioProtectedFile, len(paths))
 	for _, relative := range paths {
-		path := filepath.Join(workspace.instanceRoot, relative)
+		path, err := devStudioPathInside(workspace.instanceRoot, relative)
+		if err != nil {
+			return nil, fmt.Errorf("failed to snapshot protected file: %w", err)
+		}
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to snapshot protected file: %w", err)
@@ -2222,7 +2248,10 @@ func restoreChangedDevStudioProtectedFiles(workspace *devStudioWorkspace, snapsh
 	}
 	changed := make([]string, 0)
 	for relative, before := range snapshot {
-		path := filepath.Join(workspace.instanceRoot, relative)
+		path, err := devStudioPathInside(workspace.instanceRoot, relative)
+		if err != nil {
+			return nil, fmt.Errorf("failed to restore protected file: %w", err)
+		}
 		contents, err := os.ReadFile(path)
 		if err == nil && devStudioHash(contents) == before.hash {
 			if info, statErr := os.Stat(path); statErr == nil && info.Mode().Perm() == before.mode {
@@ -2253,7 +2282,13 @@ func restoreChangedDevStudioProtectedFiles(workspace *devStudioWorkspace, snapsh
 func discoverDevStudioProtectedFiles(workspace *devStudioWorkspace) ([]string, error) {
 	roots := []string{workspace.instanceRoot}
 	for _, appDir := range workspace.appDirs {
-		roots = append(roots, workspace.appPath(appDir))
+		// An app that now leads outside the instance folder is skipped, as
+		// the walk below skips every link.
+		appPath, err := devStudioPathInside(workspace.instanceRoot, devStudioAppsDirectory, appDir)
+		if err != nil {
+			continue
+		}
+		roots = append(roots, appPath)
 	}
 	seen := make(map[string]struct{})
 	for _, root := range roots {
