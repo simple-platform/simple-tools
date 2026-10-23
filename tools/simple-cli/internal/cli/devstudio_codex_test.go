@@ -1324,7 +1324,11 @@ func TestDevStudioSessionUpdatesExistingDevStudioEnvironment(t *testing.T) {
 // workspace, so every tool cache they use must be there, and Node must not be
 // told to read the system's certificates, which the sandbox denies.
 func TestDevStudioCodexEnvironmentKeepsToolCachesInTheWorkspace(t *testing.T) {
-	root := t.TempDir()
+	// The bridge passes the instance folder with its links resolved.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve the instance folder: %v", err)
+	}
 	t.Setenv("NODE_USE_SYSTEM_CA", "1")
 	t.Setenv("NODE_EXTRA_CA_CERTS", "/etc/company-ca.pem")
 	t.Setenv("PNPM_HOME", "/Users/someone/Library/pnpm")
@@ -1332,7 +1336,10 @@ func TestDevStudioCodexEnvironmentKeepsToolCachesInTheWorkspace(t *testing.T) {
 	t.Setenv("npm_config_store_dir", "/Users/someone/Library/pnpm/store")
 	t.Setenv("XDG_CACHE_HOME", "/Users/someone/.cache")
 	t.Setenv("CARGO_HOME", "/Users/someone/.cargo")
-	environment := devStudioCodexEnvironment(root, "inst_current", "current-key")
+	environment, err := devStudioCodexEnvironment(root, "inst_current", "current-key")
+	if err != nil {
+		t.Fatalf("devStudioCodexEnvironment() error = %v", err)
+	}
 
 	values := map[string][]string{}
 	for _, item := range environment {
@@ -1362,7 +1369,10 @@ func TestDevStudioCodexEnvironmentUsesOnlyCurrentDevStudioVariables(t *testing.T
 	t.Setenv("SIMPLE_CLI_HOME", "/read-only/cli-home")
 	t.Setenv("SIMPLE_LOCAL_API_KEY", "old-key")
 	t.Setenv("SIMPLE_INSTANCE_ID", "old-instance")
-	environment := devStudioCodexEnvironment("/workspace/simple-devstudio/inst_current", "inst_current", "current-key")
+	environment, err := devStudioCodexEnvironment("/workspace/simple-devstudio/inst_current", "inst_current", "current-key")
+	if err != nil {
+		t.Fatalf("devStudioCodexEnvironment: %v", err)
+	}
 	var home, cliHome, localAPIKey, instanceID []string
 	for _, item := range environment {
 		if strings.HasPrefix(item, "HOME=") {
@@ -1398,7 +1408,11 @@ func TestDevStudioCodexEnvironmentIncludesCurrentCLIExecutableDirectory(t *testi
 		t.Fatalf("resolve current executable: %v", err)
 	}
 	wantPrefix := "PATH=" + filepath.Dir(executable)
-	for _, item := range devStudioCodexEnvironment("/workspace/simple-devstudio/acme", "acme", "current-key") {
+	environment, err := devStudioCodexEnvironment("/workspace/simple-devstudio/acme", "acme", "current-key")
+	if err != nil {
+		t.Fatalf("devStudioCodexEnvironment: %v", err)
+	}
+	for _, item := range environment {
 		if strings.HasPrefix(item, wantPrefix) {
 			return
 		}

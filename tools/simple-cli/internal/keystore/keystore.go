@@ -56,10 +56,21 @@ func IsEnrolled(tenant, env, idSuffix string) bool {
 // this process's own, such as a DevStudio instance workspace, which is the
 // CLI home of the commands run there.
 func IsEnrolledUnder(homeDir, tenant, env, idSuffix string) bool {
-	dir := filepath.Join(keysDir(homeDir), tenant, env, idSuffix)
-	_, e1 := os.Stat(filepath.Join(dir, "private.pem"))
-	_, e2 := os.Stat(filepath.Join(dir, ".enrolled"))
-	return e1 == nil && e2 == nil
+	for _, file := range EnrolledFiles(tenant, env, idSuffix) {
+		if _, err := os.Stat(filepath.Join(homeDir, file)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// EnrolledFiles names the files, relative to a Simple CLI home, whose presence
+// shows that the key pair for tenant, env and idSuffix is set up. DevStudio
+// checks them itself, inside an instance workspace, so that a symbolic link
+// there cannot point the check at files somewhere else.
+func EnrolledFiles(tenant, env, idSuffix string) []string {
+	dir := filepath.Join(keysDir(""), tenant, env, idSuffix)
+	return []string{filepath.Join(dir, "private.pem"), filepath.Join(dir, ".enrolled")}
 }
 
 // GenerateAndSave creates a new Ed25519 keypair and persists it to disk under the tenant+env-scoped directory.

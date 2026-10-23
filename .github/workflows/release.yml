@@ -190,25 +190,23 @@ jobs:
       # `feat(<the tool's scope>):` makes it a minor. The changelog is
       # stricter: it leaves out a commit made for another tool.
       #
-      # A MAJOR IS WRITTEN OUT IN FULL AND CANNOT BE TYPED BY ACCIDENT. Above
-      # 1.0 the major is the line an installed tool does not cross by itself,
-      # and when to cross it is a judgement about timing that a diff cannot
-      # make: a break can land on `main` well ahead of the release that
-      # carries it. A `!` still records the break where a reader looks for it,
-      # in `git log` and under Breaking Changes in the changelog. Recording a
-      # break and choosing the release that carries it are two acts, and only
-      # the sentence `<type>(<scope>): release the next major` does the second.
+      # A `!` RELEASES THE NEXT MAJOR. A commit that changes the tool and whose
+      # subject is `<type>(<scope>)!: …` marks a breaking change, and the
+      # release that carries it is the next major, as anyone reading
+      # Conventional Commits expects. The sentence
+      # `<type>(<scope>): release the next major` still asks for a major
+      # without a break, such as a tool's first 1.0.0.
       #
-      # THE SENTENCE COUNTS ONLY ON A COMMIT THAT CHANGES THE TOOL. The action
-      # lists the commits to read with `change_path`, so a commit that touches
-      # nothing under the tool's path is not read at all, whatever its subject
-      # says. An empty commit carrying the sentence was tried and left the
-      # version where it was.
+      # BOTH COUNT ONLY ON A COMMIT THAT CHANGES THE TOOL. The action lists the
+      # commits to read with `change_path`, so a commit that touches nothing
+      # under the tool's path is not read at all, whatever its subject says. An
+      # empty commit carrying the sentence was tried and left the version where
+      # it was.
       #
-      # `search_commit_body` is OFF, and that is what makes the sentence safe
-      # to write down. With bodies searched it would be enough to QUOTE it, in
-      # a commit explaining this policy, to compute a major from a change that
-      # declared nothing. The subject line is the one place a release is
+      # `search_commit_body` is OFF, so only the subject line counts. With
+      # bodies searched, quoting a `!` subject or the sentence in a commit that
+      # explains this policy would be enough to compute a major from a change
+      # that declared nothing. The subject line is the one place a release is
       # deliberate, so only it is read.
 
       # TWO SCOPES ARE THE SIMPLE CLI'S. Its commits carry `simple-cli`, and
@@ -223,7 +221,7 @@ jobs:
         uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
-          major_pattern: '/\(simple-cli\)!?: release the next major/'
+          major_pattern: '/\((simple-cli|cli)\)!:|\(simple-cli\)!?: release the next major/'
           minor_pattern: '/feat\((simple-cli|cli)\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: tools/simple-cli
@@ -238,7 +236,7 @@ jobs:
         uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
-          major_pattern: '/\(contextualizer\)!?: release the next major/'
+          major_pattern: '/\(contextualizer\)!:|\(contextualizer\)!?: release the next major/'
           minor_pattern: '/feat\(contextualizer\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: tools/contextualizer
@@ -253,7 +251,7 @@ jobs:
         uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
-          major_pattern: '/\(scl-parser\)!?: release the next major/'
+          major_pattern: '/\(scl-parser\)!:|\(scl-parser\)!?: release the next major/'
           minor_pattern: '/feat\(scl-parser\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: packages/scl_parser
@@ -268,7 +266,7 @@ jobs:
         uses: paulhatch/semantic-version@9f72830310d5ed81233b641ee59253644cd8a8fc # v6.0.2
         with:
           tag_prefix: v
-          major_pattern: '/\(scl-parser-cli\)!?: release the next major/'
+          major_pattern: '/\(scl-parser-cli\)!:|\(scl-parser-cli\)!?: release the next major/'
           minor_pattern: '/feat\(scl-parser-cli\):/'
           version_format: '${major}.${minor}.${patch}'
           change_path: tools/scl_parser_cli

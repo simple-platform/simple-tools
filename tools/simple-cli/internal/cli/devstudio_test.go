@@ -24,13 +24,15 @@ import (
 // instance root before it reports that root or measures containment against
 // it, so the fixture names the same resolved directory. Some platforms hand
 // out a per-test temporary directory that is reached through a symlink, and
-// the unresolved alias names a path the bridge never uses.
+// the unresolved alias names a path the bridge never uses. The directory is
+// also the home folder, because the bridge only works inside home.
 func setupTestProductionRoot(t *testing.T, instanceIDs ...string) string {
 	t.Helper()
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatalf("resolve test production root: %v", err)
 	}
+	t.Setenv("HOME", dir)
 	oldRoot := devStudioProductionRoot
 	devStudioProductionRoot = dir
 	t.Cleanup(func() { devStudioProductionRoot = oldRoot })
@@ -324,8 +326,8 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 	})
 
 	t.Run("initializes and connects when custom instancePath is provided", func(t *testing.T) {
-		baseDir := t.TempDir()
-		customInstancePath := filepath.Join(baseDir, "my_custom_instance")
+		baseDir := setupTestProductionRoot(t)
+		customInstancePath := filepath.Join(baseDir, "workspace", "inst_custom_path")
 
 		bridge := newTestDevStudioBridge(t)
 		server := httptest.NewServer(bridge.handler())
@@ -365,6 +367,172 @@ func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
 	})
 }
 
+// TestDevStudioBridgeRefusesUnsafeInstanceFolders covers the folders the
+// browser may name that the bridge must not hand to Codex, which may write
+// anywhere inside the folder it is given.
+func TestDevStudioBridgeRefusesUnsafeInstanceFolders(t *testing.T) {
+	type folder struct {
+		instanceID    string
+		instancePath  string
+		mustNotExist  string
+		unchangedFile string
+	}
+	// makeHome creates a home folder under base and makes it the home folder.
+	makeHome := func(t *testing.T, elements ...string) string {
+		t.Helper()
+		home := filepath.Join(elements...)
+		if err := os.MkdirAll(home, 0755); err != nil {
+			t.Fatalf("create home: %v", err)
+		}
+		t.Setenv("HOME", home)
+		return home
+	}
+	// makeInstance creates an instance folder whose simple.scl is a link to target.
+	makeInstance := func(t *testing.T, root, target string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(root, devStudioAppsDirectory), 0755); err != nil {
+			t.Fatalf("create instance: %v", err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, "simple.scl")); err != nil {
+			t.Fatalf("link simple.scl: %v", err)
+		}
+	}
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, base string) folder
+		wantCode   string
+		wantReason string
+	}{
+		{
+			name: "home folder itself",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "inst_home")
+				return folder{instanceID: "inst_home", instancePath: home, mustNotExist: filepath.Join(home, devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be inside your home folder",
+		},
+		{
+			name: "root of the disk",
+			setup: func(t *testing.T, base string) folder {
+				makeHome(t, base, "person")
+				return folder{instanceID: "inst_root", instancePath: "/", mustNotExist: filepath.Join("/", devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be named after the instance",
+		},
+		{
+			name: "folder above home",
+			setup: func(t *testing.T, base string) folder {
+				makeHome(t, base, "inst_above", "person")
+				above := filepath.Join(base, "inst_above")
+				return folder{instanceID: "inst_above", instancePath: above, mustNotExist: filepath.Join(above, devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be inside your home folder",
+		},
+		{
+			name: "last name is not the instance",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				path := filepath.Join(home, "workspace", "other_name")
+				return folder{instanceID: "inst_named", instancePath: path, mustNotExist: path}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be named after the instance",
+		},
+		{
+			name: "link from home to a folder outside it",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				outside := filepath.Join(base, "elsewhere", "inst_link")
+				if err := os.MkdirAll(outside, 0755); err != nil {
+					t.Fatalf("create outside folder: %v", err)
+				}
+				link := filepath.Join(home, "inst_link")
+				if err := os.Symlink(outside, link); err != nil {
+					t.Fatalf("link instance folder: %v", err)
+				}
+				return folder{instanceID: "inst_link", instancePath: link, mustNotExist: filepath.Join(outside, devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be inside your home folder",
+		},
+		{
+			name: "path through ..",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				// Joined by hand, because filepath.Join would remove the "..".
+				return folder{instanceID: "inst_dotdot", instancePath: home + "/workspace/../inst_dotdot", mustNotExist: filepath.Join(home, "inst_dotdot")}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: `without ".."`,
+		},
+		{
+			name: "simple.scl links to a file outside the folder",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				outside := filepath.Join(base, "elsewhere.scl")
+				if err := os.WriteFile(outside, []byte("keep\n"), 0644); err != nil {
+					t.Fatalf("write outside file: %v", err)
+				}
+				root := filepath.Join(home, "inst_scl_link")
+				makeInstance(t, root, outside)
+				return folder{instanceID: "inst_scl_link", instancePath: root, unchangedFile: outside}
+			},
+			wantCode:   "workspace_configuration_failed",
+			wantReason: "could not be prepared",
+		},
+		{
+			name: "simple.scl links to a missing file outside the folder",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				outside := filepath.Join(base, "planted.scl")
+				root := filepath.Join(home, "inst_scl_dangling")
+				makeInstance(t, root, outside)
+				return folder{instanceID: "inst_scl_dangling", instancePath: root, mustNotExist: outside}
+			},
+			wantCode:   "workspace_configuration_failed",
+			wantReason: "could not be prepared",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("resolve base: %v", err)
+			}
+			fixture := tt.setup(t, base)
+			server := httptest.NewServer(newDevStudioBridge().handler())
+			t.Cleanup(server.Close)
+			connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+			defer func() { _ = connection.Close() }()
+
+			connect := sessionConnectMessage(fixture.instanceID)
+			connect["instancePath"] = fixture.instancePath
+			sendDevStudioMessage(t, connection, connect)
+			message := readDevStudioMessage(t, connection)
+
+			if message["type"] != "error" || message["code"] != tt.wantCode {
+				t.Fatalf("message = %v, want error %s", message, tt.wantCode)
+			}
+			if text, _ := message["message"].(string); !strings.Contains(text, tt.wantReason) {
+				t.Fatalf("message text = %q, want it to say %q", text, tt.wantReason)
+			}
+			if fixture.mustNotExist != "" {
+				if _, err := os.Lstat(fixture.mustNotExist); !os.IsNotExist(err) {
+					t.Fatalf("%s exists after the refusal (err = %v)", fixture.mustNotExist, err)
+				}
+			}
+			if fixture.unchangedFile != "" {
+				if contents, err := os.ReadFile(fixture.unchangedFile); err != nil || string(contents) != "keep\n" {
+					t.Fatalf("%s = %q, %v; want it unchanged", fixture.unchangedFile, contents, err)
+				}
+			}
+		})
+	}
+}
+
 func TestDevStudioBridgeHandshake(t *testing.T) {
 	_, wsURL := startDevStudioBridge(t)
 	connection := dialDevStudio(t, wsURL)
@@ -394,6 +562,35 @@ func TestDevStudioBridgeHandshake(t *testing.T) {
 		if _, exists := message[forbidden]; exists {
 			t.Fatalf("response unexpectedly contained forbidden field %q", forbidden)
 		}
+	}
+}
+
+// A link the agent plants under the instance folder must not point the
+// set-up-key check, or the folders the helper tools write to, somewhere else.
+func TestDevStudioInstancePathsRefuseLinksOutOfTheFolder(t *testing.T) {
+	baseDir := setupTestProductionRoot(t, "inst_links")
+	instanceRoot := filepath.Join(baseDir, "inst_links")
+	outside := filepath.Join(t.TempDir(), ".simple")
+	pairDir := filepath.Join(outside, "keys", "acme", "devstudio", "000002")
+	if err := os.MkdirAll(pairDir, 0755); err != nil {
+		t.Fatalf("make key pair folder: %v", err)
+	}
+	for _, name := range []string{"private.pem", ".enrolled"} {
+		if err := os.WriteFile(filepath.Join(pairDir, name), []byte("test"), 0600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(instanceRoot, ".simple")); err != nil {
+		t.Fatalf("link .simple: %v", err)
+	}
+
+	workspace := &devStudioWorkspace{instanceID: "inst_links", instanceRoot: instanceRoot}
+	config := "tenant acme\n\nenv devstudio {\n  api_key \"si_000002" + strings.Repeat("a", 64) + "\"\n}\n"
+	if devStudioSCLHasSetUpKey(workspace, []byte(config)) {
+		t.Fatal("a key pair outside the instance folder counted as set up")
+	}
+	if _, err := devStudioCodexEnvironment(instanceRoot, "inst_links", "current-key"); err == nil {
+		t.Fatal("helper tool folders behind a link out of the instance folder were accepted")
 	}
 }
 
@@ -1007,7 +1204,9 @@ func TestDevStudioBridgeLogsBrowserValuesOnOneLine(t *testing.T) {
 	defer func() { _ = connection.Close() }()
 
 	request := sessionConnectMessage("inst_log")
-	request["instancePath"] = filepath.Join(blocker, "x\n[DevStudio Bridge] forged")
+	// The folder ends in the instance id, as the bridge requires, so the
+	// request gets as far as finding that a file is in the way.
+	request["instancePath"] = filepath.Join(blocker, "x\n[DevStudio Bridge] forged", "inst_log")
 	sendDevStudioMessage(t, connection, request)
 	if message := readDevStudioMessage(t, connection); message["code"] != "workspace_initialization_failed" {
 		t.Fatalf("connect = %v, want workspace_initialization_failed", message)
