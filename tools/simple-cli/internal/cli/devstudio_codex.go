@@ -2023,36 +2023,42 @@ func formatSCLValue(val string) string {
 	return fmt.Sprintf("%q", val)
 }
 
-func ensureDevStudioSCLConfiguration(workspace *devStudioWorkspace, instanceHost, deployKey string) error {
+// ensureDevStudioSCLConfiguration reads the workspace's simple.scl once and
+// decides from it what happens to the browser's deploy key. It reports
+// whether the workspace keeps its own set-up key; simple.scl is then left as
+// it is, and so it is when there is no key to write.
+func ensureDevStudioSCLConfiguration(workspace *devStudioWorkspace, instanceHost, deployKey string) (bool, error) {
 	path := filepath.Join(workspace.instanceRoot, "simple.scl")
-	log.Printf("[DevStudio Bridge] Writing SCL configuration to %s", devStudioLogValue(path))
 	contents, err := os.ReadFile(path)
+	if err == nil && devStudioSCLHasSetUpKey(workspace, contents) {
+		return true, nil
+	}
+	if deployKey == "" {
+		return false, nil
+	}
+	log.Printf("[DevStudio Bridge] Writing SCL configuration to %s", devStudioLogValue(path))
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("failed to inspect workspace configuration: %w", err)
+			return false, fmt.Errorf("failed to inspect workspace configuration: %w", err)
 		}
 		contents = []byte(fmt.Sprintf("tenant %s\n\nenv devstudio {\n  endpoint %s\n  api_key %s\n}\n", workspace.instanceID, formatSCLValue(instanceHost), formatSCLValue(deployKey)))
 	} else {
 		contents, err = ensureDevStudioEnvironment(contents, instanceHost, deployKey)
 		if err != nil {
-			return fmt.Errorf("failed to prepare workspace configuration: %w", err)
+			return false, fmt.Errorf("failed to prepare workspace configuration: %w", err)
 		}
 	}
 	if err := os.WriteFile(path, contents, fsx.FilePerm); err != nil {
-		return fmt.Errorf("failed to create workspace configuration: %w", err)
+		return false, fmt.Errorf("failed to create workspace configuration: %w", err)
 	}
-	return nil
+	return false, nil
 }
 
-// devStudioWorkspaceHasSetUpKey reports whether the workspace's simple.scl
-// names a literal si_ key for env devstudio whose key pair is already set up
-// in the workspace, the CLI home of the commands DevStudio runs. The CLI then
-// signs in with that key pair, and the key's text only finds the pair.
-func devStudioWorkspaceHasSetUpKey(workspace *devStudioWorkspace) bool {
-	contents, err := os.ReadFile(filepath.Join(workspace.instanceRoot, "simple.scl"))
-	if err != nil {
-		return false
-	}
+// devStudioSCLHasSetUpKey reports whether simple.scl contents name a literal
+// si_ key for env devstudio whose key pair is already set up in the
+// workspace, the CLI home of the commands DevStudio runs. The CLI then signs
+// in with that key pair, and the key's text only finds the pair.
+func devStudioSCLHasSetUpKey(workspace *devStudioWorkspace, contents []byte) bool {
 	tenant, apiKey := devStudioSCLTenantAndKey(string(contents))
 	if !isValidDevStudioInstanceID(tenant) || !strings.HasPrefix(apiKey, "si_") {
 		return false

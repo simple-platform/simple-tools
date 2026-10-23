@@ -638,24 +638,23 @@ func (bridge *devStudioBridge) handleWebSocket(writer http.ResponseWriter, reque
 		}
 	}
 
+	keptWorkspaceKey, err := ensureDevStudioSCLConfiguration(ws, requestMessage.InstanceHost, requestMessage.DeployKey)
+	if err != nil {
+		bridge.closeWithError(connection, devStudioProtocolError{
+			Type:    "error",
+			Code:    "workspace_configuration_failed",
+			Message: "The instance workspace could not be prepared for DevStudio.",
+		})
+		return
+	}
 	// Once the workspace's key pair is set up, the CLI signs in with it for
 	// as long as the key lives, so the browser's key is ignored: written to
 	// simple.scl, the next deploy would use it up, and it may be someone
 	// else's. It is not written, logged or given to Codex. Only a workspace
 	// with no set-up key takes the browser's key, the first time; with none
 	// sent either, simple.scl is left as it is.
-	if devStudioWorkspaceHasSetUpKey(ws) {
+	if keptWorkspaceKey {
 		requestMessage.DeployKey = ""
-	}
-	if requestMessage.DeployKey != "" {
-		if err := ensureDevStudioSCLConfiguration(ws, requestMessage.InstanceHost, requestMessage.DeployKey); err != nil {
-			bridge.closeWithError(connection, devStudioProtocolError{
-				Type:    "error",
-				Code:    "workspace_configuration_failed",
-				Message: "The instance workspace could not be prepared for DevStudio.",
-			})
-			return
-		}
 	}
 
 	session, protocolError := bridge.beginSession(requestMessage.InstanceID, requestMessage.DeployKey, ws)
