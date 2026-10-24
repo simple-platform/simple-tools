@@ -177,17 +177,17 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 	if !strings.Contains(content, "ListView") {
 		t.Error("space app template must use ListView")
 	}
-	if !strings.Contains(content, "TableRecordSourceV1") {
-		t.Error("space app template must type table source with TableRecordSourceV1")
+	if !strings.Contains(content, "TableRecordSource") {
+		t.Error("space app template must use the public TableRecordSource type")
 	}
 	if !strings.Contains(content, "kind: 'table'") || strings.Contains(content, "kind: 'items'") {
 		t.Error("space app template must keep its default managed view database-backed")
 	}
-	if !strings.Contains(content, "ListPresetV1") {
-		t.Error("space app template must type preset with ListPresetV1")
+	if !strings.Contains(content, "ListPreset") {
+		t.Error("space app template must use the public ListPreset type")
 	}
-	if !strings.Contains(content, "iconId: 'list'") {
-		t.Error("space app template must demonstrate a validated preset icon")
+	if strings.Contains(content, "iconId:") {
+		t.Error("space app template must derive the preset icon from kind")
 	}
 	if !strings.Contains(content, `tableId,`) || !strings.Contains(content, "application_tables") {
 		t.Error("space app template must resolve a table ID and use it as the managed view source")
@@ -213,11 +213,11 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 		t.Fatalf("read build-spaces skill template: %v", err)
 	}
 	skillContent := string(skill)
-	if !strings.Contains(skillContent, "TableRecordSourceV1") || !strings.Contains(skillContent, "kind: 'table'") {
-		t.Error("build-spaces skill template must document TableRecordSourceV1")
+	if !strings.Contains(skillContent, "TableRecordSource") || !strings.Contains(skillContent, "kind: 'table'") {
+		t.Error("build-spaces skill template must document TableRecordSource")
 	}
-	if !strings.Contains(skillContent, "RECORD_VIEW_ICON_IDS_V1") {
-		t.Error("build-spaces skill template must document safe optional preset icons")
+	if !strings.Contains(skillContent, "lucide:star") {
+		t.Error("build-spaces skill template must document provider-qualified tile icons")
 	}
 	if !strings.Contains(skillContent, "authorized database table source") || !strings.Contains(skillContent, "kind: 'table'") {
 		t.Error("build-spaces skill template must document the database-backed table source")
