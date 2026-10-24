@@ -34,8 +34,16 @@ set dev_simple_system.custom_view, order_record_view {
 | Type | Description |
 |------|-------------|
 | `record` | Single record view |
-| `list` | Table list view |
+| `list` | Collection presets: Table, List, Board, and Inbox |
 | `dashboard` | Dashboard view |
+
+For an active `list` Custom View, put the versioned preset set in
+`customization.views`. Presets configure database-backed filters, ordering,
+columns, and tiles; they do not supply rows. Platform collection routes support
+all four kinds. Spaces support List, DataGrid, and Board through the UI Kit;
+Inbox is platform-only. Board lanes require an enum field. See
+`.agent/skills/create-view/SKILL.md` and the
+[Custom Views guide](https://simple.com/docs/features/custom-views) for JSON examples.
 
 ---
 
