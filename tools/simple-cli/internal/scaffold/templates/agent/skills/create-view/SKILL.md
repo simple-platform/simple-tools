@@ -17,7 +17,7 @@ set dev_simple_system.custom_view, my_dashboard {
   
   # TYPE:
   # - "record": Single record detail view.
-  # - "list": Table list view.
+  # - "list": Collection presets (Table, List, Board, Inbox).
   # - "dashboard": Widget canvas.
   type dashboard 
 
@@ -26,6 +26,35 @@ set dev_simple_system.custom_view, my_dashboard {
   target_table_id `$var('meta') |> $jq('.tables[] | select(.name == "order") | .id')`
 }
 ```
+
+### Collection preset JSON
+
+Use an active `type list` Custom View for the target table. Put the preset set in its **Customization** field under `views`:
+
+```json
+{
+  "views": {
+    "version": 1,
+    "defaultPresetId": "orders",
+    "presets": [
+      {
+        "id": "orders", "title": "Orders", "kind": "list",
+        "config": { "tile": { "version": 1, "presentation": "row", "titleFieldName": "number" } }
+      },
+      {
+        "id": "orders-table", "title": "Orders table", "kind": "table",
+        "config": { "columns": [{ "fieldName": "number" }, { "fieldName": "amount" }] }
+      }
+    ]
+  }
+}
+```
+
+Use fields that exist on the target table. In SCL, put this JSON in a `var` value block and set `customization` with `$var('order_views_customization') |> $json()`, following existing metadata recipes. Give presets unique IDs and select a valid `defaultPresetId`.
+
+Platform routes support `table`, `list`, `kanban` (UI name Board), and `inbox`. Spaces support List/DataGrid/Board with built-in filters; select one supported preset for the UI Kit component. Board lanes require an enum field. Sources are database identities `{ kind: 'table', appId, tableId }`; preset/tile JSON never supplies rows. Standalone ConditionBuilder remains private.
+
+See the [Custom Views guide](https://simple.com/docs/features/custom-views) for filters, ordering, tile fields, Board summaries, Inbox, and record-Space configuration. Keep View Actions outside the `views` preset object.
 
 ## 3. Defining a View Action (Button)
 Buttons connect the UI to your **Actions** (via Triggers).
@@ -45,7 +74,9 @@ set dev_simple_system.view_action, btn_approve {
   # PLACEMENT:
   # Link to the Custom View ID
   custom_view_id `$var('ids') |> $jq('.views[0].id')`
-  
+}
+```
+
 ## 4. View Properties
 | Property | Description |
 | :--- | :--- |
