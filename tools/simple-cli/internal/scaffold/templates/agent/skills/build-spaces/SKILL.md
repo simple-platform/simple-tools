@@ -177,24 +177,24 @@ Spaces support List, DataGrid, and Board. Inbox presets are rendered only on pla
 
 Managed views require the planned SDK `^3.2.0` release, which is not yet published; SDK 3.1.0 lacks their bridge. Use matching feature builds locally. Publish the compatible SDK before the UI Kit; the release check validates the published bridge. Standalone ConditionBuilder/ConditionSummary remain private. Store multiple presets in `custom_view.customization.views`; select one supported preset for each Space component. See the [Custom Views guide](https://simple.com/docs/features/custom-views) and [UI Kit API](https://github.com/simple-platform/simple-sdks/blob/main/sdks/space-ui/README.md#managed-database-backed-views).
 
-#### Database-Backed Table Source (`TableRecordSourceV1`)
+#### Database-Backed Table Source (`TableRecordSource`)
 
 Use a table source (`kind: 'table'`) when displaying authorized records directly from a Simple Platform database table (such as `dev.simple.system` / `application` or your application's custom tables):
 
 ```tsx
-import type { TableRecordSourceV1 } from '@simpleplatform/ui-kit/contracts'
-import type { ListPresetV1 } from '@simpleplatform/ui-kit/contracts'
+import type { TableRecordSource } from '@simpleplatform/ui-kit/contracts'
+import type { ListPreset } from '@simpleplatform/ui-kit/contracts'
 import { ListView } from '@simpleplatform/ui-kit/react'
 
-const source: TableRecordSourceV1 = {
+const source: TableRecordSource = {
   appId: 'dev.simple.system',
   kind: 'table',
   tableId: applicationsTable.id,
 }
 
-const preset: ListPresetV1 = {
+const preset: ListPreset = {
+  orderBy: [{ direction: 'asc', fieldName: 'display_name' }],
   config: {
-    orderBy: [{ direction: 'asc', fieldName: 'display_name' }],
     tile: {
       detailFieldNames: ['version'],
       presentation: 'row',
@@ -203,7 +203,6 @@ const preset: ListPresetV1 = {
     },
   },
   id: 'applications-list',
-  iconId: 'list',
   kind: 'list',
   title: 'Applications',
 }
@@ -222,7 +221,7 @@ Key characteristics:
 - **Stable logical SCL names:** Presets and filters specify schema field names (e.g., `display_name`, `version`) directly without inspecting metadata tables.
 - **Table ID:** `source.tableId` is the platform table metadata record ID. Resolve it from the authorized metadata available to the Space; the managed renderer verifies it belongs to `source.appId` before loading fields or records.
 - **Presets configure presentation only:** Presets define layout, tiles, sorting, and filters; they do not carry row records.
-- **Preset icons are optional:** Use a supported `iconId` from `RECORD_VIEW_ICON_IDS_V1`; older presets render with a family icon.
+- **Preset icons follow kind:** The platform selects the view icon from `kind`; tile icon IDs use a provider prefix such as `lucide:star`.
 
 Managed views do not render records supplied by external APIs or caller-owned arrays. For external data, build a Space-owned UI around that API instead of presenting it as platform-managed records.
 

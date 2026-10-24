@@ -1,5 +1,5 @@
 import type { SimpleClient, SpaceContext } from '@simpleplatform/sdk/space'
-import type { ListPresetV1, TableRecordSourceV1 } from '@simpleplatform/ui-kit/contracts'
+import type { ListPreset, TableRecordSource } from '@simpleplatform/ui-kit/contracts'
 import { connect } from '@simpleplatform/sdk/space'
 import { ListView } from '@simpleplatform/ui-kit/react'
 import { useEffect, useState } from 'react'
@@ -26,7 +26,7 @@ query GetApplications {
 }
 `
 
-function applicationsSource(tableId: string): TableRecordSourceV1 {
+function applicationsSource(tableId: string): TableRecordSource {
   return {
     appId: 'dev.simple.system',
     kind: 'table',
@@ -34,9 +34,8 @@ function applicationsSource(tableId: string): TableRecordSourceV1 {
   }
 }
 
-const APPLICATIONS_PRESET: ListPresetV1 = {
+const APPLICATIONS_PRESET: ListPreset = {
   config: {
-    orderBy: [{ direction: 'asc', fieldName: 'display_name' }],
     tile: {
       detailFieldNames: ['version'],
       presentation: 'row',
@@ -44,9 +43,9 @@ const APPLICATIONS_PRESET: ListPresetV1 = {
       version: 1,
     },
   },
-  iconId: 'list',
   id: 'applications-list',
   kind: 'list',
+  orderBy: [{ direction: 'asc', fieldName: 'display_name' }],
   title: 'Applications',
 }
 
