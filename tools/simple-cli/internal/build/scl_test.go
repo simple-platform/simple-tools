@@ -1,84 +1,107 @@
 package build
 
 import (
-	"fmt"
+	"errors"
+	"io"
 	"net/http"
-	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
+// answering stands in for GitHub: it answers every request with one status
+// and body, or fails to answer at all.
+type answering struct {
+	status  int
+	body    string
+	failure error
+	asked   []string
+}
+
+func (a *answering) Do(req *http.Request) (*http.Response, error) {
+	a.asked = append(a.asked, req.URL.String())
+	if a.failure != nil {
+		return nil, a.failure
+	}
+
+	return &http.Response{
+		StatusCode: a.status,
+		Status:     http.StatusText(a.status),
+		Header:     http.Header{},
+		Body:       io.NopCloser(strings.NewReader(a.body)),
+	}, nil
+}
+
+// asGitHub puts a stand-in where the releases are asked for, and puts back
+// what was there.
+func asGitHub(t *testing.T, github *answering) {
+	t.Helper()
+
+	previous := sclParserReleases
+	sclParserReleases = github
+	t.Cleanup(func() { sclParserReleases = previous })
+}
+
 func TestFetchSCLParserVersion(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = fmt.Fprintln(w, `version: "1.2.3"`)
-	}))
-	defer server.Close()
+	// The repository's references as git is told them: every tool's tags, of
+	// which only scl-parser's are read.
+	refs := "001e# service=git-upload-pack\n0000" +
+		"0041aaaa refs/tags/v1.0.1-scl-parser\n" +
+		"0045aaaa refs/tags/v1.0.3-scl-parser-cli\n" +
+		"0046aaaa refs/tags/v1.10.0-scl-parser-cli\n" +
+		"0045aaaa refs/tags/v1.9.0-scl-parser-cli\n" +
+		"0041aaaa refs/tags/v9.0.0-simple-cli\n0000"
 
-	origURL := SCLParserMixExsURL
-	SCLParserMixExsURL = server.URL
-	defer func() { SCLParserMixExsURL = origURL }()
-
-	version, err := fetchSCLParserVersion()
-	if err != nil {
-		t.Fatalf("fetchSCLParserVersion() error = %v", err)
-	}
-	if version != "1.2.3" {
-		t.Errorf("got version %s, want 1.2.3", version)
-	}
-}
-
-func TestFetchSCLParserVersion_Error(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	origURL := SCLParserMixExsURL
-	SCLParserMixExsURL = server.URL
-	defer func() { SCLParserMixExsURL = origURL }()
-
-	_, err := fetchSCLParserVersion()
-	if err == nil {
-		t.Error("expected error for 404, got nil")
-	}
-}
-
-func TestExtractVersionFromMixExs(t *testing.T) {
 	tests := []struct {
 		name    string
-		content string
+		github  answering
 		want    string
-		wantErr bool
+		wantErr string
 	}{
 		{
-			name:    "valid version",
-			content: `def project do [ app: :app, version: "1.2.3", elixir: "~> 1.14" ] end`,
-			want:    "1.2.3",
-			wantErr: false,
+			name:   "the newest tag of scl-parser, and no other tool's",
+			github: answering{status: http.StatusOK, body: refs},
+			want:   "1.10.0",
 		},
 		{
-			name:    "version with newlines",
-			content: "version:\n \"2.0.0\"",
-			// Regex might depend on implementation details, usually \s works for newline too
-			want:    "2.0.0",
-			wantErr: false,
+			name:    "no release of scl-parser",
+			github:  answering{status: http.StatusOK, body: "0041aaaa refs/tags/v9.0.0-simple-cli\n"},
+			wantErr: "failed to find the newest scl-parser: no release was found",
 		},
 		{
-			name:    "no version",
-			content: `def project do [ app: :app ] end`,
-			want:    "",
-			wantErr: true,
+			name:    "GitHub refuses",
+			github:  answering{status: http.StatusNotFound},
+			wantErr: "failed to find the newest scl-parser: failed to list the releases",
+		},
+		{
+			name:    "GitHub cannot be reached",
+			github:  answering{failure: errors.New("no network")},
+			wantErr: "failed to find the newest scl-parser: failed to list the releases",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := extractVersionFromMixExs(tt.content)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("extractVersionFromMixExs() error = %v, wantErr %v", err, tt.wantErr)
+			github := tt.github
+			asGitHub(t, &github)
+
+			version, err := fetchSCLParserVersion()
+
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("fetchSCLParserVersion() error = %v, want one containing %q", err, tt.wantErr)
+				}
 				return
 			}
-			if got != tt.want {
-				t.Errorf("extractVersionFromMixExs() = %v, want %v", got, tt.want)
+			if err != nil {
+				t.Fatalf("fetchSCLParserVersion() error = %v", err)
+			}
+			if version != tt.want {
+				t.Errorf("fetchSCLParserVersion() = %q, want %q", version, tt.want)
+			}
+
+			const want = "https://github.com/simple-platform/simple-tools.git/info/refs?service=git-upload-pack"
+			if len(github.asked) != 1 || github.asked[0] != want {
+				t.Errorf("asked %v, want one request to %s", github.asked, want)
 			}
 		})
 	}

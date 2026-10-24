@@ -54,9 +54,9 @@ func TestLoad_Success(t *testing.T) {
 
 	// Write dummy config
 	cfg := Config{
-		OutputDir: "custom_out",
+		OutputDir:    "custom_out",
 		TopLevelDirs: []string{"apps"},
-		Ignore: []string{"node_modules/"},
+		Ignore:       []string{"node_modules/"},
 	}
 	data, _ := json.Marshal(cfg)
 	if err := os.WriteFile(ConfigFileName, data, 0644); err != nil {
@@ -71,7 +71,7 @@ func TestLoad_Success(t *testing.T) {
 	if loaded.OutputDir != "custom_out" {
 		t.Errorf("Expected OutputDir='custom_out', got %s", loaded.OutputDir)
 	}
-	
+
 	// Check strict output dir ignore injection
 	hasIgnore := false
 	for _, ign := range loaded.Ignore {
@@ -113,7 +113,7 @@ func TestLoad_InjectsOutputDir(t *testing.T) {
 	// Config without ignored output dir
 	cfg := Config{
 		OutputDir: ".context",
-		Ignore: []string{}, 
+		Ignore:    []string{},
 	}
 	data, _ := json.Marshal(cfg)
 	if err := os.WriteFile(ConfigFileName, data, 0644); err != nil {

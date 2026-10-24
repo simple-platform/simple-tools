@@ -1,6 +1,7 @@
 package config
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -611,6 +612,36 @@ func TestDefaultSCLParser_Parse(t *testing.T) {
 	}
 }
 
+func TestSimpleSCL_LookupEnv(t *testing.T) {
+	cfg := &SimpleSCL{
+		Environments: map[string]*Environment{
+			"dev": {Name: "dev", Endpoint: "$LOOKUP_TEST_ENDPOINT", APIKey: "$LOOKUP_TEST_UNSET_KEY"},
+		},
+	}
+	t.Setenv("LOOKUP_TEST_ENDPOINT", "acme.simple.dev")
+	t.Setenv("LOOKUP_TEST_UNSET_KEY", "")
+
+	// An unset key is no error: the caller does not sign in.
+	env, err := cfg.LookupEnv("dev")
+	if err != nil {
+		t.Fatalf("LookupEnv() error = %v", err)
+	}
+	if env.Name != "dev" || env.Endpoint != "acme.simple.dev" || env.APIKey != "" {
+		t.Errorf("LookupEnv() = %+v", env)
+	}
+	if cfg.Environments["dev"].Endpoint != "$LOOKUP_TEST_ENDPOINT" {
+		t.Error("LookupEnv() resolved the stored environment in place")
+	}
+
+	if _, err := cfg.LookupEnv("prod"); err == nil || err.Error() != "environment 'prod' not defined in simple.scl" {
+		t.Errorf("LookupEnv(prod) error = %v", err)
+	}
+	// GetEnv still insists on the key.
+	if _, err := cfg.GetEnv("dev"); err == nil || err.Error() != "environment variable LOOKUP_TEST_UNSET_KEY not set" {
+		t.Errorf("GetEnv() error = %v", err)
+	}
+}
+
 func TestSimpleSCL_GetEnv_EmptyAPIKey(t *testing.T) {
 	// Test case where API key is empty string (not env var)
 	cfg := &SimpleSCL{
@@ -773,4 +804,79 @@ func TestEnvironment_IdentityEndpoint(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestLoader_LoadSimpleSCL_BadDotEnvWarns(t *testing.T) {
+	tests := []struct {
+		name       string
+		withWarn   bool
+		wantStderr bool
+	}{
+		{name: "nil Warn writes to stderr", wantStderr: true},
+		{name: "Warn receives the message", withWarn: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "simple.scl"), []byte(""), 0644); err != nil {
+				t.Fatal(err)
+			}
+			envPath := filepath.Join(dir, ".env")
+			if err := os.WriteFile(envPath, []byte("BROKEN=\"never closed\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			var warnings []string
+			loader := &Loader{
+				Parser: &MockSCLParser{Result: []SCLBlock{
+					{Type: "kv", Key: "tenant", Value: "acme"},
+					{Type: "block", Key: "env", Name: "dev", Children: []SCLBlock{
+						{Type: "kv", Key: "endpoint", Value: "dev.example.com"},
+						{Type: "kv", Key: "api_key", Value: "si_key"},
+					}},
+				}},
+				FileReader: os.ReadFile,
+			}
+			if tt.withWarn {
+				loader.Warn = func(msg string) { warnings = append(warnings, msg) }
+			}
+
+			stderr := captureStderr(t, func() {
+				if _, err := loader.LoadSimpleSCL(dir); err != nil {
+					t.Fatalf("LoadSimpleSCL() error = %v; a bad .env must not stop the load", err)
+				}
+			})
+
+			prefix := "warning: failed to load .env file " + envPath + ", continuing without it: "
+			if tt.wantStderr {
+				if !strings.HasPrefix(stderr, prefix) || !strings.HasSuffix(stderr, "\n") || len(warnings) != 0 {
+					t.Errorf("stderr = %q, warnings = %q; want the warning on stderr", stderr, warnings)
+				}
+				return
+			}
+			if stderr != "" || len(warnings) != 1 || !strings.HasPrefix(warnings[0], prefix) || strings.HasSuffix(warnings[0], "\n") {
+				t.Errorf("stderr = %q, warnings = %q; want one warning through Warn", stderr, warnings)
+			}
+		})
+	}
+}
+
+// captureStderr returns what fn writes to os.Stderr.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := os.Stderr
+	os.Stderr = writer
+	defer func() { os.Stderr = orig }()
+	fn()
+	_ = writer.Close()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = reader.Close()
+	return string(data)
 }

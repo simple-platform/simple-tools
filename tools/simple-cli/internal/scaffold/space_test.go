@@ -29,7 +29,6 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 			"templates/space/vitest.config.ts":     []byte(`// vitest config`),
 			"templates/space/tsconfig.json":        []byte(`// ts config`),
 			"templates/space/index.html":           []byte(`<title>{{.DisplayName}}</title>`),
-			"templates/space/src/lib/simple.ts":    []byte(`// simple sdk`),
 			"templates/space/src/styles/theme.css": []byte(`/* theme */`),
 			"templates/space/src/main.tsx":         []byte(`// main`),
 			"templates/space/src/App.tsx":          []byte(`<h1>{{.DisplayName}}</h1>`),
@@ -65,6 +64,169 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 	spacesScl := written["/root/apps/com.acme.app/records/10_spaces.scl"]
 	if !strings.Contains(string(spacesScl), "my_space") {
 		t.Errorf("10_spaces.scl doesn't contain space name, got: %s", string(spacesScl))
+	}
+}
+
+func TestSpaceTemplatesUseUnifiedSDK(t *testing.T) {
+	packageJSON, err := TemplatesFS.ReadFile("templates/space/package.json")
+	if err != nil {
+		t.Fatalf("read package template: %v", err)
+	}
+	if !strings.Contains(string(packageJSON), `"@simpleplatform/sdk"`) {
+		t.Error("space package template must depend on @simpleplatform/sdk")
+	}
+
+	appSource, err := TemplatesFS.ReadFile("templates/space/src/App.tsx")
+	if err != nil {
+		t.Fatalf("read app template: %v", err)
+	}
+	content := string(appSource)
+	if !strings.Contains(content, "@simpleplatform/sdk/space") {
+		t.Error("space app template must use the Space SDK entry point")
+	}
+	if strings.Contains(content, "GRAPHQL_REQUEST") {
+		t.Error("space app template must not copy the GraphQL MessagePort protocol")
+	}
+	if strings.Contains(content, "getSimple") {
+		t.Error("space app template must call connect directly without a local SDK wrapper")
+	}
+	if strings.Contains(content, "connectSpace") {
+		t.Error("space app template must not call removed connectSpace")
+	}
+	if !strings.Contains(content, "connect({") {
+		t.Error("space app template must call connect({ targetOrigin }) directly")
+	}
+	if !strings.Contains(content, "if (!document.referrer)") || !strings.Contains(content, "configure a trusted host origin") {
+		t.Error("space app template must show a useful error when no trusted host origin is available")
+	}
+
+	themeCSS, err := TemplatesFS.ReadFile("templates/space/src/styles/theme.css")
+	if err != nil {
+		t.Fatalf("read theme template: %v", err)
+	}
+	if strings.Contains(string(themeCSS), "loadTheme") {
+		t.Error("space theme template must not document an unavailable loadTheme API")
+	}
+
+	skill, err := TemplatesFS.ReadFile("templates/agent/skills/build-spaces/SKILL.md")
+	if err != nil {
+		t.Fatalf("read build-spaces skill template: %v", err)
+	}
+	if strings.Contains(string(skill), "case 'list'") {
+		t.Error("build-spaces skill template must not document unsupported list context")
+	}
+	if strings.Contains(string(skill), "connectSpace") {
+		t.Error("build-spaces skill template must not instruct customers to import or call connectSpace")
+	}
+	if !strings.Contains(string(skill), "connect({") {
+		t.Error("build-spaces skill template must document connect({ targetOrigin })")
+	}
+	if strings.Contains(string(skill), "ONLY be used within the `client-bnv`") || strings.Contains(string(skill), "`client-bnv` repository root") {
+		t.Error("build-spaces skill template must describe the configured workspace instead of hard-coding a repository")
+	}
+	if !strings.Contains(string(skill), "simple.actions.run") || strings.Contains(string(skill), "Actions) cannot be invoked from Spaces") {
+		t.Error("build-spaces skill template must document the supported Space action API")
+	}
+	for _, component := range []string{"ListView", "DataGrid", "Board"} {
+		if !strings.Contains(string(skill), component) {
+			t.Errorf("build-spaces skill template must document %s", component)
+		}
+	}
+	for _, component := range []string{"ConditionBuilder", "ConditionSummary", "InboxView"} {
+		if strings.Contains(string(skill), "<"+component) {
+			t.Errorf("build-spaces skill template must not demonstrate unsupported Space API %s", component)
+		}
+	}
+
+	appTest, err := TemplatesFS.ReadFile("templates/space/tests/App.test.tsx")
+	if err != nil {
+		t.Fatalf("read app test template: %v", err)
+	}
+	if strings.Contains(string(appTest), "connectSpace") {
+		t.Error("space app test template must not mock deprecated connectSpace")
+	}
+	if !strings.Contains(string(appTest), "connect:") {
+		t.Error("space app test template must mock connect")
+	}
+}
+
+func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
+	packageJSON, err := TemplatesFS.ReadFile("templates/space/package.json")
+	if err != nil {
+		t.Fatalf("read package template: %v", err)
+	}
+	pkgContent := string(packageJSON)
+	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit"`) {
+		t.Error("space package template must depend on @simpleplatform/ui-kit")
+	}
+	if !strings.Contains(pkgContent, `"@simpleplatform/sdk": "^3.2.0"`) {
+		t.Error("space package template must depend on @simpleplatform/sdk ^3.2.0 for the managed UI bridge")
+	}
+	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit": "^0.3.0"`) {
+		t.Error("space package template must depend on the UI Kit release that provides managed record views")
+	}
+
+	appSource, err := TemplatesFS.ReadFile("templates/space/src/App.tsx")
+	if err != nil {
+		t.Fatalf("read app template: %v", err)
+	}
+	content := string(appSource)
+	if !strings.Contains(content, "@simpleplatform/ui-kit/react") {
+		t.Error("space app template must import from @simpleplatform/ui-kit/react")
+	}
+	if !strings.Contains(content, "ListView") {
+		t.Error("space app template must use ListView")
+	}
+	if !strings.Contains(content, "TableRecordSourceV1") {
+		t.Error("space app template must type table source with TableRecordSourceV1")
+	}
+	if !strings.Contains(content, "kind: 'table'") || strings.Contains(content, "kind: 'items'") {
+		t.Error("space app template must keep its default managed view database-backed")
+	}
+	if !strings.Contains(content, "ListPresetV1") {
+		t.Error("space app template must type preset with ListPresetV1")
+	}
+	if !strings.Contains(content, "iconId: 'list'") {
+		t.Error("space app template must demonstrate a validated preset icon")
+	}
+	if !strings.Contains(content, `tableId,`) || !strings.Contains(content, "application_tables") {
+		t.Error("space app template must resolve a table ID and use it as the managed view source")
+	}
+	if strings.Contains(content, "simple-record-view") {
+		t.Error("space app template must not directly reference or copy simple-record-view protocol element")
+	}
+
+	appTest, err := TemplatesFS.ReadFile("templates/space/tests/App.test.tsx")
+	if err != nil {
+		t.Fatalf("read app test template: %v", err)
+	}
+	testContent := string(appTest)
+	if !strings.Contains(testContent, "@simpleplatform/ui-kit/react") {
+		t.Error("space app test template must mock @simpleplatform/ui-kit/react")
+	}
+	if !strings.Contains(testContent, "managed-list-view") {
+		t.Error("space app test template must test ListView rendering")
+	}
+
+	skill, err := TemplatesFS.ReadFile("templates/agent/skills/build-spaces/SKILL.md")
+	if err != nil {
+		t.Fatalf("read build-spaces skill template: %v", err)
+	}
+	skillContent := string(skill)
+	if !strings.Contains(skillContent, "TableRecordSourceV1") || !strings.Contains(skillContent, "kind: 'table'") {
+		t.Error("build-spaces skill template must document TableRecordSourceV1")
+	}
+	if !strings.Contains(skillContent, "RECORD_VIEW_ICON_IDS_V1") {
+		t.Error("build-spaces skill template must document safe optional preset icons")
+	}
+	if !strings.Contains(skillContent, "authorized database table source") || !strings.Contains(skillContent, "kind: 'table'") {
+		t.Error("build-spaces skill template must document the database-backed table source")
+	}
+	if strings.Contains(skillContent, "ItemsRecordSourceV1") || strings.Contains(skillContent, "kind: 'items'") {
+		t.Error("build-spaces skill template must not describe a caller-owned item source")
+	}
+	if !strings.Contains(skillContent, "No Protocol Code Copying") {
+		t.Error("build-spaces skill template must explain not copying protocol code")
 	}
 }
 
@@ -342,7 +504,6 @@ func TestCreateSpaceStructure_RecordsDirError(t *testing.T) {
 			"templates/space/vitest.config.ts":     []byte(`// vitest`),
 			"templates/space/tsconfig.json":        []byte(`{}`),
 			"templates/space/index.html":           []byte(`<html>`),
-			"templates/space/src/lib/simple.ts":    []byte(`// sdk`),
 			"templates/space/src/styles/theme.css": []byte(`/* theme */`),
 			"templates/space/src/main.tsx":         []byte(`// main`),
 			"templates/space/src/App.tsx":          []byte(`// app`),

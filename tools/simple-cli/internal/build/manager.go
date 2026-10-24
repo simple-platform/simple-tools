@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"simple-cli/internal/fsx"
+	"simple-cli/internal/home"
 	internalRuntime "simple-cli/internal/runtime"
 	"sync"
 )
@@ -22,8 +23,11 @@ var (
 	BundleAsyncFunc               = BundleAsync
 	CompileToWasmFunc             = CompileToWasm
 	OptimizeWasmFunc              = OptimizeWasm
-	ValidateLanguageFunc          = ValidateLanguage
+	DetectActionLanguageFunc      = DetectActionLanguage
 	ParseExecutionEnvironmentFunc = ParseExecutionEnvironment
+	EnsureCargoFunc               = EnsureCargo
+	EnsureRustWasmTargetFunc      = EnsureRustWasmTarget
+	CargoBuildWasmFunc            = CargoBuildWasm
 )
 
 type ProgressReporter func(item, status string, done bool, err error)
@@ -121,7 +125,7 @@ func (m *BuildManager) EnsureTools(onProgress ProgressReporter) error {
 		}
 
 		// Extract runtime plugin
-		homeDir, err := os.UserHomeDir()
+		homeDir, err := home.Dir()
 		if err != nil {
 			homeDir = "."
 		}
@@ -183,17 +187,111 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		}
 	}
 
-	// Validate language (TS only)
-	if err := ValidateLanguageFunc(actionDir); err != nil {
+	lang, err := DetectActionLanguageFunc(actionDir)
+	if err != nil {
 		report("Failed")
 		return ActionBuildResult{ActionName: actionName, Error: err}
 	}
 
-	// Parse execution environment from SCL
+	// Parse execution environment from SCL.
+	//
+	// This is read before the language branch and passed into it, because it is
+	// the same decision for every language: `server` needs the sync artifact,
+	// `client` the async one, `both` needs two. Only how those artifacts are
+	// produced differs below.
 	execEnv, _ := ParseExecutionEnvironmentFunc(m.tools.SCLParser, actionDir)
 	needsSync := execEnv == "server" || execEnv == "both"
 	needsAsync := execEnv == "client" || execEnv == "both"
 
+	// An environment that names neither artifact is refused here, before any
+	// compiler is asked for one.
+	//
+	// The three values are matched exactly, so anything else — a typo, a
+	// capital letter, a value some later version of the platform understands
+	// and this CLI does not — leaves both flags false. Every step below is
+	// guarded by one of those flags, so the build would otherwise walk the
+	// whole pipeline doing nothing and report success over an empty build/
+	// directory. That is the one failure a developer cannot see: the command
+	// said it worked, and the artifact that never appeared is only missed at
+	// deploy time. The value read is quoted back because the fix is a single
+	// word in the SCL and naming it is what points at that word.
+	if !needsSync && !needsAsync {
+		report("Failed")
+		return ActionBuildResult{
+			ActionName: actionName,
+			Error: fmt.Errorf("execution_environment is %q, which names no artifact to build: it has to be exactly server, client, or both",
+				execEnv),
+		}
+	}
+
+	switch lang {
+	case LanguageTypeScript:
+		return m.buildTypeScriptAction(actionDir, actionName, needsSync, needsAsync, report)
+	case LanguageRust:
+		return m.buildRustAction(actionDir, actionName, needsSync, needsAsync, report)
+	case LanguageGo:
+		return m.buildGoAction(actionDir, actionName, report)
+	default:
+		// Every language the detector can answer with is named above, so this is
+		// reached only by one added to the detector and not to the build. It is
+		// refused by name rather than handed to whichever branch happens to be
+		// written last: an action compiled by the wrong toolchain, or described
+		// by nothing at all, is a failure its author meets at deploy time.
+		report("Failed")
+		return ActionBuildResult{
+			ActionName: actionName,
+			Error:      fmt.Errorf("this action is written in %s, and this build has no path for that language", lang),
+		}
+	}
+}
+
+// buildGoAction describes a Go action, and says where its module comes from.
+//
+// DESCRIBING AN ACTION IS NOT COMPILING IT, AND ONLY ONE OF THE TWO BELONGS TO
+// THE PLATFORM. The module does: a Go action is compiled when the app is
+// deployed, and this CLI has no part in that. The description does not — the
+// sentences a model reads, the input schema a caller is validated against and
+// the action's statement about whether an agent may call it are all generated
+// from the source by the same generator every other language goes through, and
+// nothing else in a developer's loop generates them.
+//
+// Saying "the platform compiles this" and returning was therefore an answer to
+// a question nobody had asked. A Go action reached this tool, was told where its
+// module comes from, and went away with whatever action.json an earlier run had
+// left beside it — or with none at all, which the platform's own build reads as
+// an action that has never been built. A whole app written in Go could be built
+// by this tool with no file describing any of it, and the run said nothing,
+// because the step that would have said something was never reached.
+//
+// AN ACTION THAT CANNOT BE DESCRIBED FROM ITS OWN SOURCE DOES NOT BUILD, which
+// is the sentence the other two languages already enforce. The failure is
+// carried out whole rather than summarised: a refusal is the exact sentence its
+// author has to read to fix their source, and every other failure this step
+// raises already names what could not be done.
+//
+// IT ENDS IN A FAILURE EVEN WHEN EVERY STEP WORKED, because the module is half
+// of what a build is asked for and this half is not produced here. The progress
+// view repaints each row in place and is torn down when the run ends, so a
+// status reported into it is gone before it can be read — the error is the only
+// thing that survives to reach a developer, and a Go action reported as built
+// leaves one waiting for an artifact that was never going to appear. What the
+// build did do is named in the same sentence, so the failure is not read as
+// nothing having happened.
+func (*BuildManager) buildGoAction(actionDir, actionName string, report func(string)) ActionBuildResult {
+	fail := func(err error) ActionBuildResult {
+		report("Failed")
+		return ActionBuildResult{ActionName: actionName, Error: err}
+	}
+
+	report("Extracting metadata...")
+	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
+		return fail(err)
+	}
+
+	return fail(fmt.Errorf("this action is written in Go: its action.json was written here from its source, and its module was not, because this CLI does not compile Go — the platform compiles a Go action when the app is deployed"))
+}
+
+func (m *BuildManager) buildTypeScriptAction(actionDir, actionName string, needsSync, needsAsync bool, report func(string)) ActionBuildResult {
 	// Install dependencies
 	report("Installing dependencies...")
 	if err := EnsureDependenciesFunc(actionDir); err != nil {
@@ -201,11 +299,29 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		return ActionBuildResult{ActionName: actionName, Error: fmt.Errorf("npm install failed: %w", err)}
 	}
 
-	// Extract metadata (non-blocking - log warning on failure)
+	// AN ACTION THAT CANNOT BE DESCRIBED FROM ITS OWN SOURCE DOES NOT BUILD.
+	//
+	// This step produces the description a model reads, the input schema a
+	// caller is validated against, and the action's statement about whether an
+	// agent may call it at all. It was allowed to fail and carry on, which made
+	// it a gate that never closed: the failure was reported into a progress row
+	// the next step overwrote milliseconds later, the build said Done and exited
+	// zero, and the action.json from before the edit stayed on disk and stayed
+	// authoritative. An author who mistyped an effect was told nothing and
+	// shipped the old exposure statement.
+	//
+	// It is also the only reason the two build entry points could disagree about
+	// the same source. The platform's mix task raises on this, so a source that
+	// failed there built cleanly here — and a rule enforced by whichever tool
+	// the author happened to run is not a rule.
+	//
+	// The failure is carried out whole rather than summarised: every error this
+	// step produces already names what could not be done, and a refusal is the
+	// exact sentence its author has to read to fix their source.
 	report("Extracting metadata...")
 	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
-		// Log warning but continue build (metadata extraction failure is non-fatal)
-		report(fmt.Sprintf("Metadata extraction warning: %v", err))
+		report("Failed")
+		return ActionBuildResult{ActionName: actionName, Error: err}
 	}
 
 	// Create build directory

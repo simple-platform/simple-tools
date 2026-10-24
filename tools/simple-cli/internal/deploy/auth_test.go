@@ -610,8 +610,8 @@ func TestEnrollAndAuthenticate_RequestFormat(t *testing.T) {
 	futureToken := createTestJWT(time.Now().Add(1 * time.Hour).Unix())
 	mockClient := &MockHTTPClient{
 		Responses: []*http.Response{
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                                                              // Enroll
-			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, futureToken))))},                                                             // Login
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte{}))},                                                                                                                 // Enroll
+			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(fmt.Sprintf(`{"access_token":"%s"}`, futureToken))))},                                                                // Login
 			{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader([]byte(`{"keys":[{"kty":"OKP","kid":"KEYmytestid","crv":"Ed25519","x":"MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTI"}]}`)))}, // JWKS
 		},
 	}

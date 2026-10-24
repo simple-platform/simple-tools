@@ -3,6 +3,6 @@ set dev_simple_system.logic, {{.ActionNameScl}} {
   display_name "{{.DisplayName}}"
   description "{{.Description}}"
   execution_environment {{.ExecutionEnv}}
-  language typescript
+  language {{.Language}}
   is_active true
 }

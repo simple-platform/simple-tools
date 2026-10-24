@@ -1,0 +1,19 @@
+version: "2"
+
+# internal/build/scripts/ holds the platform's metadata generators, carried
+# here byte for byte so `simple build` describes an action exactly as the
+# platform's build does. A finding in them can only be fixed upstream: editing
+# the copy is how the copies drifted a whole vocabulary apart.
+#
+# One finding is excluded, by name. The platform's Go extractor has kept an
+# unused `qualifyingTags` since it stopped refusing the listing tags without
+# @tool (platform commit 0f92d4f80). Delete this rule when that variable is
+# gone upstream and the copy is re-synced; anything else in the file is still
+# reported.
+linters:
+  exclusions:
+    rules:
+      - path: internal/build/scripts/extract_godoc\.go
+        linters:
+          - unused
+        text: "var qualifyingTags is unused"

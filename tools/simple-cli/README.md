@@ -24,13 +24,66 @@
 
 ## Installation
 
-### Automatic Install (Recommended)
-
-Run the following command to install `simple` on macOS, Linux, or Windows (Git Bash):
+### Install a Release (Recommended)
 
 ```bash
-curl -fsSL https://tools.simple.dev/simple-cli/install | bash
+curl -fsSL https://raw.githubusercontent.com/simple-platform/simple-tools/main/tools/simple-cli/install | bash
 ```
+
+The installer downloads the newest release of the CLI for your machine, checks it against the SHA-256 published with that release, and puts it at `~/.simple/bin/simple`. The CLI keeps everything it uses under `~/.simple`, and its own program lives there too.
+
+It then adds `~/.simple/bin` to your `PATH` in your shell's profile. Open a new terminal, or `source` the file it names, and `simple` is there.
+
+Releases are published on the [releases page](https://github.com/simple-platform/simple-tools/releases) under tags named `v<version>-simple-cli`. Each carries one program per supported machine, and `simple-cli-checksums.txt` with the SHA-256 of each:
+
+| Machine                | File                           |
+| ---------------------- | ------------------------------ |
+| macOS on Apple silicon | `simple-cli-darwin-arm64`      |
+| Windows on x64         | `simple-cli-windows-amd64.exe` |
+
+**If you would rather not change your `PATH`**, link the program from a folder that is already on it:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s ~/.simple/bin/simple ~/.local/bin/simple
+```
+
+`simple version update` follows the link and replaces the program it points at.
+
+**Windows (x64):**
+
+In Git Bash, the installer above works as it is and installs `~/.simple/bin/simple.exe`. It adds the folder to the `PATH` of Git Bash only.
+
+For PowerShell or the Command Prompt, download `simple-cli-windows-amd64.exe` from the release, save it as `%USERPROFILE%\.simple\bin\simple.exe`, and add `%USERPROFILE%\.simple\bin` to your `PATH`.
+
+**By hand, on macOS (Apple silicon):**
+
+```bash
+# The release to install: the newest "Simple CLI" on the releases page
+VERSION=1.0.0
+
+mkdir -p ~/.simple/bin
+curl -fsSL -o ~/.simple/bin/simple.download \
+  "https://github.com/simple-platform/simple-tools/releases/download/v${VERSION}-simple-cli/simple-cli-darwin-arm64"
+chmod +x ~/.simple/bin/simple.download
+mv ~/.simple/bin/simple.download ~/.simple/bin/simple
+
+export PATH="$HOME/.simple/bin:$PATH"
+```
+
+Put the last line in your shell's profile to keep it. Download with `curl` as above rather than a browser: macOS quarantines a program a browser downloaded and refuses to start it. The download is saved beside the program and then moved over it, because macOS stops trusting a program whose file was written into in place.
+
+### Update
+
+```bash
+# Show the installed version and whether a newer one is out
+simple version
+
+# Download the newest release for this machine and replace the installed program
+simple version update
+```
+
+The CLI also looks for a newer release by itself, at most once a day, and tells you when there is one. It only does so for a person at a terminal: it says nothing in a script, in CI, or with `--json`.
 
 ### Install from Source
 
@@ -44,8 +97,9 @@ cd simple-tools/tools/simple-cli
 # Build the binary
 go build -o simple ./cmd/simple
 
-# (Optional) Install to PATH
-sudo mv simple /usr/local/bin/
+# Install it where the CLI keeps everything else
+mkdir -p ~/.simple/bin
+mv simple ~/.simple/bin/simple
 ```
 
 ### Verify Installation
@@ -120,7 +174,11 @@ simple build apps/com.company.crm --concurrency 8
 
 ### `simple test`
 
-Run tests for applications, actions, or record behaviors using Vitest.
+Run tests for applications, actions, or record behaviors.
+
+Each target runs under its own test runner: TypeScript and JavaScript under
+Vitest, Rust actions under `cargo test`. A Rust action's tests run on this
+machine against the SDK's test seam, so they need no wasm build and no emulator.
 
 **Usage:**
 
@@ -138,7 +196,7 @@ simple test [app-id] [flags]
 |------|-------|---------|-------------|
 | `--action` | `-a` | - | Run tests for a specific action. |
 | `--behavior` | `-b` | - | Run tests for a specific record behavior. |
-| `--coverage` | | `false` | Enable code coverage reporting. |
+| `--coverage` | | `false` | Enable code coverage reporting. Vitest targets only; Rust coverage is a separate tool (`cargo-llvm-cov`), so Rust actions run without it and the run says so. |
 | `--json` | | `false` | Output results in JSON format. |
 
 **Examples:**
@@ -155,6 +213,165 @@ simple test com.mycompany.crm --action send-email
 
 # Test behavior
 simple test com.mycompany.crm --behavior order
+```
+
+---
+
+### `simple deploy`
+
+Deploy an application to an environment: bump the version in `app.scl`, upload the files the server does not have yet, publish the version, and install it.
+
+**Usage:**
+
+```bash
+simple deploy <app-path> --env <environment> [flags]
+```
+
+**Arguments:**
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `app-path` | Yes | Path to the application directory, e.g. `apps/com.mycompany.crm`. |
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--bump` | - | `patch`, `minor` or `major`. Required for the first deploy after a prod release. |
+| `--dry-run` | `false` | Show the version and the files a deploy would upload, and change nothing (see below). |
+| `--no-install` | `false` | Publish the version without installing it. |
+| `--progress` | `auto` | How progress is shown: `auto`, `tty` or `plain` (see below). |
+| `--json` | `false` | Print one JSON document instead of progress (see below). |
+
+**Progress output:**
+
+A deploy runs as a list of steps: load project config, authenticate, bump version, collect files, connect, compare with server, upload files, publish version, install. Progress goes to stdout.
+
+- **On a terminal** the list is drawn live and repainted in place: every step is shown, pending ones included, with a spinner, its duration, and a progress bar while files are collected and uploaded. When the deploy ends, the finished list stays on screen, followed by the result line.
+- **Anywhere else** (a pipe, a file, a CI log) each event is one plain line with no escape sequences: `[n/N] Step` when a step starts, then `✓` done, `✗` failed, `-` skipped or `■` interrupted, with the step's detail and duration. Upload progress is printed at most every 10 seconds, and a step that has printed nothing for 30 seconds prints `still running (<duration>)`, so CI jobs do not time out on silence.
+- `auto` picks the live view only when stdout is a terminal, `TERM` is not `dumb` and `CI` is unset, `false` or `0`. `--progress=tty` or `--progress=plain` overrides that choice. `--json` shows no progress at all.
+- With `CI` set to `false` or `0`, the live view is drawn without colour: the colour library treats any non-empty `CI` as a non-terminal.
+
+```text
+🚀 Deploying apps/com.acme.crm to dev
+[1/9] Load project config
+[1/9] ✓ Load project config: com.acme.crm · tenant acme (0.4s)
+...
+[7/9] Upload files
+      104/312 files · 4.1/12.4 MB (33%)
+      208/312 files · 8.3/12.4 MB (66%)
+[7/9] ✓ Upload files: 312 files · 12.4 MB (28s)
+[8/9] Publish version
+[8/9] ✓ Publish version: com.acme.crm@1.4.3-dev.5 (18.3s)
+[9/9] Install to dev
+      still running (30s)
+      still running (1m00s)
+      still running (1m30s)
+[9/9] ✓ Install to dev: 1.4.3-dev.5 (1m52s)
+✅ Deployed com.acme.crm@1.4.3-dev.5 (Installed) in 3m21.86s
+```
+
+**Failures and interrupts:** when a deploy fails or is interrupted, it says what it left behind before the error: `app.scl` already bumped on disk, or a publish or install the server may still finish after the CLI stopped waiting, and the `simple install` command to run next. Ctrl+C or `SIGTERM` stops the deploy gracefully: the current step gets up to 2 seconds to stop (on a terminal, `Waiting for "<step>" to stop` shows while it does), and the error names where the interrupt stopped it, e.g. `deploy interrupted during "Upload files" after 4.2s`. A second Ctrl+C exits at once. The exit code is 1. On a terminal, Ctrl+Z suspends the deploy as usual.
+
+**Dry run:** `--dry-run` loads `simple.scl` and `app.scl`, computes the version a deploy would bump to, collects the files and lists them, sorted by path. It does not sign in (the environment's API key need not be set), does not connect to the server and does not write `app.scl`, so the listed `app.scl` hash is the file as it is on disk; a real deploy uploads it with the new version.
+
+**JSON output (`--json`):** stdout carries at most one JSON document and nothing else, and no progress is printed. A `.env` file that fails to load is still reported, as a plain `warning: ...` line on stderr. Errors go to stderr as `{"error": "..."}` and the exit code is 1.
+
+| Outcome                           | stdout                                                                                                                                               | Exit code |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
+| Success                           | `{"status":"success","app_id","version","files":{"total","new","cached"},"duration_ms"}`, plus `"installed","install_success"` unless `--no-install` | 0         |
+| Published, install failed         | `{"status":"error","error":"deploy successful but install failed: ...","app_id","version"}`                                                          | 1         |
+| Dry run                           | `{"dry_run":true,"version","files":[{"path","hash","size"}]}`, files sorted by path                                                                  | 0         |
+| Any other failure or an interrupt | nothing                                                                                                                                              | 1         |
+
+When the connection drops or the reply times out during the install, the server may still be installing, and the error reads `deploy successful but the install result is unknown: ...` instead.
+
+**Examples:**
+
+```bash
+# First deploy to dev after a prod release
+simple deploy apps/com.mycompany.crm --env dev --bump patch
+
+# Preview what would be uploaded
+simple deploy apps/com.mycompany.crm --env dev --dry-run
+
+# Plain progress lines, e.g. under a terminal-emulating CI runner
+simple deploy apps/com.mycompany.crm --env staging --progress=plain
+```
+
+---
+
+### `simple install`
+
+Install the latest deployed version of an application in an environment (migrations, service configuration, cache warming). `simple deploy` installs by default; use this after `--no-install`, or to retry an install that failed.
+
+**Usage:**
+
+```bash
+simple install <app-id> --env <environment> [flags]
+```
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--progress` | `auto` | How progress is shown: `auto`, `tty` or `plain`, as for `simple deploy`. |
+| `--json` | `false` | Print `{"status":"success","app_id","version","env","duration_ms"}` on success and nothing else on stdout; errors go to stderr as `{"error": "..."}`. |
+
+The steps are load project config, authenticate, connect, and install. The server does not cancel an install when the CLI disconnects: after an interrupt, or a dropped connection, let it finish before running `simple install` again.
+
+---
+
+### `simple cleanup`
+
+Permanently delete tables and fields, and their data, from an application in an environment. An install refuses a version that would drop a table or a field; this is the separate step that removes them on purpose. You name exactly what to remove, see everything that will be deleted, and confirm. Afterwards, install the version again.
+
+**Usage:**
+
+```bash
+simple cleanup <app-id> --env <environment> [--table <table>]... [--field <table.field>]... [flags]
+```
+
+**Flags:**
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--env` | _(required)_ | Target environment (`dev`, `staging`, `prod`). |
+| `--table` | | Table to remove. Repeat the flag for more tables. |
+| `--field` | | Field to remove, written `table.field` (exactly one dot). Repeat the flag for more fields. At least one `--table` or `--field` is required. |
+| `--yes` | `false` | Remove without asking for confirmation. Refused on a production environment. |
+| `--json` | `false` | Never ask. Print one JSON document on stdout (see below); errors go to stderr as `{"error": "..."}`. |
+
+The command loads the project config, authenticates, connects, and asks the server what the removal would delete. It prints that plan: each table or field with its row count (for a field, the rows that hold a value), the metadata that goes with it (fields, relationships and so on, as the server counts them), an `also removes from <app-id>: <count> <what>` line for each kind of record of another application that goes with it (for example `also removes from com.mycompany.billing: 2 db events`), and a `blocked:` line for each thing that stops it. An item that is not in the database any more shows as leftover metadata only.
+
+- A plan with a blocked item removes nothing and exits 1, without asking.
+- Otherwise the command asks you to type the app id. Anything else prints `Nothing was removed.` and exits 1.
+- Without a terminal on stdin and without `--yes`, it prints the plan, says that nothing was removed and that `--yes` runs it, and exits 0.
+- With `--yes`, it removes without asking. The request carries the fingerprint of the plan that was shown, so the server refuses it if the plan has changed since.
+- The request also says how the removal was confirmed: `typed` when you typed the app id, `flag` when `--yes` let it through. On a production environment the server accepts a removal only when the app id was typed, so `--yes` is refused there: the command prints the server's message, removes nothing and exits 1. Run it on a terminal and type the app id.
+
+After a removal it prints `Removed.` and the `simple install` command to run next. Ctrl+C or `SIGTERM` during the removal stops the CLI, not the server: when the CLI stops waiting before the server answers, it says the server may still be removing, and running the command again without `--yes` shows what is left.
+
+**JSON output (`--json`):** the command never asks, and prints exactly one document on stdout.
+
+| Outcome                           | stdout                                                                                                                                           | Exit code |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ | --------- |
+| Plan only (no `--yes`)            | `{"plan":{"app_id","fingerprint","blocked","items":[{"kind","name","in_database","rows","metadata","other_apps","blockers"}]},"executed":false}` | 0         |
+| Blocked plan                      | the same document, `"executed":false`                                                                                                            | 1         |
+| Removed (`--yes`)                 | `{"plan":...,"executed":true}`, the plan the server removed                                                                                      | 0         |
+| Any other failure or an interrupt | nothing                                                                                                                                          | 1         |
+
+An item carries `other_apps`, a list of `{"app_id","what","count"}`, only when its removal also takes records of other applications.
+
+**Examples:**
+
+```bash
+# See what removing a table and a field would delete; nothing is removed
+simple cleanup com.mycompany.crm --table old_thing --field project.code --env dev --json
+
+# Remove them, asking for the app id first
+simple cleanup com.mycompany.crm --table old_thing --field project.code --env dev
+
+# Remove them without asking, e.g. from a script
+simple cleanup com.mycompany.crm --table old_thing --env staging --yes
 ```
 
 ---
@@ -299,10 +516,10 @@ simple new action <app> <name> <display_name> [flags]
 **Flags:**
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
-| `--scope` | `-s` | **Required** | The NPM scope for the package (without `@`). |
+| `--scope` | `-s` | Required for `--lang ts` | The NPM scope for the package (without `@`). A Rust action's crate is named after the action and is never published to a registry, so it takes no scope. |
 | `--env` | `-e` | `server` | Execution environment: `server`, `client`, or `both`. |
 | `--desc` | `-d` | `""` | Description of the action. |
-| `--lang` | `-l` | `ts` | Programming language (currently only `ts` is supported). |
+| `--lang` | `-l` | `ts` | Programming language: `ts` or `rust`. |
 
 **Examples:**
 
@@ -316,7 +533,18 @@ simple new action com.mycompany.crm send-invite "Send Invite" \
 simple new action com.mycompany.crm validate-form "Validate Form" \
   --scope mycompany \
   --env client
+
+# Create a Rust action (a cargo crate; no NPM scope)
+simple new action com.mycompany.crm close-lead "Close Lead" \
+  --lang rust \
+  --env server
 ```
+
+**Making an action callable by an agent:** a scaffolded action is not a tool. It
+becomes one when its doc comment says so, with the `@tool`, `@shortdesc` and
+`@usewhen` tags the build carries into `action.json`, and `@parallelsafe` marks a
+tool that only reads as safe to run beside the other parallel-safe calls next to
+it in a batch — see [the action exposure vocabulary](docs/action-exposure-vocabulary.md).
 
 ---
 
@@ -458,6 +686,40 @@ simple new trigger:webhook com.company.crm payment-hook "Payment Hook" \
   --action handle-payment \
   --method post \
   --public
+```
+
+---
+
+### `simple version`
+
+Show the installed version of the CLI and whether a newer one has been released.
+
+**Usage:**
+
+```bash
+simple version
+simple version update
+```
+
+`simple version update` downloads the newest release for this machine and replaces the installed program with it. The download is checked against the SHA-256 published with the release before anything on disk is changed, and a download that does not match changes nothing.
+
+The program is replaced where it is installed, so the account running the command must be able to write to that directory. On Windows a running program cannot be deleted, so the previous one is kept beside the new one as `simple.exe.old` and removed by a later run of the CLI.
+
+**JSON output (`--json`):**
+
+| Command                 | Document                                                               |
+| ----------------------- | ---------------------------------------------------------------------- |
+| `simple version`        | `{"version","latest","update_available"}`; `version` alone if offline  |
+| `simple version update` | `{"status":"updated","from","to"}` or `{"status":"current","version"}` |
+
+**Examples:**
+
+```bash
+# What is installed, and is there something newer?
+simple version
+
+# Install the newest release
+simple version update
 ```
 
 ---

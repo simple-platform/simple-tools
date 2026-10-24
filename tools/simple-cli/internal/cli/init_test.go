@@ -39,6 +39,7 @@ func TestCreateMonorepoStructure_Success(t *testing.T) {
 		"AGENTS.md",
 		"README.md",
 		"simple.scl",
+		"tsdoc.json",
 		".simple/context/01-platform-overview.md",
 		".simple/context/02-scl-grammar.md",
 		".simple/context/03-data-layer-scl.md",
@@ -50,6 +51,7 @@ func TestCreateMonorepoStructure_Success(t *testing.T) {
 		".simple/context/09-custom-views.md",
 		".simple/context/10-graphql-api.md",
 		".simple/context/11-sdk-reference.md",
+		".simple/context/12-tasks.md",
 	}
 	for _, file := range files {
 		path := filepath.Join(testPath, file)

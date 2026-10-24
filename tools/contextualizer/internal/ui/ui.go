@@ -214,7 +214,7 @@ func (m Model) startProcessingCmd() tea.Msg {
 			if err != nil {
 				return processingFinishedMsg{err: err}
 			}
-			combined.WriteString(fmt.Sprintf("\n\n# Project: %s\n\n", filepath.Base(dir)))
+			fmt.Fprintf(&combined, "\n\n# Project: %s\n\n", filepath.Base(dir))
 			combined.WriteString(content)
 		}
 
@@ -268,7 +268,7 @@ func (m Model) View() string {
 			if rel, err := filepath.Rel(m.cwd, dir); err == nil {
 				displayDir = rel
 			}
-			s.WriteString(fmt.Sprintf("%s %s %s\n", cursor, checked, displayDir))
+			fmt.Fprintf(&s, "%s %s %s\n", cursor, checked, displayDir)
 		}
 		s.WriteString(helpStyle.Render("\n(space to toggle, enter to confirm, q to quit)"))
 
@@ -279,7 +279,7 @@ func (m Model) View() string {
 			if m.modeCursor == i {
 				cursor = cursorStyle.Render(">")
 			}
-			s.WriteString(fmt.Sprintf("%s %s\n", cursor, mode))
+			fmt.Fprintf(&s, "%s %s\n", cursor, mode)
 		}
 
 	case stateProcessing:

@@ -8,6 +8,19 @@ import (
 	"testing"
 )
 
+func TestProgressInputIsTerminalRejectsPipe(t *testing.T) {
+	input, output, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create pipe: %v", err)
+	}
+	defer func() { _ = input.Close() }()
+	defer func() { _ = output.Close() }()
+
+	if progressInputIsTerminal(input) {
+		t.Fatal("pipe input was detected as an interactive terminal")
+	}
+}
+
 // TestRunBuild verifies the `simple build` command logic.
 // It uses extensive mocking of the `build` package functions to avoid invalidating
 // the test environment or taking excessive time with actual builds only to test CLI parsing.
@@ -47,6 +60,32 @@ func TestRunBuild(t *testing.T) {
 	build.EnsureSCLParserFunc = func(f func(string)) (string, error) { return "scl", nil }
 	build.EnsureJavyFunc = func(f func(string)) (string, error) { return "javy", nil }
 	build.EnsureWasmOptFunc = func(f func(string)) (string, error) { return "wasm-opt", nil }
+
+	// The per-action steps are mocked too, so a case named for a successful
+	// build is one. Left unmocked, the fixture action here has no source and
+	// fails on the first step — which used to read as success because a failed
+	// build reported as JSON returned no error at all.
+	origDetect := build.DetectActionLanguageFunc
+	origParseEnv := build.ParseExecutionEnvironmentFunc
+	origExtract := build.ExtractMetadataFunc
+	defer func() {
+		build.DetectActionLanguageFunc = origDetect
+		build.ParseExecutionEnvironmentFunc = origParseEnv
+		build.ExtractMetadataFunc = origExtract
+	}()
+	build.DetectActionLanguageFunc = func(dir string) (build.ActionLanguage, error) {
+		return build.LanguageTypeScript, nil
+	}
+	build.ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
+	build.ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
+		if strings.HasSuffix(actionDir, "refused") {
+			return &build.AnnotationRefusal{
+				Refusal: `refused: @shortdesc is written with nothing after it`,
+			}
+		}
+
+		return nil
+	}
 	// === MOCKING END ===
 
 	// Define test cases covering various usage scenarios
@@ -87,6 +126,20 @@ func TestRunBuild(t *testing.T) {
 				return strings.Contains(err.Error(), "requires a target argument")
 			},
 		},
+		// A BUILD FAILS THE SAME WAY IN BOTH OUTPUT MODES. These cases run with
+		// the JSON flag set, which is the mode a pipeline uses — and the mode
+		// that used to print a failure summary and then return success, so the
+		// only reader that could act on the outcome was the one that could not
+		// see it.
+		{
+			name:     "a refused annotation fails the build under --json",
+			args:     []string{"myapp/refused"},
+			buildAll: false,
+			wantErr:  true,
+			errCheck: func(err error) bool {
+				return strings.Contains(err.Error(), "1 action(s) failed to build")
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -105,16 +158,24 @@ func TestRunBuild(t *testing.T) {
 			_ = os.Chdir(tmpDir)
 			defer func() { _ = os.Chdir(oldWd) }()
 
-			// Create dummy targets for success cases so the builder finds them
-			if !tt.wantErr {
-				if tt.name == "build target success" {
-					_ = os.MkdirAll("myapp/action", 0755)
-					_ = os.WriteFile("myapp/action/action.scl", []byte{}, 0644)
-				}
-				if tt.name == "build all success" {
-					_ = os.MkdirAll("apps/myapp/action", 0755)
-					_ = os.WriteFile("apps/myapp/action/action.scl", []byte{}, 0644)
-				}
+			// Create dummy targets so the builder finds them.
+			//
+			// A "success" case has to be an action the builder can reach the
+			// end of, which means a source file in a language it compiles:
+			// language detection is deliberately not mocked, so an action
+			// directory with nothing in it fails, and a case named "success"
+			// that builds nothing would prove nothing.
+			switch tt.name {
+			case "build target success":
+				_ = os.MkdirAll("myapp/action/src", 0755)
+				_ = os.WriteFile("myapp/action/action.scl", []byte{}, 0644)
+				_ = os.WriteFile("myapp/action/src/index.ts", []byte("export {}\n"), 0644)
+			case "build all success":
+				_ = os.MkdirAll("apps/myapp/action", 0755)
+				_ = os.WriteFile("apps/myapp/action/action.scl", []byte{}, 0644)
+			case "a refused annotation fails the build under --json":
+				_ = os.MkdirAll("myapp/refused", 0755)
+				_ = os.WriteFile("myapp/refused/action.scl", []byte{}, 0644)
 			}
 
 			// Execution

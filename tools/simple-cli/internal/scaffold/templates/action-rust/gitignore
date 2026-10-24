@@ -1,0 +1,6 @@
+# Cargo's build directory. It is per-crate rather than per-monorepo, so it is
+# ignored here beside the crate that produces it.
+/target
+
+# The wasm modules the platform build writes.
+/build

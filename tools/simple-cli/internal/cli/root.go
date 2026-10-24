@@ -6,6 +6,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -39,15 +40,24 @@ var RootCmd = &cobra.Command{
 // It is the main entry point called by main.main().
 // Returns 0 on success, 1 on failure.
 func Execute() int {
-	if err := RootCmd.Execute(); err != nil {
+	cmd, err := RootCmd.ExecuteC()
+
+	code := 0
+	if err != nil {
 		if jsonOutput {
 			printErrorJSON(err)
 		} else {
 			fmt.Fprintln(os.Stderr, "Error:", err)
 		}
-		return 1
+		code = 1
 	}
-	return 0
+
+	// Said last and whatever the command did, so it is the line a user is
+	// left with: a command that failed on an old version is the one most
+	// worth telling.
+	announceUpdate(os.Stderr, cmd.CommandPath())
+
+	return code
 }
 
 func init() {
@@ -58,7 +68,13 @@ func init() {
 // printJSON encodes data to stdout in JSON format.
 // This is used when the --json flag is provided.
 func printJSON(data interface{}) error {
-	encoder := json.NewEncoder(os.Stdout)
+	return printJSONTo(os.Stdout, data)
+}
+
+// printJSONTo encodes data to out in JSON format, for commands that take
+// their output writer from cobra.
+func printJSONTo(out io.Writer, data interface{}) error {
+	encoder := json.NewEncoder(out)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(data); err != nil {
 		printErrorJSON(fmt.Errorf("failed to encode JSON output: %w", err))

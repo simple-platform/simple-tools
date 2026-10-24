@@ -81,7 +81,7 @@ func TestBuildActions_Concurrency(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -90,7 +90,7 @@ func TestBuildActions_Concurrency(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
@@ -100,7 +100,7 @@ func TestBuildActions_Concurrency(t *testing.T) {
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(BuildOptions{Concurrency: 2})
@@ -144,7 +144,7 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -153,7 +153,7 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
@@ -173,7 +173,7 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(DefaultBuildOptions())
@@ -211,8 +211,17 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 	}
 }
 
-// TestBuildAction_MetadataExtractionFailure verifies that build continues when metadata extraction fails
-func TestBuildAction_MetadataExtractionFailure(t *testing.T) {
+// AN ACTION THAT CANNOT BE DESCRIBED FROM ITS OWN SOURCE DOES NOT BUILD, and
+// nothing downstream of the failure runs.
+//
+// The refusal used to be reported into the progress view and the build carried
+// on, which is a gate that never closes twice over: the row was overwritten by
+// the next step milliseconds later so no author ever read it, and the artifacts
+// were bundled and shipped beside an action.json describing an earlier source.
+// So this asserts the error comes back AND that the steps after it were never
+// reached — a build that fails at the end has still done the work of a build
+// that succeeded.
+func TestBuildAction_MetadataExtractionFailureStopsTheBuild(t *testing.T) {
 	// Mock all dependencies
 	origDeps := EnsureDependenciesFunc
 	origExtract := ExtractMetadataFunc
@@ -220,7 +229,7 @@ func TestBuildAction_MetadataExtractionFailure(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -229,23 +238,38 @@ func TestBuildAction_MetadataExtractionFailure(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
-	metadataError := errors.New("metadata extraction failed")
-	var metadataCallCount int
+	metadataError := &AnnotationRefusal{
+		Refusal: `test-action: is a tool and must declare @shortdesc`,
+	}
+
+	var metadataCallCount, bundleCount, compileCount, optimizeCount int
 
 	EnsureDependenciesFunc = func(dir string) error { return nil }
 	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
 		metadataCallCount++
 		return metadataError
 	}
-	BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
-	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
-	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
-	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error {
+		bundleCount++
+		return nil
+	}
+	BundleAsyncFunc = func(dir, entry, out string) error {
+		bundleCount++
+		return nil
+	}
+	CompileToWasmFunc = func(javy, js, plugin, out string) error {
+		compileCount++
+		return nil
+	}
+	OptimizeWasmFunc = func(opt, in, out string, flags []string) error {
+		optimizeCount++
+		return nil
+	}
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(DefaultBuildOptions())
@@ -274,21 +298,33 @@ func TestBuildAction_MetadataExtractionFailure(t *testing.T) {
 		t.Errorf("ExtractMetadataFunc called %d times, want 1", metadataCallCount)
 	}
 
-	// Verify build succeeded despite metadata extraction failure
-	if result.Error != nil {
-		t.Errorf("BuildAction() error = %v, want nil (build should continue)", result.Error)
+	if result.Error == nil {
+		t.Fatal("BuildAction() error = nil, want the refusal (a malformed annotation must fail the build)")
 	}
 
-	// Verify warning was logged in progress reports
-	foundWarning := false
-	for _, report := range progressReports {
-		if strings.Contains(report, "Metadata extraction warning") && strings.Contains(report, "metadata extraction failed") {
-			foundWarning = true
-			break
-		}
+	// The refusal reaches the caller as the sentence its author has to act on,
+	// not as a category the caller then has to go looking for the detail of.
+	if !errors.Is(result.Error, error(metadataError)) {
+		t.Errorf("BuildAction() error = %v, want it to carry the refusal", result.Error)
 	}
-	if !foundWarning {
-		t.Errorf("Expected metadata extraction warning in progress reports, got: %v", progressReports)
+
+	if !strings.Contains(result.Error.Error(), `is a tool and must declare @shortdesc`) {
+		t.Errorf("BuildAction() error = %q, want the refusal text an author can act on", result.Error)
+	}
+
+	// Nothing after the failed gate ran.
+	if bundleCount != 0 || compileCount != 0 || optimizeCount != 0 {
+		t.Errorf("build continued past the refusal: bundle=%d compile=%d optimize=%d",
+			bundleCount, compileCount, optimizeCount)
+	}
+
+	// The progress view is an in-place repaint that is torn down at the end of a
+	// run, so it is where a refusal goes to be unread. The build's failure has
+	// to be carried out of here in the result, not left in a row.
+	for _, report := range progressReports {
+		if strings.Contains(report, "sideways") {
+			t.Errorf("the refusal was written into the progress view: %q", report)
+		}
 	}
 }
 
@@ -301,7 +337,7 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 	origAsync := BundleAsyncFunc
 	origCompile := CompileToWasmFunc
 	origOpt := OptimizeWasmFunc
-	origValidate := ValidateLanguageFunc
+	origDetect := DetectActionLanguageFunc
 	origParseEnv := ParseExecutionEnvironmentFunc
 	defer func() {
 		EnsureDependenciesFunc = origDeps
@@ -310,7 +346,7 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 		BundleAsyncFunc = origAsync
 		CompileToWasmFunc = origCompile
 		OptimizeWasmFunc = origOpt
-		ValidateLanguageFunc = origValidate
+		DetectActionLanguageFunc = origDetect
 		ParseExecutionEnvironmentFunc = origParseEnv
 	}()
 
@@ -320,7 +356,7 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 	OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-	ValidateLanguageFunc = func(dir string) error { return nil }
+	DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 	m := NewBuildManager(DefaultBuildOptions())
@@ -388,22 +424,19 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 // TestBuildAction_MetadataExtractionIntegration verifies the complete integration with mocked ExtractMetadataFunc
 func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 	tests := []struct {
-		name                string
-		metadataError       error
-		expectBuildSuccess  bool
-		expectWarningInLogs bool
+		name               string
+		metadataError      error
+		expectBuildSuccess bool
 	}{
 		{
-			name:                "metadata extraction succeeds",
-			metadataError:       nil,
-			expectBuildSuccess:  true,
-			expectWarningInLogs: false,
+			name:               "metadata extraction succeeds",
+			metadataError:      nil,
+			expectBuildSuccess: true,
 		},
 		{
-			name:                "metadata extraction fails",
-			metadataError:       errors.New("payload interface not found"),
-			expectBuildSuccess:  true, // Build should continue
-			expectWarningInLogs: true,
+			name:               "metadata extraction fails",
+			metadataError:      errors.New("payload interface not found"),
+			expectBuildSuccess: false,
 		},
 	}
 
@@ -416,7 +449,7 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 			origAsync := BundleAsyncFunc
 			origCompile := CompileToWasmFunc
 			origOpt := OptimizeWasmFunc
-			origValidate := ValidateLanguageFunc
+			origDetect := DetectActionLanguageFunc
 			origParseEnv := ParseExecutionEnvironmentFunc
 			defer func() {
 				EnsureDependenciesFunc = origDeps
@@ -425,7 +458,7 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 				BundleAsyncFunc = origAsync
 				CompileToWasmFunc = origCompile
 				OptimizeWasmFunc = origOpt
-				ValidateLanguageFunc = origValidate
+				DetectActionLanguageFunc = origDetect
 				ParseExecutionEnvironmentFunc = origParseEnv
 			}()
 
@@ -444,7 +477,7 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 			BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 			CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
 			OptimizeWasmFunc = func(opt, in, out string, flags []string) error { return nil }
-			ValidateLanguageFunc = func(dir string) error { return nil }
+			DetectActionLanguageFunc = func(dir string) (ActionLanguage, error) { return LanguageTypeScript, nil }
 			ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
 			m := NewBuildManager(DefaultBuildOptions())
@@ -493,22 +526,89 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 				}
 			}
 
-			// Verify warning logging
-			foundWarning := false
+			// A failure is never left in the progress view, which is repainted in
+			// place and cleared when the run ends.
 			for _, report := range progressReports {
-				if strings.Contains(report, "Metadata extraction warning") {
-					foundWarning = true
-					break
+				if strings.Contains(report, "warning") {
+					t.Errorf("a build failure was reported as a progress warning: %q", report)
 				}
 			}
-
-			if tt.expectWarningInLogs && !foundWarning {
-				t.Errorf("Expected metadata extraction warning in logs, but not found. Reports: %v", progressReports)
-			}
-
-			if !tt.expectWarningInLogs && foundWarning {
-				t.Errorf("Did not expect metadata extraction warning in logs, but found one. Reports: %v", progressReports)
-			}
 		})
+	}
+}
+
+// TestBuildAction_UnrecognisedExecutionEnvironment pins the one failure a
+// developer cannot see for themselves.
+//
+// Every step of every language's pipeline is guarded by needsSync or needsAsync,
+// so an execution_environment that is neither server, client nor both used to
+// walk the whole build doing nothing and report success over an empty build/
+// directory — exit 0, no artifact, and nothing said until a deploy went looking
+// for a module that was never written. Measured before the guard existed: a
+// single mistyped word in the SCL produced `"status": "complete", "failed": 0`.
+//
+// The language is varied because the guard sits above the language branch: the
+// same typo has to be refused whatever the action is written in, and neither
+// compiler may be reached.
+func TestBuildAction_UnrecognisedExecutionEnvironment(t *testing.T) {
+	for _, lang := range []struct {
+		name   string
+		source string
+		body   string
+	}{
+		{"typescript", filepath.Join("src", "index.ts"), "export default {}\n"},
+		{"rust", filepath.Join("src", "main.rs"), "fn main() {}\n"},
+	} {
+		for _, execEnv := range []string{"Server", "serverr", "", "sever"} {
+			t.Run(lang.name+"/"+execEnv, func(t *testing.T) {
+				origParseEnv := ParseExecutionEnvironmentFunc
+				origDeps := EnsureDependenciesFunc
+				origCargo := EnsureCargoFunc
+				t.Cleanup(func() {
+					ParseExecutionEnvironmentFunc = origParseEnv
+					EnsureDependenciesFunc = origDeps
+					EnsureCargoFunc = origCargo
+				})
+				ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) {
+					return execEnv, nil
+				}
+				// Neither toolchain may be asked for anything: the refusal is
+				// about the record, and nothing on disk needs consulting.
+				EnsureDependenciesFunc = func(dir string) error {
+					t.Error("npm install ran for an action with no artifact to build")
+					return nil
+				}
+				EnsureCargoFunc = func() (string, error) {
+					t.Error("the Rust toolchain was consulted for an action with no artifact to build")
+					return "", nil
+				}
+
+				actionDir := filepath.Join(t.TempDir(), "greet-user")
+				if err := os.MkdirAll(filepath.Join(actionDir, "src"), 0755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(actionDir, lang.source), []byte(lang.body), 0644); err != nil {
+					t.Fatal(err)
+				}
+
+				m := NewBuildManager(DefaultBuildOptions())
+				result := m.BuildAction(context.Background(), actionDir, nil)
+
+				if result.Error == nil {
+					t.Fatalf("BuildAction() reported success for execution_environment %q", execEnv)
+				}
+				if !strings.Contains(result.Error.Error(), "execution_environment") {
+					t.Errorf("the refusal should name the field, got: %v", result.Error)
+				}
+				for _, want := range []string{"server", "client", "both"} {
+					if !strings.Contains(result.Error.Error(), want) {
+						t.Errorf("the refusal should name %q as a valid value, got: %v", want, result.Error)
+					}
+				}
+				if fileExists(filepath.Join(actionDir, "build")) {
+					t.Error("an empty build directory was left behind by a refused build")
+				}
+			})
+		}
 	}
 }

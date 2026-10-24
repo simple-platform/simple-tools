@@ -34,7 +34,7 @@ defmodule SCLParser.MixProject do
       name: "scl_parser",
       licenses: ["Apache-2.0"],
       files: ~w(lib .formatter.exs mix.exs README* LICENSE*),
-      links: %{"GitHub" => "https://github.com/simple-dev/simple-tools"}
+      links: %{"GitHub" => "https://github.com/simple-platform/simple-tools"}
     ]
   end
 

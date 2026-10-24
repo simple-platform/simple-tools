@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
@@ -12,6 +13,7 @@ import (
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-isatty"
 	"github.com/spf13/cobra"
 )
 
@@ -90,7 +92,11 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 // runWithProgress runs a function while displaying a progress UI (Bubble Tea).
 func runWithProgress(keys []string, runFn func(build.ProgressReporter)) error {
 	model := ui.NewModel(keys)
-	p := tea.NewProgram(model)
+	programOptions := make([]tea.ProgramOption, 0, 1)
+	if !progressInputIsTerminal(os.Stdin) {
+		programOptions = append(programOptions, tea.WithInput(nil))
+	}
+	p := tea.NewProgram(model, programOptions...)
 
 	go func() {
 		reporter := func(item, status string, done bool, err error) {
@@ -107,6 +113,14 @@ func runWithProgress(keys []string, runFn func(build.ProgressReporter)) error {
 
 	_, err := p.Run()
 	return err
+}
+
+func progressInputIsTerminal(input *os.File) bool {
+	if input == nil {
+		return false
+	}
+	fd := input.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }
 
 // buildAllApps traverses the 'apps' directory to find and build all actions and spaces in parallel.
@@ -314,7 +328,7 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 	totalFailures := actionFailures + spaceFailures
 
 	if jsonOutput {
-		return printJSON(map[string]interface{}{
+		if err := printJSON(map[string]interface{}{
 			"status":        "complete",
 			"total":         totalCount,
 			"success":       actionSuccesses + spaceSuccesses,
@@ -322,9 +336,48 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 			"failedActions": failedActions,
 			"failedSpaces":  failedSpaces,
 			"errors":        errors,
-		})
+		}); err != nil {
+			return err
+		}
+		// Fall through to the failure below rather than returning here. The
+		// summary is written to stdout either way, but a build that produced no
+		// artifact has to say so in the only channel a pipeline reads without
+		// parsing anything: the exit status. Returning nil here made every
+		// '--json build' succeed, however many actions failed.
+	} else if totalFailures > 0 {
+		// WHY A FAILURE IS PRINTED HERE AND NOT REPORTED AS PROGRESS.
+		//
+		// The progress view is an in-place repaint: a row is overwritten by the
+		// next status the same target reports, and the whole frame is cleared
+		// when the program quits. Anything written into it is gone before it can
+		// be read, so a build's failures were counted here and their text thrown
+		// away — the run said how many targets failed and never once said why.
+		//
+		// So the reasons are written after the view has torn down, where they
+		// stay on screen. Ordered by results rather than by a map, so a run
+		// prints the same list in the same order twice.
+		fmt.Fprintln(os.Stderr)
+		for _, r := range results {
+			if r.err == nil {
+				continue
+			}
+
+			kind := "Action"
+			if r.isSpace {
+				kind = "Space"
+			}
+
+			fmt.Fprintf(os.Stderr, "❌ [%s] %s: %v\n", kind, r.name, r.err)
+		}
+		fmt.Fprintln(os.Stderr)
 	}
 
+	// THE OUTCOME IS THE SAME IN BOTH OUTPUT MODES.
+	//
+	// A failed build reported as JSON used to exit zero: the summary was printed
+	// and returned as success, so the machine-readable mode — the one a pipeline
+	// uses — was the one that could not fail. A gate that only closes when a
+	// human is watching is not a gate.
 	if totalFailures > 0 {
 		var parts []string
 		if actionFailures > 0 {
@@ -333,7 +386,9 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 		if spaceFailures > 0 {
 			parts = append(parts, fmt.Sprintf("%d space(s)", spaceFailures))
 		}
+
 		return fmt.Errorf("%s failed to build", strings.Join(parts, " and "))
 	}
+
 	return nil
 }

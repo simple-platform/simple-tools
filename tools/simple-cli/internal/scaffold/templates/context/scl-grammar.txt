@@ -138,7 +138,7 @@ has :many, children {
 # Syntax: <app_name>.<table_name>
 
 belongs :to, job_site {
-  table com_bnv_administration.job_site  # Fully qualified table name
+  table com_acme_operations.job_site  # Fully qualified table name
   required true
 }
 

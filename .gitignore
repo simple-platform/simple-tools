@@ -15,3 +15,6 @@ node_modules
 .context/
 coverage.*
 .kiro
+.codex/
+agy-runs/
+.codex/agy-runs/

@@ -6,8 +6,7 @@
  * These CSS custom properties match the platform's design system.
  * Use them in your space via var(--primary), var(--background), etc.
  *
- * Tenant-specific overrides are loaded automatically via loadTheme()
- * in simple.ts, which queries the branding settings from the database.
+ * Tenant-specific overrides are not currently part of the public Space SDK.
  */
 
 :root {

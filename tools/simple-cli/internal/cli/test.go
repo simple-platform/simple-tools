@@ -19,11 +19,15 @@ import (
 )
 
 // testCmd represents the command to run tests.
-// It integrates with 'vitest' to execute unit and integration tests.
+// It runs each target's own test runner: vitest for TypeScript and JavaScript,
+// cargo for Rust actions.
 var testCmd = &cobra.Command{
 	Use:   "test [app-id]",
 	Short: "Run tests for applications",
-	Long: `Run Vitest tests for applications, actions, spaces, or record behaviors.
+	Long: `Run tests for applications, actions, spaces, or record behaviors.
+
+TypeScript and JavaScript targets run under Vitest; Rust actions run under
+'cargo test', on this machine, with no wasm build and no emulator.
 
 Examples:
   simple test                        # Run all tests
@@ -48,7 +52,8 @@ func init() {
 }
 
 // runTest executes the test logic.
-// It resolves the target path (app, action, or behavior) and delegates to the vitest binary.
+// It resolves the target path (app, action, or behavior) and delegates to that
+// target's own test runner.
 func runTest(cmd *cobra.Command, args []string) error {
 	actionName, _ := cmd.Flags().GetString("action")
 	behaviorName, _ := cmd.Flags().GetString("behavior")
@@ -179,6 +184,50 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Phase 2: decide which runner each directory gets.
+	//
+	// A Rust action's tests are 'cargo test' and they run on the host: the test
+	// seam stands in for the platform, so nothing here needs a wasm build or an
+	// emulator, which is what makes them fast enough to run on every save.
+	//
+	// Which language a directory holds is asked of build.DetectActionLanguage
+	// rather than answered again here, so that the runner this command picks
+	// and the compiler the build path picks can never disagree about the same
+	// directory.
+	//
+	// Its error is not reported here, and is not a second refusal waiting to
+	// happen. This list also holds spaces and record-behaviour scripts, which
+	// are not actions and hold no action source, so being unable to name a
+	// language is the ordinary answer for most of it. Where it does mean
+	// something — an action with no source, or with two — 'simple build' is
+	// what says so, by name; saying it twice in two different sentences would
+	// leave a developer looking for two problems.
+	rustDirs := make(map[string]bool, len(testDirs))
+	rustFound := false
+	for _, tDir := range testDirs {
+		if lang, err := build.DetectActionLanguage(tDir); err == nil && lang == build.LanguageRust {
+			rustDirs[tDir] = true
+			rustFound = true
+		}
+	}
+
+	// Refuse up front rather than letting each suite fail with "executable file
+	// not found": one clear sentence beats one cryptic line per action.
+	if rustFound {
+		if _, err := exec.LookPath("cargo"); err != nil {
+			return fmt.Errorf("cargo not found on PATH, and this run includes Rust actions. Install a Rust toolchain (https://rustup.rs) to run their tests")
+		}
+	}
+
+	// --coverage has no counterpart in cargo: coverage for Rust is a separate
+	// subcommand (cargo-llvm-cov) rather than a flag on the test runner, and
+	// installing one on a developer's behalf is not this command's business.
+	// Say so once, and run the tests without it, so a mixed app still reports
+	// coverage for the targets that can produce it.
+	if rustFound && coverage && !jsonMode {
+		fmt.Println("Note: --coverage does not apply to Rust actions; their tests run without it.")
+	}
+
 	// Construct Vitest command arguments base
 	reporterFlag := "--reporter=verbose"
 	if jsonMode {
@@ -207,13 +256,33 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 			hasPackageJSON := scaffold.PathExists(fsys, filepath.Join(tDir, "package.json"))
 
-			// Use `npm run test` for directories containing a package.json (Actions and Spaces).
-			// This ensures package managers (npm/pnpm/yarn) naturally map their own
-			// workspace resolution graphs for hoisted dependencies like @simpleplatform/sdk.
-			if hasPackageJSON && behaviorName == "" {
-				// Only install dependencies if the node_modules directory is completely missing
-				hasNodeModules := scaffold.PathExists(fsys, filepath.Join(tDir, "node_modules"))
-				if !hasNodeModules {
+			// Rust first, and before the package.json question rather than
+			// after it: a Rust action carries no package.json, so without this
+			// branch it would fall through to the vitest fallback and be handed
+			// to a runner that has nothing to run.
+			//
+			// cargo resolves and fetches the crate's dependencies itself, so
+			// there is no install step to run beforehand the way there is for
+			// npm.
+			if rustDirs[tDir] {
+				fullArgs = []string{"cargo", "test"}
+				// FORCE_COLOR is a Node convention; cargo takes a flag. In JSON
+				// mode the output is not printed at all, so it is left alone.
+				if !jsonMode {
+					fullArgs = append(fullArgs, "--color", "always")
+				}
+			} else if hasPackageJSON && behaviorName == "" {
+				// Use `npm run test` for directories containing a package.json (Actions and Spaces).
+				// This ensures package managers (npm/pnpm/yarn) naturally map their own
+				// workspace resolution graphs for hoisted dependencies like @simpleplatform/sdk.
+				//
+				// Install only when the packages are genuinely unreachable, which
+				// is the same question the comment above answers for the runner:
+				// a workspace member does not carry its own node_modules, and
+				// asking only for one is how a hoisted action gets a full
+				// install it does not need on every run.
+				_, resolvable := fsx.ResolveUpward(fsys, tDir, "node_modules")
+				if !resolvable {
 					if err := build.EnsureDependenciesFunc(tDir); err != nil {
 						mu.Lock()
 						if !jsonMode {
@@ -236,19 +305,15 @@ func runTest(cmd *cobra.Command, args []string) error {
 				}
 			} else {
 				// Fallback for record-behaviors or targets without a package.json test script
-				var vitestBin string
-				localBin := filepath.Join(tDir, "node_modules", ".bin", "vitest")
-				if _, err := os.Stat(localBin); err == nil {
-					vitestBin = localBin
-				} else {
-					cwd, _ := os.Getwd()
-					rootBin := filepath.Join(cwd, "node_modules", ".bin", "vitest")
-					if _, err := os.Stat(rootBin); err == nil {
-						vitestBin = rootBin
-					}
-				}
+				// The runner is looked for the way an import is resolved, rather
+				// than in the target's own directory and then in the one this
+				// process happens to have been started from. A workspace
+				// installs it at the root, which is usually neither: the walk
+				// finds it, two fixed guesses did not, and missing it fell
+				// through to `npx`, which resolves and may fetch on every run.
+				vitestBin, found := fsx.ResolveUpward(fsys, tDir, "node_modules", ".bin", "vitest")
 
-				if vitestBin != "" {
+				if found {
 					fullArgs = []string{vitestBin, "run", reporterFlag}
 				} else {
 					fullArgs = []string{"npx", "vitest", "run", reporterFlag}

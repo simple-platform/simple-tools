@@ -1,9 +1,13 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"strings"
 	"testing"
@@ -492,6 +496,13 @@ func (m *mockWriteTrackingFS) ReadDir(name string) ([]os.DirEntry, error) {
 	return []os.DirEntry{}, nil
 }
 
+func (m *mockWriteTrackingFS) Remove(name string) error {
+	delete(m.files, name)
+	delete(m.written, name)
+
+	return nil
+}
+
 type mockFileInfoSimple struct{}
 
 func (m *mockFileInfoSimple) Name() string       { return "mock" }
@@ -613,5 +624,259 @@ func TestAppendTriggerRecord_Errors(t *testing.T) {
 	// mockWriteTrackingFS.ReadFile returns "file not found" if files map is nil or key missing
 	if err == nil || !strings.Contains(err.Error(), "failed to read existing") {
 		t.Errorf("Expected read existing error, got: %v", err)
+	}
+}
+
+// THE EDITOR IS TOLD THE SAME VOCABULARY THE BUILD ENFORCES.
+//
+// `@tool` is what makes an action reachable by an agent, and TSDoc reports a tag
+// it has not been told about as an unknown one. An author writing the single
+// line that exposes their action would be underlined for it — which teaches the
+// wrong lesson at exactly the wrong moment, and the lesson sticks because the
+// build says nothing until the tag is already missing.
+//
+// So the names are read from the package that enforces them rather than restated
+// here: a tag added to the vocabulary and not to this file fails, instead of
+// shipping as a squiggle under every author who uses it.
+func TestScaffoldedSpaceDeclaresTheExposureVocabulary(t *testing.T) {
+	raw, err := TemplatesFS.ReadFile("templates/tsdoc.json")
+	if err != nil {
+		t.Fatalf("a scaffolded space carries no tsdoc.json: %v", err)
+	}
+
+	var config struct {
+		Schema         string `json:"$schema"`
+		TagDefinitions []struct {
+			TagName       string `json:"tagName"`
+			SyntaxKind    string `json:"syntaxKind"`
+			AllowMultiple bool   `json:"allowMultiple"`
+		} `json:"tagDefinitions"`
+	}
+
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("tsdoc.json is not readable as the format TSDoc defines: %v", err)
+	}
+
+	if config.Schema != "https://developer.microsoft.com/json-schemas/tsdoc/v0/tsdoc.schema.json" {
+		t.Fatalf("tsdoc.json names no TSDoc schema, got %q", config.Schema)
+	}
+
+	type declaration struct {
+		kind     string
+		multiple bool
+	}
+
+	declared := map[string]declaration{}
+	for _, definition := range config.TagDefinitions {
+		declared[definition.TagName] = declaration{kind: definition.SyntaxKind, multiple: definition.AllowMultiple}
+	}
+
+	if len(declared) != len(config.TagDefinitions) {
+		t.Fatalf("tsdoc.json declares a tag twice: %#v", config.TagDefinitions)
+	}
+
+	for _, name := range build.ActionTagNames() {
+		// `@tool` and `@parallelsafe` carry no value, so they are modifier tags;
+		// every other name in the vocabulary carries one, so they are block
+		// tags. Declaring a modifier as a block tag makes TSDoc read the next
+		// line as its content.
+		want := "block"
+		if name == "tool" || name == "parallelsafe" {
+			want = "modifier"
+		}
+
+		// `@usewhen` is the one name an author may write more than once — a tool
+		// is reached for in more than one situation, and the vocabulary carries
+		// up to ten of them. A block tag TSDoc has not been told is repeatable is
+		// reported as a duplicate from the second line on, which underlines a
+		// statement the build accepts.
+		wantMultiple := name == "usewhen"
+
+		definition, known := declared["@"+name]
+		if !known {
+			t.Fatalf("the build claims @%s and tsdoc.json does not declare it", name)
+		}
+
+		if definition.kind != want {
+			t.Fatalf("@%s is declared as a %s tag and is a %s tag", name, definition.kind, want)
+		}
+
+		if definition.multiple != wantMultiple {
+			t.Fatalf("@%s is declared repeatable=%t and is repeatable=%t", name, definition.multiple, wantMultiple)
+		}
+
+		delete(declared, "@"+name)
+	}
+
+	if len(declared) != 0 {
+		t.Fatalf("tsdoc.json declares tags the build does not claim: %#v", declared)
+	}
+}
+
+// THE VOCABULARY IS REACHABLE FROM WHERE AN AUTHOR WRITES IT.
+//
+// A TSDoc reader walks up from the source file and stops at the first folder
+// holding a package.json or a tsconfig.json, then looks for tsdoc.json THERE and
+// nowhere further up. Every scaffolded action holds both of those files, so the
+// walk always stops inside the action — and a vocabulary kept only at the space
+// root is never found, leaving `@tool` an undefined tag in every action of a
+// space that carries a perfectly good declaration one directory above.
+//
+// So the action's own file inherits from the space's, and the path between them
+// is a property of the layout this package creates. It is computed here from the
+// two paths the scaffold actually writes, so moving either one fails rather than
+// silently pointing at nothing.
+func TestAnActionInheritsTheVocabularyFromItsSpace(t *testing.T) {
+	raw, err := TemplatesFS.ReadFile("templates/action/tsdoc.json")
+	if err != nil {
+		t.Fatalf("a scaffolded action carries no tsdoc.json: %v", err)
+	}
+
+	var config struct {
+		Extends        []string `json:"extends"`
+		TagDefinitions []any    `json:"tagDefinitions"`
+	}
+
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatalf("an action's tsdoc.json is not readable as the format TSDoc defines: %v", err)
+	}
+
+	if len(config.TagDefinitions) != 0 {
+		t.Fatal("an action restates the vocabulary instead of inheriting it, so the two can disagree")
+	}
+
+	if len(config.Extends) != 1 {
+		t.Fatalf("expected an action to inherit from exactly one file, got %#v", config.Extends)
+	}
+
+	// TSDoc reads a base path that does not start with `./` as an NPM package
+	// name, so a relative one that omits it resolves to nothing installed.
+	if !strings.HasPrefix(config.Extends[0], "./") {
+		t.Fatalf("a relative base path must begin with \"./\" or it is read as a package name, got %q", config.Extends[0])
+	}
+
+	// The two paths the scaffold writes, from a space root, as it writes them.
+	spaceConfig := filepath.Join("/space", "tsdoc.json")
+	actionConfig := filepath.Join("/space", "apps", "com.acme.app", "actions", "read-things", "tsdoc.json")
+
+	inherited := filepath.Join(filepath.Dir(actionConfig), config.Extends[0])
+	if filepath.Clean(inherited) != spaceConfig {
+		t.Fatalf("an action inherits from %q, and its space declares the vocabulary at %q",
+			filepath.Clean(inherited), spaceConfig)
+	}
+}
+
+// THE SCAFFOLDED RUST ACTION DECLARES ITS PAYLOAD UNDER THE NAME THE GENERATOR
+// LOOKS FOR.
+//
+// A Rust action's input schema is read off a struct found BY NAME. A struct
+// called anything else is not found, and nothing is reported when it is not: an
+// action that genuinely takes no input is ordinary, so the generator answers
+// with the no-input schema and exits zero.
+//
+// That makes this the quiet failure. The template shipped a payload called
+// `Input` with a required field on it, and every action scaffolded from it
+// advertised an empty schema beside a handler that refuses an empty call — a
+// model reading the contract is told there is nothing to send, sends nothing,
+// and is refused for a reason the contract does not contain. The build said
+// Done and the action.json was well-formed.
+//
+// The name is read from the generator rather than written here, so the day it
+// changes upstream this fails instead of quietly scaffolding actions that
+// advertise no input.
+func TestTheScaffoldedRustActionDeclaresThePayloadTheGeneratorLooksFor(t *testing.T) {
+	source, err := TemplatesFS.ReadFile("templates/action-rust/main.rs")
+	if err != nil {
+		t.Fatalf("a scaffolded Rust action carries no main.rs: %v", err)
+	}
+
+	wanted := build.PayloadStructName()
+	if wanted == "" {
+		t.Fatal("the generator's payload struct name could not be read, so this check is not checking anything")
+	}
+
+	declaration := "struct " + wanted + " {"
+	if !strings.Contains(string(source), declaration) {
+		t.Fatalf("a scaffolded Rust action declares no %q, so its schema is read off nothing and it advertises no input", declaration)
+	}
+
+	// The handler has to deserialize the same type, or the schema describes one
+	// struct while the action reads another.
+	if !strings.Contains(string(source), "Request<"+wanted+">") {
+		t.Fatalf("a scaffolded Rust action declares %q but its handler does not take Request<%s>", declaration, wanted)
+	}
+
+	// A payload with no members would satisfy the two checks above and still
+	// advertise nothing, which is the failure they exist to catch.
+	if !strings.Contains(string(source), "name: String,") {
+		t.Fatal("a scaffolded Rust action's payload declares no member, so it advertises no input whatever it is called")
+	}
+}
+
+// THE SCAFFOLDED RUST ACTION BUILDS INTO THE STATEMENT ITS TEMPLATE MAKES.
+//
+// The template's comments name every tag an author may write, including the one
+// it deliberately leaves off. A mention is prose only while it is not read as a
+// tag: written at the start of a line it would be a claim no author made, and a
+// near spelling of one would refuse every action scaffolded from here. So the
+// template is put through the generator this binary embeds, exactly as the
+// first `simple build` after `simple new action --lang rust` would.
+func TestTheScaffoldedRustActionIsDescribedAsItsTemplateSays(t *testing.T) {
+	if _, err := exec.LookPath("node"); err != nil {
+		t.Skip("Node.js not available, skipping integration test")
+	}
+
+	if _, err := build.EnsureCargo(); err != nil {
+		t.Skip("cargo not available, skipping integration test")
+	}
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "apps", "com.test"), 0755); err != nil {
+		t.Fatalf("failed to create the app: %v", err)
+	}
+
+	cfg := ActionConfig{
+		AppID:        "com.test",
+		ActionName:   "greet-user",
+		DisplayName:  "Greet User",
+		ExecutionEnv: "server",
+		Language:     LanguageRust,
+	}
+
+	if err := CreateActionStructure(fsx.OSFileSystem{}, TemplatesFS, root, cfg); err != nil {
+		t.Fatalf("failed to scaffold the action: %v", err)
+	}
+
+	actionDir := filepath.Join(root, "apps", "com.test", "actions", "greet-user")
+	if err := build.ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+		t.Fatalf("a freshly scaffolded Rust action does not build: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+	if err != nil {
+		t.Fatalf("failed to read action.json: %v", err)
+	}
+
+	var described struct {
+		Description string         `json:"description"`
+		AI          map[string]any `json:"ai"`
+	}
+
+	if err := json.Unmarshal(raw, &described); err != nil {
+		t.Fatalf("action.json is not JSON: %v", err)
+	}
+
+	if described.AI["tool"] != true {
+		t.Fatalf("the template's @tool did not reach the artifact: %#v", described.AI)
+	}
+
+	// The template leaves the claim to the author, so the action it scaffolds
+	// makes none; the mention in its comment is not read as one.
+	if _, claimed := described.AI["parallelsafe"]; claimed {
+		t.Fatalf("a scaffolded action claims @parallelsafe that its author never wrote: %#v", described.AI)
+	}
+
+	if strings.Contains(described.Description, "@") {
+		t.Fatalf("a tag reached a scaffolded action's description: %q", described.Description)
 	}
 }

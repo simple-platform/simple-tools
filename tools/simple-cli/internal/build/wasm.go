@@ -2,8 +2,12 @@ package build
 
 import (
 	"fmt"
+	"io/fs"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/fsx"
+	"strings"
 )
 
 const (
@@ -112,15 +116,134 @@ func mapWasmOptArchOS(arch, platform string) archOSPair {
 	return result
 }
 
+// extractWasmOpt unpacks the archive wasm-opt is released in, and leaves the
+// tool at destPath.
+//
+// The archive is a tree: the tool, the other programs released with it, and
+// under lib/ what the tool loads when it starts. It belongs under the tools
+// directory, two levels above the tool, so that bin/ and lib/ sit where the
+// tool looks for them: for a destPath in ~/.simple/bin that is ~/.simple.
+//
+// NOTHING UNDER THE TOOLS DIRECTORY IS WRITTEN INTO. The tree is unpacked into
+// a directory of its own and each file is renamed into place, for the reason
+// downloadTool gives: a file another process is running, or has loaded, has to
+// stay whole.
+//
+// The tool itself is renamed to destPath and nowhere else. downloadTool asked
+// for it there and gives it its name afterwards, so the tool appears only once
+// everything it loads is in place.
 func extractWasmOpt(srcPath, destPath string) error {
-	// destPath is .../bin/wasm-opt via EnsureTool -> GetToolsBinDir
-	// We want to extract to .../ (the root tools dir) so that bin/wasm-opt and lib/ land in correct places.
-	// destPath = ~/.simple/bin/wasm-opt
-	// filepath.Dir(destPath) = ~/.simple/bin
-	// filepath.Dir(filepath.Dir(destPath)) = ~/.simple
+	binDir := filepath.Dir(destPath)
+	rootDir := filepath.Dir(binDir)
 
-	rootDir := filepath.Dir(filepath.Dir(destPath))
-	return ExtractTarGz(srcPath, rootDir, 1)
+	unpacked, err := os.MkdirTemp(rootDir, ".unpack-*")
+	if err != nil {
+		return fmt.Errorf("failed to create a directory to unpack into: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(unpacked) }()
+
+	if err := ExtractTarGz(srcPath, unpacked, 1); err != nil {
+		return err
+	}
+
+	tool := filepath.Join(unpacked, filepath.Base(binDir), WasmOptName)
+	found := false
+
+	err = filepath.WalkDir(unpacked, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+
+		target := destPath
+		if path == tool {
+			found = true
+		} else {
+			rel, err := filepath.Rel(unpacked, path)
+			if err != nil {
+				return err
+			}
+			target = filepath.Join(rootDir, rel)
+			if err := os.MkdirAll(filepath.Dir(target), fsx.DirPerm); err != nil {
+				return fmt.Errorf("failed to create the directory for %s: %w", target, err)
+			}
+		}
+
+		if err := os.Rename(path, target); err != nil {
+			return fmt.Errorf("failed to install %s: %w", target, err)
+		}
+
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	// An archive without the tool would otherwise install the empty file
+	// downloadTool staged for it, and report success.
+	if !found {
+		return fmt.Errorf("the archive carries no %s", filepath.Join(filepath.Base(binDir), WasmOptName))
+	}
+
+	return nil
+}
+
+// InstallRustURL is where a developer with no Rust toolchain is sent. It is
+// named once so that every refusal below points at the same place.
+const InstallRustURL = "https://rustup.rs"
+
+// EnsureCargo locates the cargo that compiles a Rust action.
+//
+// javy and wasm-opt are fetched into ~/.simple because they are build tooling
+// nobody installs on purpose. A Rust toolchain is the opposite: it is the
+// developer's own installation, pinned to a channel they chose, and it is what
+// `simple test` already runs their tests with. Downloading a second one beside
+// it would compile the shipped artifact with a compiler they never tested
+// against, so this only looks — and when there is nothing to find it says so in
+// the one sentence that ends with the fix.
+func EnsureCargo() (string, error) {
+	path, err := exec.LookPath("cargo")
+	if err != nil {
+		return "", fmt.Errorf("cargo was not found on PATH, and this action is written in Rust. Install a Rust toolchain (%s), then build again", InstallRustURL)
+	}
+	return path, nil
+}
+
+// EnsureRustWasmTarget checks that the standard library for RustWasmTarget is
+// installed, which is a separate thing from having a Rust toolchain at all.
+//
+// Without it cargo fails deep in the build with "can't find crate for `std`"
+// repeated once per dependency, which reads like a broken action rather than a
+// missing component. Refusing here turns that into the one command that fixes
+// it.
+func EnsureRustWasmTarget() error {
+	rustc, err := exec.LookPath("rustc")
+	if err != nil {
+		return fmt.Errorf("rustc was not found on PATH, and this action is written in Rust. Install a Rust toolchain (%s), then build again", InstallRustURL)
+	}
+
+	// rustc prints where the target's library directory *would* be whether or
+	// not anyone has installed it, so the exit status and the directory answer
+	// two different questions: a non-zero exit means this rustc has never heard
+	// of the target, and a path that does not exist means it knows the target
+	// but the component was never added.
+	out, err := exec.Command(rustc, "--print", "target-libdir", "--target", RustWasmTarget).Output()
+	if err != nil {
+		return fmt.Errorf("this rustc does not know the %s target. Install a current Rust toolchain (%s), then build again", RustWasmTarget, InstallRustURL)
+	}
+
+	libDir := strings.TrimSpace(string(out))
+	if libDir == "" || !dirExists(libDir) {
+		return fmt.Errorf("the %s target is not installed. Add it with 'rustup target add %s', then build again", RustWasmTarget, RustWasmTarget)
+	}
+	return nil
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func CompileToWasm(javyPath, jsPath, pluginPath, outputPath string) error {

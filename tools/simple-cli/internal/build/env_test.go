@@ -4,29 +4,88 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestValidateLanguage(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// 1. Missing index.ts -> Error
-	if err := ValidateLanguage(tmpDir); err == nil {
-		t.Error("Expected error for missing index.ts, got nil")
+func TestDetectActionLanguage(t *testing.T) {
+	tests := []struct {
+		name  string
+		files []string
+		want  ActionLanguage
+	}{
+		{"typescript under src", []string{"src/index.ts"}, LanguageTypeScript},
+		{"typescript at the root", []string{"index.ts"}, LanguageTypeScript},
+		{"rust", []string{"Cargo.toml", "src/main.rs"}, LanguageRust},
+		{"go", []string{"main.go"}, LanguageGo},
+		// Both spellings of TypeScript are one answer, not an ambiguity.
+		{"both typescript spellings", []string{"index.ts", "src/index.ts"}, LanguageTypeScript},
+		// A manifest names dependencies; the source names the language. A
+		// TypeScript action that happens to carry a Cargo.toml is still
+		// TypeScript, and must not be handed to cargo.
+		{"typescript beside a stray manifest", []string{"Cargo.toml", "src/index.ts"}, LanguageTypeScript},
 	}
 
-	// 2. With index.ts -> OK
-	srcDir := filepath.Join(tmpDir, "src")
-	if err := os.MkdirAll(srcDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	indexFile := filepath.Join(srcDir, "index.ts")
-	if err := os.WriteFile(indexFile, []byte{}, 0644); err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeActionSources(t, dir, tt.files...)
 
-	if err := ValidateLanguage(tmpDir); err != nil {
-		t.Errorf("ValidateLanguage() error = %v", err)
+			got, err := DetectActionLanguage(dir)
+			if err != nil {
+				t.Fatalf("DetectActionLanguage() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("DetectActionLanguage() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDetectActionLanguage_None pins that an action with no source is told what
+// was looked for. "Unsupported language" sends a developer hunting through a
+// file that does not exist.
+func TestDetectActionLanguage_None(t *testing.T) {
+	dir := t.TempDir()
+	writeActionSources(t, dir, "README.md")
+
+	_, err := DetectActionLanguage(dir)
+	if err == nil {
+		t.Fatal("Expected an error for an action with no source, got nil")
+	}
+	for _, want := range []string{"src/index.ts", "src/main.rs", "main.go"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Error should name %s as one of the sources looked for, got: %v", want, err)
+		}
+	}
+}
+
+// TestDetectActionLanguage_Ambiguous pins that two sources are refused rather
+// than resolved by precedence. Picking one would leave the other compiled by
+// nothing, with nothing said about it.
+func TestDetectActionLanguage_Ambiguous(t *testing.T) {
+	dir := t.TempDir()
+	writeActionSources(t, dir, "src/index.ts", "src/main.rs")
+
+	_, err := DetectActionLanguage(dir)
+	if err == nil {
+		t.Fatal("Expected an error for an action with two sources, got nil")
+	}
+	if !strings.Contains(err.Error(), "src/index.ts") || !strings.Contains(err.Error(), "src/main.rs") {
+		t.Errorf("Error should name both sources it found, got: %v", err)
+	}
+}
+
+func writeActionSources(t *testing.T, dir string, relPaths ...string) {
+	t.Helper()
+	for _, rel := range relPaths {
+		path := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

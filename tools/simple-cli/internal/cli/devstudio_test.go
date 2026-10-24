@@ -1,0 +1,1410 @@
+package cli
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+// setupTestProductionRoot builds a production root of test instances and
+// returns its canonical path. The bridge resolves the symlinks out of an
+// instance root before it reports that root or measures containment against
+// it, so the fixture names the same resolved directory. Some platforms hand
+// out a per-test temporary directory that is reached through a symlink, and
+// the unresolved alias names a path the bridge never uses. The directory is
+// also the home folder, because the bridge only works inside home.
+func setupTestProductionRoot(t *testing.T, instanceIDs ...string) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("resolve test production root: %v", err)
+	}
+	t.Setenv("HOME", dir)
+	oldRoot := devStudioProductionRoot
+	devStudioProductionRoot = dir
+	t.Cleanup(func() { devStudioProductionRoot = oldRoot })
+	// The bridge keeps conversation records under the Simple CLI home.
+	t.Setenv("SIMPLE_CLI_HOME", filepath.Join(dir, "cli-home"))
+
+	for _, id := range instanceIDs {
+		instanceRoot := filepath.Join(dir, id)
+		if err := os.MkdirAll(filepath.Join(instanceRoot, devStudioAppsDirectory), 0755); err != nil {
+			t.Fatalf("mkdir test instance %s: %v", id, err)
+		}
+		if err := os.WriteFile(filepath.Join(instanceRoot, "simple.scl"), []byte("tenant acme\nenv dev {\n  endpoint acme.simple.lcl\n  api_key $OTHER_KEY\n}\n"), 0644); err != nil {
+			t.Fatalf("write test workspace config %s: %v", id, err)
+		}
+	}
+	return dir
+}
+
+func TestDevStudioWorkspaceRoot(t *testing.T) {
+	homeDirectory, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("resolve user home directory: %v", err)
+	}
+	want := filepath.Join(homeDirectory, "workspace", "simple-devstudio")
+	if devStudioWorkspaceRoot != want {
+		t.Fatalf("devStudioWorkspaceRoot = %q, want %q", devStudioWorkspaceRoot, want)
+	}
+}
+
+func TestDevStudioServeCommandIsRegistered(t *testing.T) {
+	command, _, err := RootCmd.Find([]string{"devstudio", "serve"})
+	if err != nil {
+		t.Fatalf("find devstudio serve command: %v", err)
+	}
+	if command != devStudioServeCmd {
+		t.Fatalf("command = %p, want devStudioServeCmd %p", command, devStudioServeCmd)
+	}
+	if command.Args == nil {
+		t.Fatal("devStudioServeCmd.Args is nil, want cobra.NoArgs")
+	}
+	if err := command.Args(command, []string{"extra"}); err == nil {
+		t.Fatal("expected error for positional args on serve, got nil")
+	}
+}
+
+func TestDevStudioBridgeStartsOnLoopback(t *testing.T) {
+	bridge := newTestDevStudioBridge(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address type = %T, want *net.TCPAddr", listener.Addr())
+	}
+	if !address.IP.Equal(net.ParseIP("127.0.0.1")) {
+		t.Fatalf("listener IP = %s, want 127.0.0.1", address.IP)
+	}
+
+	server := &http.Server{Handler: bridge.handler()}
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(ctx)
+		<-done
+	})
+
+	response, err := http.Get("http://" + listener.Addr().String() + "/health")
+	if err != nil {
+		t.Fatalf("get health: %v", err)
+	}
+	defer func() { _ = response.Body.Close() }()
+
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d, want %d", response.StatusCode, http.StatusOK)
+	}
+
+	var health map[string]string
+	if err := json.NewDecoder(response.Body).Decode(&health); err != nil {
+		t.Fatalf("decode health: %v", err)
+	}
+	if health["status"] != "ok" {
+		t.Fatalf("health status payload = %q, want ok", health["status"])
+	}
+}
+
+func TestDevStudioServePrintsLocalEndpointsAndStopsWithContext(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() { done <- serveDevStudio(ctx, listener, &output) }()
+
+	response, err := http.Get("http://" + listener.Addr().String() + "/health")
+	if err != nil {
+		t.Fatalf("get health: %v", err)
+	}
+	_ = response.Body.Close()
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serveDevStudio returned error: %v", err)
+	}
+
+	address := listener.Addr().String()
+	if !strings.Contains(output.String(), "Bound address: "+address) {
+		t.Fatalf("startup output missing address %q: %s", address, output.String())
+	}
+	if !strings.Contains(output.String(), "Health: http://"+address+"/health") {
+		t.Fatalf("startup output missing health endpoint: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "WebSocket: ws://"+address+devStudioWebSocketPath) {
+		t.Fatalf("startup output missing WebSocket endpoint: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "Press Ctrl+C to stop.") {
+		t.Fatalf("startup output missing shutdown guidance: %s", output.String())
+	}
+}
+
+func TestDevStudioWorkspaceResolver(t *testing.T) {
+	t.Run("valid root and discovers apps beneath apps directory", func(t *testing.T) {
+		baseDir := setupTestProductionRoot(t, "inst_valid")
+		instDir := filepath.Join(baseDir, "inst_valid")
+		legacyApp := filepath.Join(instDir, "legacy-app")
+		if err := os.MkdirAll(legacyApp, 0755); err != nil {
+			t.Fatalf("mkdir legacyApp: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(legacyApp, "app.scl"), []byte("app legacy-app"), 0644); err != nil {
+			t.Fatalf("write legacy app.scl: %v", err)
+		}
+
+		// App 1 with app.scl
+		app1 := filepath.Join(instDir, devStudioAppsDirectory, "my-app")
+		if err := os.MkdirAll(app1, 0755); err != nil {
+			t.Fatalf("mkdir app1: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(app1, "app.scl"), []byte("app my-app"), 0644); err != nil {
+			t.Fatalf("write app.scl: %v", err)
+		}
+
+		// Non-app dir without app.scl
+		otherDir := filepath.Join(instDir, devStudioAppsDirectory, "regular-dir")
+		if err := os.MkdirAll(otherDir, 0755); err != nil {
+			t.Fatalf("mkdir otherDir: %v", err)
+		}
+
+		ws, err := resolveDevStudioWorkspace("inst_valid")
+		if err != nil {
+			t.Fatalf("resolveDevStudioWorkspace unexpected error: %v", err)
+		}
+		if ws == nil {
+			t.Fatal("expected workspace non-nil")
+		}
+		if ws.instanceID != "inst_valid" {
+			t.Fatalf("ws.instanceID = %q, want inst_valid", ws.instanceID)
+		}
+		if len(ws.appDirs) != 1 || ws.appDirs[0] != "my-app" {
+			t.Fatalf("ws.appDirs = %v, want [my-app]", ws.appDirs)
+		}
+	})
+
+	t.Run("missing root clear failure", func(t *testing.T) {
+		setupTestProductionRoot(t)
+		_, err := resolveDevStudioWorkspace("inst_missing")
+		if err == nil {
+			t.Fatal("expected error for missing root directory, got nil")
+		}
+	})
+
+	t.Run("bad instance ID cannot escape", func(t *testing.T) {
+		setupTestProductionRoot(t)
+		for _, badID := range []string{".", "..", "../escaped", "foo/bar", "inst;bad", ""} {
+			_, err := resolveDevStudioWorkspace(badID)
+			if err == nil {
+				t.Fatalf("expected error for bad instance ID %q, got nil", badID)
+			}
+		}
+	})
+
+	t.Run("symlink escape rejected", func(t *testing.T) {
+		baseDir := setupTestProductionRoot(t)
+		outsideDir := t.TempDir()
+
+		symlinkPath := filepath.Join(baseDir, "inst_symlink")
+		if err := os.Symlink(outsideDir, symlinkPath); err != nil {
+			t.Fatalf("create symlink: %v", err)
+		}
+
+		_, err := resolveDevStudioWorkspace("inst_symlink")
+		if err == nil {
+			t.Fatal("expected error for symlink escaping base dir, got nil")
+		}
+	})
+
+	t.Run("apps directory symlink containment", func(t *testing.T) {
+		baseDir := setupTestProductionRoot(t, "inst_symlink_apps")
+		instDir := filepath.Join(baseDir, "inst_symlink_apps")
+
+		outsideDir := t.TempDir()
+		outsideApp := filepath.Join(outsideDir, "outside-app")
+		if err := os.MkdirAll(outsideApp, 0755); err != nil {
+			t.Fatalf("mkdir outsideApp: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(outsideApp, "app.scl"), []byte("mock"), 0644); err != nil {
+			t.Fatalf("write app.scl: %v", err)
+		}
+
+		if err := os.Symlink(outsideApp, filepath.Join(instDir, devStudioAppsDirectory, "symlink-outside")); err != nil {
+			t.Fatalf("create symlink outside: %v", err)
+		}
+
+		insideApp := filepath.Join(instDir, devStudioAppsDirectory, "inside-app")
+		if err := os.MkdirAll(insideApp, 0755); err != nil {
+			t.Fatalf("mkdir insideApp: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(insideApp, "app.scl"), []byte("mock"), 0644); err != nil {
+			t.Fatalf("write app.scl: %v", err)
+		}
+
+		ws, err := resolveDevStudioWorkspace("inst_symlink_apps")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(ws.appDirs) != 1 || ws.appDirs[0] != "inside-app" {
+			t.Fatalf("appDirs = %v, want [inside-app]", ws.appDirs)
+		}
+	})
+}
+
+func TestDevStudioInjectableResolver(t *testing.T) {
+	t.Run("bridge uses injected resolver", func(t *testing.T) {
+		baseDir := setupTestProductionRoot(t, "inst_custom")
+		customCalled := false
+		customResolver := func(id string) (*devStudioWorkspace, error) {
+			customCalled = true
+			return &devStudioWorkspace{
+				instanceID:   id,
+				instanceRoot: filepath.Join(baseDir, id),
+			}, nil
+		}
+
+		bridge := newTestDevStudioBridge(t, customResolver)
+		server := httptest.NewServer(bridge.handler())
+		defer server.Close()
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + devStudioWebSocketPath
+		connection := dialDevStudio(t, wsURL)
+		defer func() { _ = connection.Close() }()
+
+		sendDevStudioMessage(t, connection, sessionConnectMessage("inst_custom"))
+		message := readDevStudioMessage(t, connection)
+
+		if !customCalled {
+			t.Fatal("custom resolver was not called by bridge")
+		}
+		if message["type"] != "session.ready" {
+			t.Fatalf("type = %q, want session.ready", message["type"])
+		}
+	})
+
+}
+
+func TestDevStudioCandidatePathsAndPathRequired(t *testing.T) {
+	t.Run("returns instance_path_required when instance not found in candidate paths", func(t *testing.T) {
+		setupTestProductionRoot(t) // Empty production root
+		bridge := newTestDevStudioBridge(t)
+		server := httptest.NewServer(bridge.handler())
+		t.Cleanup(server.Close)
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + devStudioWebSocketPath
+		connection := dialDevStudio(t, wsURL)
+		defer func() { _ = connection.Close() }()
+
+		sendDevStudioMessage(t, connection, sessionConnectMessage("inst_nonexistent_candidate"))
+		message := readDevStudioMessage(t, connection)
+		if message["type"] != "error" {
+			t.Fatalf("type = %q, want error", message["type"])
+		}
+		if message["code"] != "instance_path_required" {
+			t.Fatalf("code = %q, want instance_path_required", message["code"])
+		}
+	})
+
+	t.Run("initializes and connects when custom instancePath is provided", func(t *testing.T) {
+		baseDir := setupTestProductionRoot(t)
+		customInstancePath := filepath.Join(baseDir, "workspace", "inst_custom_path")
+
+		bridge := newTestDevStudioBridge(t)
+		server := httptest.NewServer(bridge.handler())
+		t.Cleanup(server.Close)
+
+		wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + devStudioWebSocketPath
+		connection := dialDevStudio(t, wsURL)
+		defer func() { _ = connection.Close() }()
+
+		connectMsg := map[string]any{
+			"type":            "session.connect",
+			"protocolVersion": devStudioProtocolVersion,
+			"instanceId":      "inst_custom_path",
+			"instanceHost":    "inst_custom_path.simple.lcl",
+			"deployKey":       "test_deploy_key_secret",
+			"instancePath":    customInstancePath,
+		}
+		sendDevStudioMessage(t, connection, connectMsg)
+		message := readDevStudioMessage(t, connection)
+		if message["type"] != "session.ready" {
+			t.Fatalf("type = %q, want session.ready", message["type"])
+		}
+
+		info, err := os.Stat(customInstancePath)
+		if err != nil || !info.IsDir() {
+			t.Fatalf("created custom instance root = %v, %v; want directory", info, err)
+		}
+		if appsInfo, err := os.Stat(filepath.Join(customInstancePath, devStudioAppsDirectory)); err != nil || !appsInfo.IsDir() {
+			t.Fatalf("apps directory not created in custom instance root: %v", err)
+		}
+		if sclInfo, err := os.Stat(filepath.Join(customInstancePath, "simple.scl")); err != nil || sclInfo.IsDir() {
+			t.Fatalf("simple.scl not created in custom instance root: %v", err)
+		}
+		if agentsInfo, err := os.Stat(filepath.Join(customInstancePath, "AGENTS.md")); err != nil || agentsInfo.IsDir() {
+			t.Fatalf("AGENTS.md not created in custom instance root: %v", err)
+		}
+	})
+}
+
+// TestDevStudioBridgeRefusesUnsafeInstanceFolders covers the folders the
+// browser may name that the bridge must not hand to Codex, which may write
+// anywhere inside the folder it is given.
+func TestDevStudioBridgeRefusesUnsafeInstanceFolders(t *testing.T) {
+	type folder struct {
+		instanceID    string
+		instancePath  string
+		mustNotExist  string
+		unchangedFile string
+	}
+	// makeHome creates a home folder under base and makes it the home folder.
+	makeHome := func(t *testing.T, elements ...string) string {
+		t.Helper()
+		home := filepath.Join(elements...)
+		if err := os.MkdirAll(home, 0755); err != nil {
+			t.Fatalf("create home: %v", err)
+		}
+		t.Setenv("HOME", home)
+		return home
+	}
+	// makeInstance creates an instance folder whose simple.scl is a link to target.
+	makeInstance := func(t *testing.T, root, target string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(root, devStudioAppsDirectory), 0755); err != nil {
+			t.Fatalf("create instance: %v", err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, "simple.scl")); err != nil {
+			t.Fatalf("link simple.scl: %v", err)
+		}
+	}
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, base string) folder
+		wantCode   string
+		wantReason string
+	}{
+		{
+			name: "home folder itself",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "inst_home")
+				return folder{instanceID: "inst_home", instancePath: home, mustNotExist: filepath.Join(home, devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be inside your home folder",
+		},
+		{
+			name: "root of the disk",
+			setup: func(t *testing.T, base string) folder {
+				makeHome(t, base, "person")
+				return folder{instanceID: "inst_root", instancePath: "/", mustNotExist: filepath.Join("/", devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be named after the instance",
+		},
+		{
+			name: "folder above home",
+			setup: func(t *testing.T, base string) folder {
+				makeHome(t, base, "inst_above", "person")
+				above := filepath.Join(base, "inst_above")
+				return folder{instanceID: "inst_above", instancePath: above, mustNotExist: filepath.Join(above, devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be inside your home folder",
+		},
+		{
+			name: "last name is not the instance",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				path := filepath.Join(home, "workspace", "other_name")
+				return folder{instanceID: "inst_named", instancePath: path, mustNotExist: path}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be named after the instance",
+		},
+		{
+			name: "link from home to a folder outside it",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				outside := filepath.Join(base, "elsewhere", "inst_link")
+				if err := os.MkdirAll(outside, 0755); err != nil {
+					t.Fatalf("create outside folder: %v", err)
+				}
+				link := filepath.Join(home, "inst_link")
+				if err := os.Symlink(outside, link); err != nil {
+					t.Fatalf("link instance folder: %v", err)
+				}
+				return folder{instanceID: "inst_link", instancePath: link, mustNotExist: filepath.Join(outside, devStudioAppsDirectory)}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: "must be inside your home folder",
+		},
+		{
+			name: "path through ..",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				// Joined by hand, because filepath.Join would remove the "..".
+				return folder{instanceID: "inst_dotdot", instancePath: home + "/workspace/../inst_dotdot", mustNotExist: filepath.Join(home, "inst_dotdot")}
+			},
+			wantCode:   "workspace_initialization_failed",
+			wantReason: `without ".."`,
+		},
+		{
+			name: "simple.scl links to a file outside the folder",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				outside := filepath.Join(base, "elsewhere.scl")
+				if err := os.WriteFile(outside, []byte("keep\n"), 0644); err != nil {
+					t.Fatalf("write outside file: %v", err)
+				}
+				root := filepath.Join(home, "inst_scl_link")
+				makeInstance(t, root, outside)
+				return folder{instanceID: "inst_scl_link", instancePath: root, unchangedFile: outside}
+			},
+			wantCode:   "workspace_configuration_failed",
+			wantReason: "could not be prepared",
+		},
+		{
+			name: "simple.scl links to a missing file outside the folder",
+			setup: func(t *testing.T, base string) folder {
+				home := makeHome(t, base, "person")
+				outside := filepath.Join(base, "planted.scl")
+				root := filepath.Join(home, "inst_scl_dangling")
+				makeInstance(t, root, outside)
+				return folder{instanceID: "inst_scl_dangling", instancePath: root, mustNotExist: outside}
+			},
+			wantCode:   "workspace_configuration_failed",
+			wantReason: "could not be prepared",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			base, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatalf("resolve base: %v", err)
+			}
+			fixture := tt.setup(t, base)
+			server := httptest.NewServer(newDevStudioBridge().handler())
+			t.Cleanup(server.Close)
+			connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+			defer func() { _ = connection.Close() }()
+
+			connect := sessionConnectMessage(fixture.instanceID)
+			connect["instancePath"] = fixture.instancePath
+			sendDevStudioMessage(t, connection, connect)
+			message := readDevStudioMessage(t, connection)
+
+			if message["type"] != "error" || message["code"] != tt.wantCode {
+				t.Fatalf("message = %v, want error %s", message, tt.wantCode)
+			}
+			if text, _ := message["message"].(string); !strings.Contains(text, tt.wantReason) {
+				t.Fatalf("message text = %q, want it to say %q", text, tt.wantReason)
+			}
+			if fixture.mustNotExist != "" {
+				if _, err := os.Lstat(fixture.mustNotExist); !os.IsNotExist(err) {
+					t.Fatalf("%s exists after the refusal (err = %v)", fixture.mustNotExist, err)
+				}
+			}
+			if fixture.unchangedFile != "" {
+				if contents, err := os.ReadFile(fixture.unchangedFile); err != nil || string(contents) != "keep\n" {
+					t.Fatalf("%s = %q, %v; want it unchanged", fixture.unchangedFile, contents, err)
+				}
+			}
+		})
+	}
+}
+
+func TestDevStudioBridgeHandshake(t *testing.T) {
+	_, wsURL := startDevStudioBridge(t)
+	connection := dialDevStudio(t, wsURL)
+	defer func() { _ = connection.Close() }()
+
+	sendDevStudioMessage(t, connection, sessionConnectMessage("inst_acme_dev"))
+
+	message := readDevStudioMessage(t, connection)
+	if message["type"] != "session.ready" {
+		t.Fatalf("type = %q, want session.ready", message["type"])
+	}
+	if message["protocolVersion"] != float64(2) {
+		t.Fatalf("protocolVersion = %v, want 2", message["protocolVersion"])
+	}
+	if message["threadId"] != "thread_fake" || message["resumed"] != false {
+		t.Fatalf("session.ready conversation = %v, %v, want thread_fake, not resumed", message["threadId"], message["resumed"])
+	}
+	if message["instanceId"] != "inst_acme_dev" {
+		t.Fatalf("instanceId = %q, want inst_acme_dev", message["instanceId"])
+	}
+	if message["instanceRootReady"] != true {
+		t.Fatalf("instanceRootReady = %v, want true", message["instanceRootReady"])
+	}
+
+	// Verify no path, apps, or prohibited fields present
+	for _, forbidden := range []string{"path", "apps", "app", "page", "route", "record", "view", "deployKey"} {
+		if _, exists := message[forbidden]; exists {
+			t.Fatalf("response unexpectedly contained forbidden field %q", forbidden)
+		}
+	}
+}
+
+// A link the agent plants under the instance folder must not point the
+// set-up-key check, or the folders the helper tools write to, somewhere else.
+func TestDevStudioInstancePathsRefuseLinksOutOfTheFolder(t *testing.T) {
+	baseDir := setupTestProductionRoot(t, "inst_links")
+	instanceRoot := filepath.Join(baseDir, "inst_links")
+	outside := filepath.Join(t.TempDir(), ".simple")
+	pairDir := filepath.Join(outside, "keys", "acme", "devstudio", "000002")
+	if err := os.MkdirAll(pairDir, 0755); err != nil {
+		t.Fatalf("make key pair folder: %v", err)
+	}
+	for _, name := range []string{"private.pem", ".enrolled"} {
+		if err := os.WriteFile(filepath.Join(pairDir, name), []byte("test"), 0600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(instanceRoot, ".simple")); err != nil {
+		t.Fatalf("link .simple: %v", err)
+	}
+
+	workspace := &devStudioWorkspace{instanceID: "inst_links", instanceRoot: instanceRoot}
+	config := "tenant acme\n\nenv devstudio {\n  api_key \"si_000002" + strings.Repeat("a", 64) + "\"\n}\n"
+	if devStudioSCLHasSetUpKey(workspace, []byte(config)) {
+		t.Fatal("a key pair outside the instance folder counted as set up")
+	}
+	if _, err := devStudioCodexEnvironment(instanceRoot, "inst_links", "current-key"); err == nil {
+		t.Fatal("helper tool folders behind a link out of the instance folder were accepted")
+	}
+}
+
+// A deploy key's secret is a one-time enrollment code: once the workspace's
+// key pair is set up, the CLI signs in with that pair, and writing another
+// key into simple.scl would make the next deploy use that key up.
+func TestDevStudioBridgeKeepsSetUpWorkspaceKey(t *testing.T) {
+	workspaceKey := "si_000002" + strings.Repeat("a", 64)
+	browserKey := "si_000003" + strings.Repeat("b", 64)
+	config := "tenant acme\n\nenv devstudio {\n  endpoint \"inst_acme_dev.simple.lcl\"\n  api_key \"" + workspaceKey + "\"\n}\n"
+	tests := []struct {
+		name string
+		// pairFor is the id whose key pair is set up in the workspace, or "".
+		pairFor   string
+		key       any
+		omitKey   bool
+		wantWrite bool
+	}{
+		{"set up, other key sent", "000002", browserKey, false, false},
+		{"set up, no key", "000002", nil, true, false},
+		{"not set up, key sent", "", browserKey, false, true},
+		{"not set up, no key", "", nil, true, false},
+		{"not set up, empty key", "", "", false, false},
+		{"only another key set up, key sent", "000009", browserKey, false, true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			previousLog := log.Writer()
+			log.SetOutput(&logs)
+			t.Cleanup(func() { log.SetOutput(previousLog) })
+
+			baseDir := setupTestProductionRoot(t, "inst_acme_dev")
+			instanceRoot := filepath.Join(baseDir, "inst_acme_dev")
+			configPath := filepath.Join(instanceRoot, "simple.scl")
+			if err := os.WriteFile(configPath, []byte(config), 0644); err != nil {
+				t.Fatalf("write simple.scl: %v", err)
+			}
+			if test.pairFor != "" {
+				pairDir := filepath.Join(instanceRoot, ".simple", "keys", "acme", "devstudio", test.pairFor)
+				if err := os.MkdirAll(pairDir, 0755); err != nil {
+					t.Fatalf("make key pair folder: %v", err)
+				}
+				for _, name := range []string{"private.pem", ".enrolled"} {
+					if err := os.WriteFile(filepath.Join(pairDir, name), []byte("test"), 0600); err != nil {
+						t.Fatalf("write %s: %v", name, err)
+					}
+				}
+			}
+			starter := newFakeDevStudioCodexStarter(nil)
+			server := startDevStudioBridgeServer(t, newDevStudioBridgeWithCodexStarter(starter))
+			connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+			defer func() { _ = connection.Close() }()
+
+			request := sessionConnectMessage("inst_acme_dev")
+			delete(request, "deployKey")
+			if !test.omitKey {
+				request["deployKey"] = test.key
+			}
+			sendDevStudioMessage(t, connection, request)
+			if message := readDevStudioMessage(t, connection); message["type"] != "session.ready" {
+				t.Fatalf("connect = %v, want session.ready", message)
+			}
+
+			contents, err := os.ReadFile(configPath)
+			if err != nil {
+				t.Fatalf("read simple.scl: %v", err)
+			}
+			starter.mu.Lock()
+			codexKey := starter.starts[0].DeployKey
+			starter.mu.Unlock()
+			if test.wantWrite {
+				if !strings.Contains(string(contents), `api_key "`+browserKey+`"`) || codexKey != browserKey {
+					t.Fatalf("first-time setup did not take the sent key: Codex key %q, simple.scl:\n%s", codexKey, contents)
+				}
+			} else {
+				if string(contents) != config {
+					t.Fatalf("simple.scl changed:\n%s", contents)
+				}
+				if codexKey != "" {
+					t.Fatalf("Codex was given the key %q, want none", codexKey)
+				}
+			}
+			if strings.Contains(logs.String(), browserKey) {
+				t.Fatalf("the sent key was logged:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+func TestDevStudioSCLTenantAndKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		text       string
+		wantTenant string
+		wantKey    string
+	}{
+		{"quoted key", "tenant acme\nenv devstudio {\n  api_key \"si_x\"\n}\n", "acme", "si_x"},
+		{"other env ignored", "tenant acme\nenv dev {\n  api_key \"si_dev\"\n}\nenv devstudio {\n  api_key 'si_studio'\n}\n", "acme", "si_studio"},
+		{"variable is not a literal", "tenant \"acme\"\nenv devstudio {\n  api_key $SIMPLE_KEY\n}\n", "acme", ""},
+		{"no devstudio block", "tenant acme\nenv dev {\n  api_key \"si_dev\"\n}\n", "acme", ""},
+		{"tenant inside a block ignored", "env devstudio {\n  tenant other\n  api_key si_y\n}\n", "", "si_y"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tenant, key := devStudioSCLTenantAndKey(test.text)
+			if tenant != test.wantTenant || key != test.wantKey {
+				t.Fatalf("devStudioSCLTenantAndKey = %q, %q, want %q, %q", tenant, key, test.wantTenant, test.wantKey)
+			}
+		})
+	}
+}
+
+func TestDevStudioBridgeRejectsBlankDeployKey(t *testing.T) {
+	_, wsURL := startDevStudioBridge(t)
+	connection := dialDevStudio(t, wsURL)
+	defer func() { _ = connection.Close() }()
+
+	request := sessionConnectMessage("inst_acme_dev")
+	request["deployKey"] = "   "
+	sendDevStudioMessage(t, connection, request)
+	if message := readDevStudioMessage(t, connection); message["code"] != "invalid_deploy_key" {
+		t.Fatalf("code = %q, want invalid_deploy_key", message["code"])
+	}
+}
+
+func TestDevStudioBridgeDeployKeyHandlingAndClearing(t *testing.T) {
+	bridge, wsURL := startDevStudioBridge(t)
+	connection := dialDevStudio(t, wsURL)
+
+	keySecret := "secret_deploy_key_999"
+	sendDevStudioMessage(t, connection, map[string]any{
+		"type":            "session.connect",
+		"protocolVersion": devStudioProtocolVersion,
+		"instanceId":      "inst_acme_dev",
+		"instanceHost":    "inst_acme_dev.simple.lcl",
+		"deployKey":       keySecret,
+	})
+
+	message := readDevStudioMessage(t, connection)
+	if message["type"] != "session.ready" {
+		t.Fatalf("type = %q, want session.ready", message["type"])
+	}
+
+	// Check that deployKey is present in internal session state. The key is
+	// guarded by the session's own lock.
+	bridge.mu.Lock()
+	sess := bridge.session
+	bridge.mu.Unlock()
+	if sess == nil {
+		t.Fatal("no session after session.ready")
+	}
+	sess.stateMu.Lock()
+	storedKey := sess.deployKey
+	sess.stateMu.Unlock()
+
+	if storedKey != keySecret {
+		t.Fatalf("in-memory deployKey = %q, want %q", storedKey, keySecret)
+	}
+
+	// Close connection and verify key cleared
+	_ = connection.Close()
+	waitForDevStudioSessionEnd(t, sess)
+	sess.stateMu.Lock()
+	keyAfter := sess.deployKey
+	sess.stateMu.Unlock()
+	if keyAfter != "" {
+		t.Fatalf("deployKey after disconnect = %q, want empty", keyAfter)
+	}
+}
+
+func waitForDevStudioSessionEnd(t *testing.T, session *devStudioSession) {
+	t.Helper()
+	select {
+	case <-session.ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the session did not end after its browser disconnected")
+	}
+}
+
+func TestDevStudioBridgeRejectsInvalidHandshake(t *testing.T) {
+	tests := []struct {
+		name    string
+		message map[string]any
+		code    string
+	}{
+		{
+			name: "invalid protocol version",
+			message: map[string]any{
+				"type":            "session.connect",
+				"protocolVersion": 1,
+				"instanceId":      "inst_acme_dev",
+				"deployKey":       "test_key",
+			},
+			code: "protocol_version_unsupported",
+		},
+		{
+			name: "invalid instance id",
+			message: map[string]any{
+				"type":            "session.connect",
+				"protocolVersion": devStudioProtocolVersion,
+				"instanceId":      "inst/acme",
+				"deployKey":       "test_key",
+			},
+			code: "invalid_instance_id",
+		},
+		{
+			name: "dot dot instance id",
+			message: map[string]any{
+				"type":            "session.connect",
+				"protocolVersion": devStudioProtocolVersion,
+				"instanceId":      "..",
+				"deployKey":       "test_key",
+			},
+			code: "invalid_instance_id",
+		},
+		{
+			name: "instance host does not match instance name",
+			message: map[string]any{
+				"type":            "session.connect",
+				"protocolVersion": devStudioProtocolVersion,
+				"instanceId":      "acme",
+				"instanceHost":    "other.simple.lcl",
+				"deployKey":       "test_key",
+			},
+			code: "invalid_instance_host",
+		},
+		{
+			name: "unknown message type",
+			message: map[string]any{
+				"type":            "session.other",
+				"protocolVersion": devStudioProtocolVersion,
+				"instanceId":      "inst_acme_dev",
+				"deployKey":       "test_key",
+			},
+			code: "unsupported_message_type",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, wsURL := startDevStudioBridge(t)
+			connection := dialDevStudio(t, wsURL)
+			defer func() { _ = connection.Close() }()
+
+			sendDevStudioMessage(t, connection, test.message)
+			message := readDevStudioMessage(t, connection)
+			if message["type"] != "error" {
+				t.Fatalf("type = %q, want error", message["type"])
+			}
+			if message["code"] != test.code {
+				t.Fatalf("code = %q, want %q", message["code"], test.code)
+			}
+		})
+	}
+}
+
+func TestDevStudioBridgeRejectsMalformedMessages(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{
+			name:    "invalid JSON",
+			payload: `{"type":"session.connect"`,
+		},
+		{
+			name:    "unexpected app context",
+			payload: `{"type":"session.connect","protocolVersion":2,"instanceId":"inst_acme_dev","deployKey":"k","appId":"com.example.app"}`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, wsURL := startDevStudioBridge(t)
+			connection := dialDevStudio(t, wsURL)
+			defer func() { _ = connection.Close() }()
+
+			if err := connection.WriteMessage(websocket.TextMessage, []byte(test.payload)); err != nil {
+				t.Fatalf("write message: %v", err)
+			}
+			if message := readDevStudioMessage(t, connection); message["code"] != "invalid_message" {
+				t.Fatalf("code = %q, want invalid_message", message["code"])
+			}
+		})
+	}
+}
+
+func TestDevStudioBridgeRejectsSecondActiveSession(t *testing.T) {
+	previousWait := devStudioSessionHandoverWait
+	devStudioSessionHandoverWait = 100 * time.Millisecond
+	t.Cleanup(func() { devStudioSessionHandoverWait = previousWait })
+	_, wsURL := startDevStudioBridge(t)
+	first := dialDevStudio(t, wsURL)
+	defer func() { _ = first.Close() }()
+	sendDevStudioMessage(t, first, sessionConnectMessage("inst_acme_dev"))
+	if message := readDevStudioMessage(t, first); message["type"] != "session.ready" {
+		t.Fatalf("first type = %q, want session.ready", message["type"])
+	}
+
+	second := dialDevStudio(t, wsURL)
+	defer func() { _ = second.Close() }()
+	sendDevStudioMessage(t, second, sessionConnectMessage("inst_acme_dev"))
+	if message := readDevStudioMessage(t, second); message["code"] != "session_already_active" {
+		t.Fatalf("second code = %q, want session_already_active", message["code"])
+	}
+}
+
+func TestDevStudioBridgeClearsSessionWhenBrowserDisconnects(t *testing.T) {
+	_, wsURL := startDevStudioBridge(t)
+	first := dialDevStudio(t, wsURL)
+	sendDevStudioMessage(t, first, sessionConnectMessage("inst_acme_dev"))
+	if message := readDevStudioMessage(t, first); message["type"] != "session.ready" {
+		t.Fatalf("first type = %q, want session.ready", message["type"])
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first connection: %v", err)
+	}
+
+	second := dialDevStudio(t, wsURL)
+	defer func() { _ = second.Close() }()
+	sendDevStudioMessage(t, second, sessionConnectMessage("inst_acme_dev"))
+	if message := readDevStudioMessage(t, second); message["type"] != "session.ready" {
+		t.Fatalf("second type = %q, want session.ready", message["type"])
+	}
+}
+
+// A page that reloads or reconnects can arrive before the bridge has ended
+// its old session; it waits for that session instead of being refused.
+func TestDevStudioBridgeHandsOverToReconnectWaitingForOldSession(t *testing.T) {
+	_, wsURL := startDevStudioBridge(t)
+	first := dialDevStudio(t, wsURL)
+	sendDevStudioMessage(t, first, sessionConnectMessage("inst_acme_dev"))
+	if message := readDevStudioMessage(t, first); message["type"] != "session.ready" {
+		t.Fatalf("first type = %q, want session.ready", message["type"])
+	}
+
+	second := dialDevStudio(t, wsURL)
+	defer func() { _ = second.Close() }()
+	request := sessionConnectMessage("inst_acme_dev")
+	request["deployKey"] = "second_deploy_key"
+	sendDevStudioMessage(t, second, request)
+	// The bridge writes the new key just before it asks for the session, so
+	// once the key is there the second connection is waiting for the first.
+	configPath := filepath.Join(devStudioProductionRoot, "inst_acme_dev", "simple.scl")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		contents, _ := os.ReadFile(configPath)
+		if strings.Contains(string(contents), "second_deploy_key") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the second connection never reached the session")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("close first connection: %v", err)
+	}
+	if message := readDevStudioMessage(t, second); message["type"] != "session.ready" {
+		t.Fatalf("second = %v, want session.ready", message)
+	}
+}
+
+func TestDevStudioBridgeDoesNotExposeOtherEndpoints(t *testing.T) {
+	bridge := newTestDevStudioBridge(t)
+	server := httptest.NewServer(bridge.handler())
+	defer server.Close()
+
+	for _, path := range []string{"/", "/shell", "/v1/devstudio/extra", "/v1/anything"} {
+		response, err := http.Get(server.URL + path)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s status = %d, want %d", path, response.StatusCode, http.StatusNotFound)
+		}
+	}
+}
+
+func TestDevStudioNoSecretsInErrorsOrServeOutput(t *testing.T) {
+	knownSecretKey := "SUPER_SECRET_DEPLOY_KEY_9999"
+
+	protoErr := devStudioProtocolError{
+		Type:    "error",
+		Code:    "invalid_deploy_key",
+		Message: "The deploy key is missing or invalid.",
+	}
+	encoded, err := json.Marshal(protoErr)
+	if err != nil {
+		t.Fatalf("json.Marshal devStudioProtocolError: %v", err)
+	}
+	if strings.Contains(string(encoded), knownSecretKey) || strings.Contains(string(encoded), "deployKey") {
+		t.Fatalf("serialized protocol error contained forbidden data: %s", string(encoded))
+	}
+
+	setupTestProductionRoot(t, "inst_acme_dev")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var stdoutBuffer bytes.Buffer
+
+	bridge := newTestDevStudioBridge(t)
+	done := make(chan error, 1)
+	go func() {
+		done <- serveDevStudioWithBridge(ctx, listener, &stdoutBuffer, bridge)
+	}()
+
+	wsURL := "ws://" + listener.Addr().String() + devStudioWebSocketPath
+	conn := dialDevStudio(t, wsURL)
+
+	sendDevStudioMessage(t, conn, map[string]any{
+		"type":            "session.connect",
+		"protocolVersion": devStudioProtocolVersion,
+		"instanceId":      "inst_acme_dev",
+		"instanceHost":    "inst_acme_dev.simple.lcl",
+		"deployKey":       knownSecretKey,
+	})
+
+	msg := readDevStudioMessage(t, conn)
+	_ = conn.Close()
+
+	cancel()
+	<-done
+
+	rawMsgBytes, _ := json.Marshal(msg)
+	if strings.Contains(string(rawMsgBytes), knownSecretKey) {
+		t.Fatalf("response payload contained secret key: %s", string(rawMsgBytes))
+	}
+
+	if strings.Contains(stdoutBuffer.String(), knownSecretKey) {
+		t.Fatalf("serve stdout output contained secret key: %s", stdoutBuffer.String())
+	}
+}
+
+func TestDevStudioServeShutdownClearsDeployKey(t *testing.T) {
+	setupTestProductionRoot(t, "inst_acme_dev")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var output bytes.Buffer
+	bridge := newTestDevStudioBridge(t)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- serveDevStudioWithBridge(ctx, listener, &output, bridge)
+	}()
+
+	wsURL := "ws://" + listener.Addr().String() + devStudioWebSocketPath
+	conn := dialDevStudio(t, wsURL)
+	defer func() { _ = conn.Close() }()
+
+	secretKey := "shutdown_secret_key_888"
+	sendDevStudioMessage(t, conn, map[string]any{
+		"type":            "session.connect",
+		"protocolVersion": devStudioProtocolVersion,
+		"instanceId":      "inst_acme_dev",
+		"instanceHost":    "inst_acme_dev.simple.lcl",
+		"deployKey":       secretKey,
+	})
+
+	msg := readDevStudioMessage(t, conn)
+	if msg["type"] != "session.ready" {
+		t.Fatalf("type = %q, want session.ready", msg["type"])
+	}
+
+	bridge.mu.Lock()
+	activeSession := bridge.session
+	bridge.mu.Unlock()
+	if activeSession == nil {
+		t.Fatal("no session after session.ready")
+	}
+	activeSession.stateMu.Lock()
+	activeKey := activeSession.deployKey
+	activeSession.stateMu.Unlock()
+	if activeKey != secretKey {
+		t.Fatalf("session deployKey = %q, want %q", activeKey, secretKey)
+	}
+
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("serveDevStudioWithBridge error: %v", err)
+	}
+
+	bridge.mu.Lock()
+	sess := bridge.session
+	bridge.mu.Unlock()
+
+	if sess != nil {
+		t.Fatalf("bridge.session after shutdown = %v, want nil", sess)
+	}
+}
+
+// newTestDevStudioBridge is a bridge whose sessions start a fake Codex, so
+// no test ever launches the real one, and whose conversation records go to a
+// temporary Simple CLI home, never the real one.
+func newTestDevStudioBridge(t *testing.T, resolvers ...devStudioWorkspaceResolver) *devStudioBridge {
+	t.Helper()
+	t.Setenv("SIMPLE_CLI_HOME", t.TempDir())
+	return newDevStudioBridgeWithCodexStarter(newFakeDevStudioCodexStarter(nil), resolvers...)
+}
+
+func startDevStudioBridge(t *testing.T) (*devStudioBridge, string) {
+	t.Helper()
+	setupTestProductionRoot(t, "inst_acme_dev")
+	bridge := newTestDevStudioBridge(t)
+	server := httptest.NewServer(bridge.handler())
+	t.Cleanup(server.Close)
+
+	return bridge, "ws" + strings.TrimPrefix(server.URL, "http") + devStudioWebSocketPath
+}
+
+const defaultTestDevStudioOrigin = "http://inst_acme_dev.simple.lcl"
+
+func dialDevStudio(t *testing.T, wsURL string) *websocket.Conn {
+	t.Helper()
+	return dialDevStudioWithOrigin(t, wsURL, defaultTestDevStudioOrigin)
+}
+
+func dialDevStudioWithOrigin(t *testing.T, wsURL, origin string) *websocket.Conn {
+	t.Helper()
+	header := http.Header{}
+	if origin != "" {
+		header.Set("Origin", origin)
+	}
+	connection, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatalf("dial %s with origin %q: %v", wsURL, origin, err)
+	}
+	return connection
+}
+
+func dialDevStudioRaw(wsURL string, header http.Header) (*websocket.Conn, *http.Response, error) {
+	return websocket.DefaultDialer.Dial(wsURL, header)
+}
+
+func sendDevStudioMessage(t *testing.T, connection *websocket.Conn, message map[string]any) {
+	t.Helper()
+	if err := connection.WriteJSON(message); err != nil {
+		t.Fatalf("write message: %v", err)
+	}
+}
+
+func readDevStudioMessage(t *testing.T, connection *websocket.Conn) map[string]any {
+	t.Helper()
+	if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	var message map[string]any
+	if err := connection.ReadJSON(&message); err != nil {
+		t.Fatalf("read message: %v", err)
+	}
+	return message
+}
+
+func sessionConnectMessage(instanceID string) map[string]any {
+	return map[string]any{
+		"type":            "session.connect",
+		"protocolVersion": devStudioProtocolVersion,
+		"instanceId":      instanceID,
+		"instanceHost":    instanceID + ".simple.lcl",
+		"deployKey":       "test_deploy_key_secret",
+	}
+}
+
+func TestDevStudioLogValueKeepsOneLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"plain text", "inst_acme", "inst_acme"},
+		{"line feed", "a\nforged line", `a\nforged line`},
+		{"carriage return and line feed", "a\r\nb", `a\r\nb`},
+		{"error", errors.New("stat /tmp/x\ny: not a directory"), `stat /tmp/x\ny: not a directory`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := devStudioLogValue(test.value); got != test.want {
+				t.Fatalf("devStudioLogValue(%q) = %q, want %q", test.value, got, test.want)
+			}
+		})
+	}
+}
+
+// The browser names the instance folder, so a line break in it must not
+// start a new log line.
+func TestDevStudioBridgeLogsBrowserValuesOnOneLine(t *testing.T) {
+	var output bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	baseDir := t.TempDir()
+	blocker := filepath.Join(baseDir, "a-file")
+	if err := os.WriteFile(blocker, []byte("not a folder"), 0644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	server := httptest.NewServer(newTestDevStudioBridge(t).handler())
+	t.Cleanup(server.Close)
+	connection := dialDevStudio(t, "ws"+strings.TrimPrefix(server.URL, "http")+devStudioWebSocketPath)
+	defer func() { _ = connection.Close() }()
+
+	request := sessionConnectMessage("inst_log")
+	// The folder ends in the instance id, as the bridge requires, so the
+	// request gets as far as finding that a file is in the way.
+	request["instancePath"] = filepath.Join(blocker, "x\n[DevStudio Bridge] forged", "inst_log")
+	sendDevStudioMessage(t, connection, request)
+	if message := readDevStudioMessage(t, connection); message["code"] != "workspace_initialization_failed" {
+		t.Fatalf("connect = %v, want workspace_initialization_failed", message)
+	}
+
+	var failures []string
+	for _, line := range strings.Split(output.String(), "\n") {
+		if strings.Contains(line, "forged") && !strings.Contains(line, "Workspace initialization failed") && !strings.Contains(line, "Session connect") {
+			t.Fatalf("a browser value started its own log line: %q", line)
+		}
+		if strings.Contains(line, "Workspace initialization failed") {
+			failures = append(failures, line)
+		}
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "not a directory") {
+		t.Fatalf("log lines = %q, want the whole failure on one line", failures)
+	}
+}
+
+func TestDevStudioWebSocketURLUsesConfiguredPort(t *testing.T) {
+	endpoint := (&url.URL{Scheme: "ws", Host: net.JoinHostPort(devStudioLoopbackHost, devStudioDefaultPort), Path: devStudioWebSocketPath}).String()
+	if endpoint != "ws://127.0.0.1:47831/v1/devstudio" {
+		t.Fatalf("endpoint = %q", endpoint)
+	}
+}
+
+func TestDevStudioOriginValidation(t *testing.T) {
+	allowedCases := []string{
+		"http://acme.simple.lcl",
+		"https://acme.simple.lcl",
+		"http://acme.simple.dev",
+		"https://acme.simple.dev",
+		"https://acme.on.simple.dev",
+		"http://inst_acme_dev.simple.lcl",
+		"http://sub.inst.simple.lcl:8080",
+		"https://acme.on.simple.dev:443",
+		"http://my-app.simple.dev",
+		"http://a.b.c.simple.lcl",
+		"HTTP://ACME.SIMPLE.LCL",
+		"https://Acme.On.Simple.Dev",
+		"http://acme.simple.dev/",
+	}
+
+	for _, origin := range allowedCases {
+		t.Run("allowed: "+origin, func(t *testing.T) {
+			if !isValidDevStudioOrigin(origin) {
+				t.Fatalf("expected origin %q to be allowed, but was rejected", origin)
+			}
+		})
+	}
+
+	rejectedCases := []struct {
+		name   string
+		origin string
+	}{
+		{name: "empty origin", origin: ""},
+		{name: "spaces only", origin: "   "},
+		{name: "leading space", origin: " http://acme.simple.dev"},
+		{name: "trailing space", origin: "http://acme.simple.dev "},
+		{name: "null origin", origin: "null"},
+		{name: "ws scheme", origin: "ws://acme.simple.lcl"},
+		{name: "wss scheme", origin: "wss://acme.simple.dev"},
+		{name: "ftp scheme", origin: "ftp://acme.simple.dev"},
+		{name: "file scheme", origin: "file:///acme.simple.dev"},
+		{name: "javascript scheme", origin: "javascript:alert(1)"},
+		{name: "missing subdomain simple.lcl", origin: "http://simple.lcl"},
+		{name: "missing subdomain simple.dev", origin: "https://simple.dev"},
+		{name: "look-alike not-simple.dev", origin: "http://not-simple.dev"},
+		{name: "look-alike evilsimple.dev", origin: "http://evilsimple.dev"},
+		{name: "look-alike evil-simple.lcl", origin: "http://evil-simple.lcl"},
+		{name: "look-alike prefix simple.dev.attacker.com", origin: "http://simple.dev.attacker.com"},
+		{name: "look-alike prefix acme.simple.dev.attacker.com", origin: "http://acme.simple.dev.attacker.com"},
+		{name: "look-alike prefix acme.simple.lcl.evil.com", origin: "http://acme.simple.lcl.evil.com"},
+		{name: "look-alike suffix acme.simple.dev.evil", origin: "http://acme.simple.dev.evil"},
+		{name: "look-alike tld acme.simple.developer.com", origin: "http://acme.simple.developer.com"},
+		{name: "look-alike acme.simple.lclevil.com", origin: "http://acme.simple.lclevil.com"},
+		{name: "fragment look-alike attacker.com#.simple.dev", origin: "http://attacker.com#.simple.dev"},
+		{name: "query look-alike attacker.com?.simple.dev", origin: "http://attacker.com?.simple.dev"},
+		{name: "path look-alike attacker.com/.simple.dev", origin: "http://attacker.com/.simple.dev"},
+		{name: "empty prefix .simple.dev", origin: "http://.simple.dev"},
+		{name: "double dot prefix ..simple.dev", origin: "http://..simple.dev"},
+		{name: "empty middle label acme..simple.dev", origin: "http://acme..simple.dev"},
+		{name: "trailing dot acme.simple.dev.", origin: "http://acme.simple.dev."},
+		{name: "userinfo in origin", origin: "http://user:pass@acme.simple.dev"},
+		{name: "path in origin", origin: "http://acme.simple.dev/evil/path"},
+		{name: "query in origin", origin: "http://acme.simple.dev?param=value"},
+		{name: "fragment in origin", origin: "http://acme.simple.dev#fragment"},
+		{name: "invalid port in origin", origin: "http://acme.simple.dev:invalidport"},
+		{name: "loopback IP origin", origin: "http://127.0.0.1:47831"},
+		{name: "localhost origin", origin: "http://localhost:3000"},
+		{name: "unrelated domain google.com", origin: "https://google.com"},
+		{name: "unrelated domain github.com", origin: "https://github.com"},
+		{name: "unrelated domain example.com", origin: "http://example.com"},
+		{name: "malformed URI", origin: "not a url %%%"},
+	}
+
+	for _, tc := range rejectedCases {
+		t.Run("rejected: "+tc.name, func(t *testing.T) {
+			if isValidDevStudioOrigin(tc.origin) {
+				t.Fatalf("expected origin %q (%s) to be rejected, but was accepted", tc.origin, tc.name)
+			}
+		})
+	}
+}
+
+func TestDevStudioWebSocketOriginEnforcement(t *testing.T) {
+	_, wsURL := startDevStudioBridge(t)
+
+	t.Run("accepts valid origin and establishes session", func(t *testing.T) {
+		validOrigins := []string{
+			"http://inst_acme_dev.simple.lcl",
+			"https://inst_acme_dev.simple.dev",
+			"https://acme.on.simple.dev",
+			"http://inst_acme_dev.simple.lcl:8080",
+		}
+		for _, origin := range validOrigins {
+			conn := dialDevStudioWithOrigin(t, wsURL, origin)
+			sendDevStudioMessage(t, conn, sessionConnectMessage("inst_acme_dev"))
+			msg := readDevStudioMessage(t, conn)
+			if msg["type"] != "session.ready" {
+				t.Fatalf("origin %q: expected session.ready, got %v", origin, msg)
+			}
+			_ = conn.Close()
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+
+	t.Run("rejects missing origin header at WebSocket upgrade", func(t *testing.T) {
+		conn, resp, err := dialDevStudioRaw(wsURL, nil)
+		if err == nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			t.Fatal("expected dial without origin to fail, got nil error")
+		}
+		if resp != nil && resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("expected status 403 Forbidden, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("rejects empty origin header", func(t *testing.T) {
+		header := http.Header{"Origin": []string{""}}
+		conn, resp, err := dialDevStudioRaw(wsURL, header)
+		if err == nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			t.Fatal("expected dial with empty origin to fail, got nil error")
+		}
+		if resp != nil && resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("expected status 403 Forbidden, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("rejects multiple origin headers", func(t *testing.T) {
+		header := http.Header{"Origin": []string{"http://inst_acme_dev.simple.lcl", "http://evil.com"}}
+		conn, resp, err := dialDevStudioRaw(wsURL, header)
+		if err == nil {
+			if conn != nil {
+				_ = conn.Close()
+			}
+			t.Fatal("expected dial with multiple origins to fail, got nil error")
+		}
+		if resp != nil && resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("expected status 403 Forbidden, got %d", resp.StatusCode)
+		}
+	})
+
+	rejectedOrigins := []struct {
+		name   string
+		origin string
+	}{
+		{name: "look-alike not-simple.dev", origin: "http://not-simple.dev"},
+		{name: "look-alike evilsimple.dev", origin: "http://evilsimple.dev"},
+		{name: "prefix look-alike simple.dev.attacker.com", origin: "http://simple.dev.attacker.com"},
+		{name: "prefix look-alike acme.simple.lcl.evil.com", origin: "http://acme.simple.lcl.evil.com"},
+		{name: "suffix look-alike acme.simple.dev.evil", origin: "http://acme.simple.dev.evil"},
+		{name: "unrelated localhost", origin: "http://localhost:3000"},
+		{name: "unrelated loopback IP", origin: "http://127.0.0.1:47831"},
+		{name: "unrelated domain", origin: "https://evil.com"},
+		{name: "null origin", origin: "null"},
+		{name: "ws scheme", origin: "ws://inst_acme_dev.simple.lcl"},
+		{name: "malformed label", origin: "http://acme..simple.dev"},
+	}
+
+	for _, tc := range rejectedOrigins {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			header := http.Header{"Origin": []string{tc.origin}}
+			conn, resp, err := dialDevStudioRaw(wsURL, header)
+			if err == nil {
+				if conn != nil {
+					_ = conn.Close()
+				}
+				t.Fatalf("expected dial with origin %q (%s) to fail, got nil error", tc.origin, tc.name)
+			}
+			if resp != nil && resp.StatusCode != http.StatusForbidden {
+				t.Fatalf("expected status 403 Forbidden, got %d", resp.StatusCode)
+			}
+		})
+	}
+}
