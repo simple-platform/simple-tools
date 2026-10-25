@@ -38,7 +38,7 @@ const APPLICATIONS_PRESET: ListPreset = {
   config: {
     tile: {
       detailFieldNames: ['version'],
-      presentation: 'row',
+      presentation: 'standard',
       titleFieldName: 'display_name',
       version: 1,
     },

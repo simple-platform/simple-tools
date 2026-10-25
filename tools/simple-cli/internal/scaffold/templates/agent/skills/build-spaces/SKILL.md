@@ -175,7 +175,7 @@ Spaces can render managed record views using supported components from `@simplep
 Managed views accept an authorized database table source. Records are fetched and paged by the platform through the host bridge. Do not pass row arrays, query documents, or access grants.
 Spaces support List, DataGrid, and Board. Inbox presets are rendered only on platform collection pages.
 
-Managed views require the planned SDK `^3.2.0` release, which is not yet published; SDK 3.1.0 lacks their bridge. Use matching feature builds locally. Publish the compatible SDK before the UI Kit; the release check validates the published bridge. Standalone ConditionBuilder/ConditionSummary remain private. Store multiple presets in `custom_view.customization.views`; select one supported preset for each Space component. See the [Custom Views guide](https://simple.com/docs/features/custom-views) and [UI Kit API](https://github.com/simple-platform/simple-sdks/blob/main/sdks/space-ui/README.md#managed-database-backed-views).
+Managed views require `@simpleplatform/sdk` `^4.0.0` and `@simpleplatform/ui-kit` `^0.4.0`; keep both packages at compatible releases. Standalone ConditionBuilder/ConditionSummary remain private. Store multiple presets in `custom_view.customization.views`; select one supported preset for each Space component. Tile presentations are `standard`, `media`, and `message`; `subtitleFieldNames` accepts an ordered array. See the [Custom Views guide](https://simple.com/docs/features/custom-views) and [UI Kit API](https://github.com/simple-platform/simple-sdks/blob/main/sdks/space-ui/README.md#managed-database-backed-views).
 
 #### Database-Backed Table Source (`TableRecordSource`)
 
@@ -197,7 +197,7 @@ const preset: ListPreset = {
   config: {
     tile: {
       detailFieldNames: ['version'],
-      presentation: 'row',
+      presentation: 'standard',
       titleFieldName: 'display_name',
       version: 1,
     },

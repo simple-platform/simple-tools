@@ -39,7 +39,7 @@ Use an active `type list` Custom View for the target table. Put the preset set i
     "presets": [
       {
         "id": "orders", "title": "Orders", "kind": "list",
-        "config": { "tile": { "version": 1, "presentation": "row", "titleFieldName": "number" } }
+        "config": { "tile": { "version": 1, "presentation": "standard", "titleFieldName": "number" } }
       },
       {
         "id": "orders-table", "title": "Orders table", "kind": "table",
