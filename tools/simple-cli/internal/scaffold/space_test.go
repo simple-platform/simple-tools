@@ -162,8 +162,8 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 	if !strings.Contains(pkgContent, `"@simpleplatform/sdk": "^4.0.0"`) {
 		t.Error("space package template must depend on @simpleplatform/sdk ^4.0.0 for the managed UI bridge")
 	}
-	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit": "^0.3.0"`) {
-		t.Error("space package template must depend on the UI Kit release that provides managed record views")
+	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit": "^0.4.0"`) {
+		t.Error("space package template must depend on the UI Kit release that provides the current managed tile contract")
 	}
 
 	appSource, err := TemplatesFS.ReadFile("templates/space/src/App.tsx")
@@ -233,6 +233,15 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 	}
 	if !strings.Contains(skillContent, "No Protocol Code Copying") {
 		t.Error("build-spaces skill template must explain not copying protocol code")
+	}
+
+	createViewSkill, err := TemplatesFS.ReadFile("templates/agent/skills/create-view/SKILL.md")
+	if err != nil {
+		t.Fatalf("read create-view skill template: %v", err)
+	}
+	createViewContent := string(createViewSkill)
+	if !strings.Contains(createViewContent, `"presentation": "standard"`) || strings.Contains(createViewContent, `"presentation": "row"`) {
+		t.Error("create-view skill must use a supported standard tile presentation")
 	}
 }
 

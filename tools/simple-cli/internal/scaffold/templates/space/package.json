@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@simpleplatform/sdk": "^4.0.0",
-    "@simpleplatform/ui-kit": "^0.3.0",
+    "@simpleplatform/ui-kit": "^0.4.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0"
   },
