@@ -159,8 +159,8 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit"`) {
 		t.Error("space package template must depend on @simpleplatform/ui-kit")
 	}
-	if !strings.Contains(pkgContent, `"@simpleplatform/sdk": "^3.2.0"`) {
-		t.Error("space package template must depend on @simpleplatform/sdk ^3.2.0 for the managed UI bridge")
+	if !strings.Contains(pkgContent, `"@simpleplatform/sdk": "^4.0.0"`) {
+		t.Error("space package template must depend on @simpleplatform/sdk ^4.0.0 for the managed UI bridge")
 	}
 	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit": "^0.3.0"`) {
 		t.Error("space package template must depend on the UI Kit release that provides managed record views")
@@ -185,6 +185,9 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 	}
 	if !strings.Contains(content, "ListPreset") {
 		t.Error("space app template must use the public ListPreset type")
+	}
+	if !strings.Contains(content, "presentation: 'standard'") || strings.Contains(content, "presentation: 'row'") {
+		t.Error("space app template must use a supported standard tile presentation")
 	}
 	if strings.Contains(content, "iconId:") {
 		t.Error("space app template must derive the preset icon from kind")
@@ -218,6 +221,9 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 	}
 	if !strings.Contains(skillContent, "lucide:star") {
 		t.Error("build-spaces skill template must document provider-qualified tile icons")
+	}
+	if !strings.Contains(skillContent, "subtitleFieldNames") || !strings.Contains(skillContent, "`message`") {
+		t.Error("build-spaces skill template must document the current tile presentation contract")
 	}
 	if !strings.Contains(skillContent, "authorized database table source") || !strings.Contains(skillContent, "kind: 'table'") {
 		t.Error("build-spaces skill template must document the database-backed table source")
