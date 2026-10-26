@@ -52,6 +52,8 @@ Use an active `type list` Custom View for the target table. Put the preset set i
 
 Use fields that exist on the target table. In SCL, put this JSON in a `var` value block and set `customization` with `$var('order_views_customization') |> $json()`, following existing metadata recipes. Give presets unique IDs and select a valid `defaultPresetId`.
 
+Tile presentations are `standard`, `media`, and `message`. The platform controls tile typography, spacing, and sizing; configure field bindings and presentation rather than per-tile styles.
+
 Platform routes support `table`, `list`, `board`, and `inbox`. Spaces support List/DataGrid/Board with built-in filters; select one supported preset for the UI Kit component. Board lanes require an enum field. Sources are database identities `{ kind: 'table', appId, tableId }`; preset/tile JSON never supplies rows. Standalone ConditionBuilder remains private.
 
 See the [Custom Views guide](https://simple.com/docs/features/custom-views) for filters, ordering, tile fields, Board summaries, Inbox, and record-Space configuration. Keep View Actions outside the `views` preset object.
