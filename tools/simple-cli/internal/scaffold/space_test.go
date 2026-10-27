@@ -159,8 +159,8 @@ func TestSpaceTemplatesUseManagedRecordViews(t *testing.T) {
 	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit"`) {
 		t.Error("space package template must depend on @simpleplatform/ui-kit")
 	}
-	if !strings.Contains(pkgContent, `"@simpleplatform/sdk": "^4.0.0"`) {
-		t.Error("space package template must depend on @simpleplatform/sdk ^4.0.0 for the managed UI bridge")
+	if !strings.Contains(pkgContent, `"@simpleplatform/sdk": "^4.1.0"`) {
+		t.Error("space package template must depend on @simpleplatform/sdk ^4.1.0 for the managed UI bridge")
 	}
 	if !strings.Contains(pkgContent, `"@simpleplatform/ui-kit": "^0.4.0"`) {
 		t.Error("space package template must depend on the UI Kit release that provides the current managed tile contract")

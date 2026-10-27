@@ -44,6 +44,8 @@ all four kinds. Spaces support List, DataGrid, and Board through the UI Kit;
 Inbox is platform-only. Board lanes require an enum field. See
 `.agent/skills/create-view/SKILL.md` and the
 [Custom Views guide](https://simple.com/docs/features/custom-views) for JSON examples.
+Tile layouts choose field bindings and one of `standard`, `media`, or `message`;
+typography, spacing, and sizing are controlled by the platform.
 
 ---
 

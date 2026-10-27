@@ -175,7 +175,7 @@ Spaces can render managed record views using supported components from `@simplep
 Managed views accept an authorized database table source. Records are fetched and paged by the platform through the host bridge. Do not pass row arrays, query documents, or access grants.
 Spaces support List, DataGrid, and Board. Inbox presets are rendered only on platform collection pages.
 
-Managed views require `@simpleplatform/sdk` `^4.0.0` and `@simpleplatform/ui-kit` `^0.4.0`; keep both packages at compatible releases. Standalone ConditionBuilder/ConditionSummary remain private. Store multiple presets in `custom_view.customization.views`; select one supported preset for each Space component. Tile presentations are `standard`, `media`, and `message`; `subtitleFieldNames` accepts an ordered array. See the [Custom Views guide](https://simple.com/docs/features/custom-views) and [UI Kit API](https://github.com/simple-platform/simple-sdks/blob/main/sdks/space-ui/README.md#managed-database-backed-views).
+Managed views require `@simpleplatform/sdk` `^4.1.0` and `@simpleplatform/ui-kit` `^0.4.0`; keep both packages at compatible releases. Standalone ConditionBuilder/ConditionSummary remain private. Store multiple presets in `custom_view.customization.views`; select one supported preset for each Space component. Tile presentations are `standard`, `media`, and `message`; `subtitleFieldNames` accepts an ordered array. See the [Custom Views guide](https://simple.com/docs/features/custom-views) and [UI Kit API](https://github.com/simple-platform/simple-sdks/blob/main/sdks/space-ui/README.md#managed-database-backed-views).
 
 #### Database-Backed Table Source (`TableRecordSource`)
 
@@ -221,6 +221,7 @@ Key characteristics:
 - **Stable logical SCL names:** Presets and filters specify schema field names (e.g., `display_name`, `version`) directly without inspecting metadata tables.
 - **Table ID:** `source.tableId` is the platform table metadata record ID. Resolve it from the authorized metadata available to the Space; the managed renderer verifies it belongs to `source.appId` before loading fields or records.
 - **Presets configure presentation only:** Presets define layout, tiles, sorting, and filters; they do not carry row records.
+- **Tile styling is platform-owned:** Tile presets choose field bindings and one of `standard`, `media`, or `message`; typography, spacing, and sizing come from the platform.
 - **Preset icons follow kind:** The platform selects the view icon from `kind`; tile icon IDs use a provider prefix such as `lucide:star`.
 
 Managed views do not render records supplied by external APIs or caller-owned arrays. For external data, build a Space-owned UI around that API instead of presenting it as platform-managed records.
