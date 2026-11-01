@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enterprise Standalone Space - Operations Command Center</title>
+  <style>
+    :root {
+      --simple-color-canvas: #f8fafc;
+      --simple-color-surface: #ffffff;
+      --simple-color-surface-hover: #f1f5f9;
+      --simple-color-surface-selected: #e2e8f0;
+      --simple-color-border: #e2e8f0;
+      --simple-color-border-subtle: #cbd5e1;
+      --simple-color-text-primary: #0f172a;
+      --simple-color-text-secondary: #475569;
+      --simple-color-text-muted: #94a3b8;
+      --simple-color-action-primary: #2563eb;
+      --simple-color-action-primary-hover: #1d4ed8;
+      --simple-color-action-primary-foreground: #ffffff;
+      --simple-color-status-success-background: #ecfdf5;
+      --simple-color-status-success-foreground: #065f46;
+      --simple-color-status-success-border: #a7f3d0;
+      --simple-color-status-warning-background: #fffbeb;
+      --simple-color-status-warning-foreground: #92400e;
+      --simple-color-status-warning-border: #fde68a;
+      --simple-color-status-error-background: #fef2f2;
+      --simple-color-status-error-foreground: #991b1b;
+      --simple-color-status-error-border: #fecaca;
+      --simple-color-status-info-background: #eff6ff;
+      --simple-color-status-info-foreground: #1e40af;
+      --simple-color-status-info-border: #bfdbfe;
+      --simple-radius-sm: 4px;
+      --simple-radius-md: 6px;
+      --simple-radius-lg: 10px;
+      --simple-radius-full: 9999px;
+      --simple-font-family-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --simple-font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--simple-font-family-sans);
+      background: var(--simple-color-canvas);
+      color: var(--simple-color-text-primary);
+      font-size: 13.5px;
+      line-height: 1.5;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .dashboard-container {
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Top Operational Bar */
+    .top-header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding-bottom: 4px;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .header-title {
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--simple-color-text-primary);
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: var(--simple-radius-full);
+      font-size: 12px;
+      font-weight: 500;
+      background: var(--simple-color-status-success-background);
+      color: var(--simple-color-status-success-foreground);
+      border: 1px solid var(--simple-color-status-success-border);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: var(--simple-radius-full);
+      background: currentColor;
+    }
+
+    /* Action dock */
+    .action-dock {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 13px;
+      border-radius: var(--simple-radius-md);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--simple-color-border-default);
+      background: var(--simple-color-surface);
+      color: var(--simple-color-text-primary);
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .btn:hover {
+      background: var(--simple-color-surface-hover);
+    }
+    .btn-primary {
+      background: var(--simple-color-action-primary);
+      color: var(--simple-color-action-primary-foreground);
+      border-color: var(--simple-color-action-primary);
+    }
+    .btn-primary:hover {
+      background: var(--simple-color-action-primary-hover);
+    }
+
+    /* Hero KPI Strip */
+    .hero-grid {
+      display: grid;
+      grid-template-columns: 1.3fr 1fr 1fr;
+      gap: 16px;
+    }
+    @media (max-width: 1024px) {
+      .hero-grid { grid-template-columns: 1fr; }
+    }
+    .kpi-card {
+      background: var(--simple-color-surface);
+      border: 1px solid var(--simple-color-border-default);
+      border-radius: var(--simple-radius-lg);
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .kpi-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .kpi-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--simple-color-text-secondary);
+    }
+    .kpi-sub-select {
+      font-size: 12px;
+      color: var(--simple-color-text-secondary);
+      cursor: pointer;
+    }
+    .kpi-metric-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .kpi-big-num {
+      font-size: 30px;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+      color: var(--simple-color-text-primary);
+    }
+    .delta-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: var(--simple-radius-full);
+      background: var(--simple-color-status-success-background);
+      color: var(--simple-color-status-success-foreground);
+    }
+
+    /* Sparkline SVG */
+    .sparkline-wrapper {
+      margin-top: 10px;
+      height: 70px;
+      width: 100%;
+    }
+    .sparkline-svg {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+
+    /* List inside KPI card */
+    .kpi-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-top: 6px;
+    }
+    .kpi-list-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+    }
+    .kpi-list-name {
+      color: var(--simple-color-text-secondary);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .kpi-list-val {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Workstation section */
+    .workstation {
+      background: var(--simple-color-surface);
+      border: 1px solid var(--simple-color-border-default);
+      border-radius: var(--simple-radius-lg);
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Tabs Bar */
+    .tab-bar {
+      display: flex;
+      gap: 24px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--simple-color-border-default);
+    }
+    .tab-item {
+      padding: 13px 4px;
+      font-size: 13.5px;
+      font-weight: 500;
+      color: var(--simple-color-text-secondary);
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .tab-item:hover {
+      color: var(--simple-color-text-primary);
+    }
+    .tab-item.active {
+      color: var(--simple-color-action-primary);
+      border-bottom-color: var(--simple-color-action-primary);
+      font-weight: 600;
+    }
+    .tab-count {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 1px 6px;
+      border-radius: var(--simple-radius-full);
+      background: var(--simple-color-surface-hover);
+      color: var(--simple-color-text-secondary);
+    }
+
+    /* Filter Toolbar */
+    .toolbar {
+      padding: 12px 20px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      background: var(--simple-color-surface);
+    }
+    .toolbar-left, .toolbar-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .filter-chip {
+      padding: 5px 10px;
+      font-size: 12.5px;
+      border-radius: var(--simple-radius-md);
+      border: 1px solid var(--simple-color-border-default);
+      background: var(--simple-color-surface);
+      color: var(--simple-color-text-secondary);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .filter-chip:hover {
+      background: var(--simple-color-surface-hover);
+      color: var(--simple-color-text-primary);
+    }
+    .filter-chip.active {
+      background: var(--simple-color-surface-selected);
+      color: var(--simple-color-text-primary);
+      font-weight: 600;
+    }
+    .search-input {
+      padding: 6px 12px;
+      border: 1px solid var(--simple-color-border-default);
+      border-radius: var(--simple-radius-md);
+      font-size: 12.5px;
+      width: 220px;
+      background: var(--simple-color-surface);
+      color: var(--simple-color-text-primary);
+    }
+    .search-input:focus {
+      outline: 2px solid var(--simple-color-action-primary);
+      outline-offset: -1px;
+    }
+
+    /* Data Table */
+    .table-container {
+      overflow-x: auto;
+    }
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+    .data-table th {
+      padding: 10px 16px;
+      font-size: 11.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--simple-color-text-secondary);
+      border-bottom: 1px solid var(--simple-color-border-default);
+      background: var(--simple-color-surface);
+      white-space: nowrap;
+    }
+    .data-table td {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--simple-color-border-default);
+      color: var(--simple-color-text-primary);
+      white-space: nowrap;
+    }
+    .data-table tr:hover td {
+      background: var(--simple-color-surface-hover);
+    }
+    .code-id {
+      font-family: var(--simple-font-family-mono);
+      font-size: 12px;
+      color: var(--simple-color-text-secondary);
+    }
+    .severity-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 7px;
+      border-radius: var(--simple-radius-full);
+      font-size: 11.5px;
+      font-weight: 600;
+    }
+    .severity-p1 {
+      background: var(--simple-color-status-error-background);
+      color: var(--simple-color-status-error-foreground);
+      border: 1px solid var(--simple-color-status-error-border);
+    }
+    .severity-p2 {
+      background: var(--simple-color-status-warning-background);
+      color: var(--simple-color-status-warning-foreground);
+      border: 1px solid var(--simple-color-status-warning-border);
+    }
+    .severity-p3 {
+      background: var(--simple-color-surface-hover);
+      color: var(--simple-color-text-secondary);
+      border: 1px solid var(--simple-color-border-default);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="dashboard-container">
+    <!-- Top Operational Header -->
+    <header class="top-header">
+      <div class="header-left">
+        <h1 class="header-title">Operations Command Center</h1>
+        <div class="status-pill">
+          <span class="status-dot"></span>
+          Core Infrastructure Operational
+        </div>
+      </div>
+      <div class="action-dock">
+        <button class="btn btn-primary">+ New Incident</button>
+        <button class="btn">⇄ Run Action</button>
+        <button class="btn">⤓ Export CSV</button>
+        <button class="btn">⚙ Customize</button>
+      </div>
+    </header>
+
+    <!-- Hero KPI Strip -->
+    <section class="hero-grid" aria-label="Key Performance Indicators">
+      <!-- Card 1: System Run Rate & Sparkline -->
+      <article class="kpi-card">
+        <div>
+          <div class="kpi-card-header">
+            <span class="kpi-label">System Performance Run Rate</span>
+            <span class="kpi-sub-select">Last 30 days ▾</span>
+          </div>
+          <div class="kpi-metric-row">
+            <span class="kpi-big-num">99.982%</span>
+            <span class="delta-pill">↗ +0.04% vs target</span>
+          </div>
+          <p style="font-size: 12px; color: var(--simple-color-text-secondary);">SLA Target: 99.90%</p>
+        </div>
+        <div class="sparkline-wrapper">
+          <svg class="sparkline-svg" viewBox="0 0 300 70" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="var(--simple-color-action-primary)" stop-opacity="0.25" />
+                <stop offset="100%" stop-color="var(--simple-color-action-primary)" stop-opacity="0.0" />
+              </linearGradient>
+            </defs>
+            <path d="M 0,55 Q 50,53 100,45 T 200,48 T 260,60 T 300,20 L 300,70 L 0,70 Z" fill="url(#chartGradient)" />
+            <path d="M 0,55 Q 50,53 100,45 T 200,48 T 260,60 T 300,20" fill="none" stroke="var(--simple-color-action-primary)" stroke-width="2.5" />
+          </svg>
+        </div>
+      </article>
+
+      <!-- Card 2: Fleet Cluster Health -->
+      <article class="kpi-card">
+        <div>
+          <div class="kpi-card-header">
+            <span class="kpi-label">Cluster Fleet Health</span>
+            <span style="font-size: 11px; font-weight: 700; color: var(--simple-color-status-success-foreground); background: var(--simple-color-status-success-background); padding: 2px 6px; border-radius: var(--simple-radius-sm);">4/5 OPERATIONAL</span>
+          </div>
+          <ul class="kpi-list">
+            <li class="kpi-list-item">
+              <span class="kpi-list-name">API Gateway (us-east-1)</span>
+              <span class="kpi-list-val">4,820ms</span>
+            </li>
+            <li class="kpi-list-item">
+              <span class="kpi-list-name">PostgreSQL Primary DB</span>
+              <span class="kpi-list-val">99.99%</span>
+            </li>
+            <li class="kpi-list-item">
+              <span class="kpi-list-name">Event Bus NATS Cluster</span>
+              <span class="kpi-list-val">100.0%</span>
+            </li>
+          </ul>
+        </div>
+        <div style="margin-top: 14px; font-size: 12px; display: flex; justify-content: space-between; border-top: 1px solid var(--simple-color-border-default); padding-top: 10px;">
+          <span style="color: var(--simple-color-text-secondary);">Overall Uptime: 99.96%</span>
+          <a href="#" style="color: var(--simple-color-action-primary); text-decoration: none; font-weight: 500;">View Nodes →</a>
+        </div>
+      </article>
+
+      <!-- Card 3: Incident & Change Workload -->
+      <article class="kpi-card">
+        <div>
+          <div class="kpi-card-header">
+            <span class="kpi-label">Incident & Change Workload</span>
+            <span style="font-size: 11px; font-weight: 700; color: var(--simple-color-status-error-foreground);">1 CRITICAL</span>
+          </div>
+          <ul class="kpi-list">
+            <li class="kpi-list-item">
+              <span class="kpi-list-name">Mean Time to Resolution (MTTR)</span>
+              <span class="kpi-list-val">18m 42s</span>
+            </li>
+            <li class="kpi-list-item">
+              <span class="kpi-list-name">First Response SLA Adherence</span>
+              <span class="kpi-list-val">100% Met</span>
+            </li>
+            <li class="kpi-list-item">
+              <span class="kpi-list-name">Scheduled Production Changes</span>
+              <span class="kpi-list-val">2 Planned</span>
+            </li>
+          </ul>
+        </div>
+        <div style="margin-top: 14px; font-size: 12px; display: flex; justify-content: space-between; border-top: 1px solid var(--simple-color-border-default); padding-top: 10px;">
+          <span style="color: var(--simple-color-text-secondary);">Next Review: 16:00 UTC</span>
+          <a href="#" style="color: var(--simple-color-action-primary); text-decoration: none; font-weight: 500;">Audit Schedule →</a>
+        </div>
+      </article>
+    </section>
+
+    <!-- Tabbed Workstation -->
+    <section class="workstation" aria-label="Operations Data Workstation">
+      <div class="tab-bar">
+        <div class="tab-item active">
+          Active Incidents & Events
+          <span class="tab-count">4</span>
+        </div>
+        <div class="tab-item">
+          CMDB Fleet & Infrastructure
+          <span class="tab-count">5</span>
+        </div>
+        <div class="tab-item">
+          Audit & Compliance Trail
+        </div>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="toolbar">
+        <div class="toolbar-left">
+          <button class="filter-chip active">All Priorities</button>
+          <button class="filter-chip">P1 Urgent Only</button>
+          <button class="filter-chip">Filters</button>
+        </div>
+        <div class="toolbar-right">
+          <input type="text" class="search-input" placeholder="Search incidents or CI...">
+        </div>
+      </div>
+
+      <!-- Data Table -->
+      <div class="table-container">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th style="width: 32px;"><input type="checkbox" aria-label="Select all rows"></th>
+              <th>Incident ID & Summary</th>
+              <th>Affected CI</th>
+              <th>Severity</th>
+              <th>Reported</th>
+              <th>Assigned Owner</th>
+              <th>Status</th>
+              <th style="text-align: right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><input type="checkbox" aria-label="Select row"></td>
+              <td>
+                <div style="font-weight: 600;">API Gateway latency degradation in us-east-1</div>
+                <div class="code-id">INC-2049 · P99 spiked to 4.8s; checkout affected</div>
+              </td>
+              <td>Kong Gateway</td>
+              <td><span class="severity-badge severity-p1">P1 Urgent</span></td>
+              <td style="color: var(--simple-color-text-secondary);">14m ago</td>
+              <td>Maya Chen</td>
+              <td><span style="background: var(--simple-color-status-info-background); color: var(--simple-color-status-info-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Investigating</span></td>
+              <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox" aria-label="Select row"></td>
+              <td>
+                <div style="font-weight: 600;">PostgreSQL Read Replica replication lag &gt; 500ms</div>
+                <div class="code-id">INC-2048 · Analytic queries falling back to primary</div>
+              </td>
+              <td>RDS Replica 02</td>
+              <td><span class="severity-badge severity-p2">P2 High</span></td>
+              <td style="color: var(--simple-color-text-secondary);">42m ago</td>
+              <td>Alex Rivera</td>
+              <td><span style="background: var(--simple-color-status-warning-background); color: var(--simple-color-status-warning-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">In Progress</span></td>
+              <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox" aria-label="Select row"></td>
+              <td>
+                <div style="font-weight: 600;">SSO SAML certificate expiration warning for Okta</div>
+                <div class="code-id">INC-2047 · Certificate rotation due in 72 hours</div>
+              </td>
+              <td>Okta IdP</td>
+              <td><span class="severity-badge severity-p3">P3 Normal</span></td>
+              <td style="color: var(--simple-color-text-secondary);">2h ago</td>
+              <td>Marcus Vance</td>
+              <td><span style="background: var(--simple-color-status-info-background); color: var(--simple-color-status-info-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Investigating</span></td>
+              <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
+            </tr>
+            <tr>
+              <td><input type="checkbox" aria-label="Select row"></td>
+              <td>
+                <div style="font-weight: 600;">TLS Certificate automated renewal for ingress</div>
+                <div class="code-id">CHG-1082 · Zero-downtime renewal successful</div>
+              </td>
+              <td>Edge Ingress</td>
+              <td><span class="severity-badge severity-p3">P3 Normal</span></td>
+              <td style="color: var(--simple-color-text-secondary);">4h ago</td>
+              <td>DevOps Bot</td>
+              <td><span style="background: var(--simple-color-status-success-background); color: var(--simple-color-status-success-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Completed</span></td>
+              <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+
+</body>
+</html>

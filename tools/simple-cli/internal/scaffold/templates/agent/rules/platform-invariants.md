@@ -8,8 +8,12 @@ trigger: always_on
 > The following rules are INVARIANTS of the Simple Platform. They must NEVER be violated.
 > These are the "Laws of Physics" for the SimpleOS.
 
+The WASM restrictions below govern Action runtime code. Spaces are browser
+frontends and their build tools run in Node; Record Behaviors use injected
+platform APIs rather than the Action request API.
+
 ## 1. Sandboxed Logic (WASM)
-*   **Universal Runtime:** All business logic (Server Actions, Client Behaviors, Triggers) compiles to WebAssembly (WASM).
+*   **Universal Runtime:** TypeScript Actions compile to WebAssembly (WASM); Record Behaviors are scripts executed by the platform on browser/server paths. Triggers bind events to Actions.
 *   **Strict Isolation:** Code runs in a highly secure, deterministic sandbox.
     *   **NO** direct filesystem access (`fs`, `File`).
     *   **NO** direct network access (`net`, `http`, `fetch` without SDK).
@@ -18,7 +22,7 @@ trigger: always_on
 
 ## 2. Universal Execution (Isomorphic)
 *   **Write Once, Run Anywhere:** Logic modules are designed to execute on **BOTH** the Client (Browser) and Server.
-*   **Divergence is Impossible:** Architectural constraints ensure that client-side validation logic is *identical* to server-side enforcement.
+*   **Server enforcement:** The server is authoritative. Behavior context and available data differ between browser events and partial server writes; verify both paths.
 *   **Behavioral Directives:**
     *   **Browser:** Provides instant, optimistic UI feedback to the user (e.g., "Invalid Email").
     *   **Server:** Provides authoritative security, data integrity, and final validation before persistence.

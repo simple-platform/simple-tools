@@ -18,8 +18,8 @@ globs: "apps/*/app.scl"
     *   `simple deploy app --bump minor` -> Bumps `1.2.0` to `1.3.0`.
 *   **Explicit Versioning:** You can force a specific version.
     *   `simple deploy app --version 2.0.0-beta` -> Sets version to `2.0.0-beta`.
-*   **Rule:** You **MUST** use either `--bump` or `--version` when deploying logic changes.
+*   **Rule:** Use `--bump` when starting a new release cycle or `--version` when explicitly selecting a version. Existing non-production prereleases auto-increment their counter; do not require a new base-version bump on every iteration. See `.agent/skills/app-versioning/SKILL.md`.
 
 ## 3. Immutable History
 *   **Constraint:** You cannot change the definition of an *already deployed* version.
-*   **Action:** If you change code/schema, you **MUST** bump the version on next deployment.
+*   **Action:** Changed code/schema needs a new deployment version, including an auto-incremented prerelease. Inspect CLI output and `app.scl` after success or failure.

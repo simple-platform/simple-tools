@@ -37,15 +37,72 @@ set dev_simple_system.custom_view, order_record_view {
 | `list` | Collection presets: Table, List, Board, and Inbox |
 | `dashboard` | Dashboard view |
 
-For an active `list` Custom View, put the versioned preset set in
-`customization.views`. Presets configure database-backed filters, ordering,
-columns, and tiles; they do not supply rows. Platform collection routes support
+For an active `list` Custom View, put a version 1 preset set in
+`customization.views`. Preset filters require native `RecordWhere`; shorthand and
+predicate-tree filters are rejected without conversion. Tile layouts also use
+version 1. Presets configure database-backed ordering, columns, and tiles; they
+do not supply rows. Platform collection routes support
 all four kinds. Spaces support List, DataGrid, and Board through the UI Kit;
 Inbox is platform-only. Board lanes require an enum field. See
 `.agent/skills/create-view/SKILL.md` and the
-[Custom Views guide](https://simple.com/docs/features/custom-views) for JSON examples.
+[Custom Views guide](https://simple.dev/docs/features/custom-views/#configure-table-view-presets) for JSON examples.
 Tile layouts choose field bindings and one of `standard`, `media`, or `message`;
 typography, spacing, and sizing are controlled by the platform.
+
+To author presets in SCL, store the JSON object in a `var` block string and
+parse it with `$json()` when assigning `customization`. This example assumes
+`work_item` has `status` and `title` fields:
+
+````scl
+var work_item_table {
+  query ```
+  query {
+    tables: dev_simple_system__tables(
+      where: {
+        application_id: {_eq: "com.mycompany.myapp"}
+        name: {_eq: "work_item"}
+      }
+      limit: 1
+    ) {
+      id
+    }
+  }
+  ```
+}
+
+var open_items_customization {
+  value ```
+  {
+    "views": {
+      "version": 1,
+      "defaultPresetId": "open-items",
+      "presets": [{
+        "id": "open-items",
+        "title": "Open items",
+        "kind": "list",
+        "filter": {"status": {"_eq": "Open"}},
+        "config": {
+          "tile": {
+            "version": 1,
+            "presentation": "standard",
+            "titleFieldName": "title"
+          }
+        }
+      }]
+    }
+  }
+  ```
+}
+
+set dev_simple_system.custom_view, open_items_list {
+  display_name "Open items"
+  type list
+  target_table_id `$var('work_item_table') |> $jq('.tables[0].id')`
+  customization `$var('open_items_customization') |> $json()`
+  priority 100
+  is_active true
+}
+````
 
 ---
 

@@ -50,10 +50,15 @@ const APPLICATIONS_PRESET: ListPreset = {
 }
 
 const spaceConnection = Promise.resolve().then(() => {
-  if (!document.referrer) {
+  const candidate = document.referrer || import.meta.env.VITE_SIMPLE_HOST_ORIGIN
+  if (!candidate)
     throw new Error('Open this Space from the platform or configure a trusted host origin.')
-  }
-  return connect({ targetOrigin: new URL(document.referrer).origin })
+
+  const host = new URL(candidate)
+  if (host.protocol !== 'http:' && host.protocol !== 'https:')
+    throw new Error('The trusted host origin must use HTTP(S).')
+
+  return connect({ targetOrigin: host.origin })
 })
 
 export default function App() {
@@ -95,7 +100,7 @@ export default function App() {
       )}
 
       {status === 'loading' && <p className="text-muted-foreground">Loading applications…</p>}
-      {status === 'error' && <p className="text-destructive">{errorMessage}</p>}
+      {status === 'error' && <p role="alert" className="text-destructive">{errorMessage}</p>}
       {status === 'ready' && (
         <>
           <section className="mb-6">

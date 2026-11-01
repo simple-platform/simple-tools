@@ -54,7 +54,7 @@ This document defines the **standard operating procedure** for building and modi
         *   *Ref:* `.simple/context/cli-manifest.json` (Command: "new behavior")
     *   **Custom Actions & Triggers**:
         *   **Commands:**
-            *   `simple new action <app_id> <action_name> --scope ...`
+            *   `simple new action <app_id> <action_name> "<Display name>" --lang ts --scope <org>`
             *   `simple new trigger:db <app_id> ...`
             *   `simple new trigger:timed <app_id> ...`
             *   `simple new trigger:webhook <app_id> ...`
@@ -78,7 +78,7 @@ This document defines the **standard operating procedure** for building and modi
     *   e.g., if adding logic, check "Record Behavior" vs "Custom Action" rules.
 
 ### Finalization:
-1.  `simple build`
+1.  `simple build <app_id>` (when Actions or Spaces exist)
 2.  `simple test`
-3.  `simple deploy <app_id> --env <env>`
+3.  `simple deploy apps/<app_id> --env <env>` (when deployment is requested)
     *   *Ref:* `.simple/context/cli-manifest.json` (Command: "deploy")

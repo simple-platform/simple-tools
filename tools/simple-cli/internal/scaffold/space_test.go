@@ -1,7 +1,9 @@
 package scaffold
 
 import (
+	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,6 +69,70 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 	}
 }
 
+func TestSpaceTemplateUsesSharedTheme(t *testing.T) {
+	written := make(map[string][]byte)
+	mockFS := &mockWriteTrackingFS{
+		written: written,
+		statFn:  func(name string) bool { return name == "/root/apps/com.acme.app" },
+	}
+	cfg := SpaceConfig{AppID: "com.acme.app", SpaceName: "my-space", DisplayName: "My Space"}
+	if err := CreateSpaceStructure(mockFS, TemplatesFS, "/root", cfg); err != nil {
+		t.Fatalf("scaffold Space from embedded templates: %v", err)
+	}
+	theme := string(written["/root/apps/com.acme.app/spaces/my-space/src/styles/theme.css"])
+	for _, required := range []string{
+		`@import "tailwindcss";`,
+		`@import "@simpleplatform/ui-kit/theme.css";`,
+		"var(--simple-color-canvas)",
+		"var(--simple-color-text-primary)",
+		"var(--simple-font-family-sans)",
+	} {
+		if !strings.Contains(theme, required) {
+			t.Errorf("scaffolded theme must use shared theme import or token %q", required)
+		}
+	}
+	for _, independentPalette := range []string{":root", ".dark", "@theme", "hsl(", "rgb(", "oklch(", "#"} {
+		if strings.Contains(theme, independentPalette) {
+			t.Errorf("scaffolded theme must not define an independent palette: %q", independentPalette)
+		}
+	}
+}
+
+func TestSpaceDesignSkillCopiesEmbeddedResourcesUnchanged(t *testing.T) {
+	written := make(map[string][]byte)
+	if err := copyAgentDocs(&mockWriteTrackingFS{written: written}, TemplatesFS, "/root"); err != nil {
+		t.Fatalf("copy embedded agent documentation: %v", err)
+	}
+	for _, resource := range []string{
+		"SKILL.md",
+		"agents/openai.yaml",
+		"references/platform.md",
+		"references/layouts.md",
+		"references/research.md",
+		"assets/space-layout.css",
+		"assets/workspace.html",
+	} {
+		t.Run(resource, func(t *testing.T) {
+			source := "templates/agent/skills/space-frontend-design/" + resource
+			content, err := TemplatesFS.ReadFile(source)
+			if err != nil {
+				t.Fatalf("read embedded skill resource: %v", err)
+			}
+			if len(content) == 0 {
+				t.Fatal("embedded skill resource must not be empty")
+			}
+			destination := filepath.Join("/root/.agent/skills/space-frontend-design", resource)
+			if !bytes.Equal(written[destination], content) {
+				t.Error("workspace scaffold must copy the complete skill resource unchanged")
+			}
+		})
+	}
+	buildSkill := string(written["/root/.agent/skills/build-spaces/SKILL.md"])
+	if !strings.Contains(buildSkill, "../space-frontend-design/SKILL.md") {
+		t.Error("build-spaces must route visual work to the bundled frontend design skill")
+	}
+}
+
 func TestSpaceTemplatesUseUnifiedSDK(t *testing.T) {
 	packageJSON, err := TemplatesFS.ReadFile("templates/space/package.json")
 	if err != nil {
@@ -96,8 +162,11 @@ func TestSpaceTemplatesUseUnifiedSDK(t *testing.T) {
 	if !strings.Contains(content, "connect({") {
 		t.Error("space app template must call connect({ targetOrigin }) directly")
 	}
-	if !strings.Contains(content, "if (!document.referrer)") || !strings.Contains(content, "configure a trusted host origin") {
-		t.Error("space app template must show a useful error when no trusted host origin is available")
+	if !strings.Contains(content, "document.referrer || import.meta.env.VITE_SIMPLE_HOST_ORIGIN") || !strings.Contains(content, "configure a trusted host origin") {
+		t.Error("space app template must fall back only to trusted host configuration when the referrer is absent")
+	}
+	if !strings.Contains(content, `role="alert"`) {
+		t.Error("space app template must render connection failures accessibly")
 	}
 
 	themeCSS, err := TemplatesFS.ReadFile("templates/space/src/styles/theme.css")

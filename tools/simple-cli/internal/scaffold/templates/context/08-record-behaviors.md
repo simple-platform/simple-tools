@@ -55,9 +55,16 @@ export default async ({ $ai, $db, $form, $user }) => {
 
 | Event | Execution | Purpose |
 |-------|-----------|---------|
-| `load` | Client + Server | Set defaults for new records |
+| `load` | Client + Server | Initialize create/edit forms; runs before submit on server mutations |
 | `update` | Client only | React to field changes in real-time |
 | `submit` | Client + Server | Validate before save |
+
+`load` is not create-only. On the server, `$form.record()` contains mutation input,
+which may include only changed fields. An absent key does not mean the stored
+value is empty. Guard defaults and calculations against absent inputs; prefer
+SCL defaults for create-time values. Browser-only `update` logic does not enforce
+server integrity. See the public [Record Behavior lifecycle guide](https://simple.dev/docs/features/record-behaviors/scripting-guide/#the-event-lifecycle)
+for lifecycle and partial-update semantics.
 
 ---
 
@@ -67,7 +74,7 @@ export default async ({ $ai, $db, $form, $user }) => {
 
 ```javascript
 $form.event              // Current event: 'load', 'update', 'submit'
-$form.record()           // Get all current field values
+$form.record()           // Current input values; server mutations can be partial
 $form.updated('field')   // Check if field changed (update event)
 $form.error('message')   // Set form-level error (blocks save)
 $form.info('message')    // Set form-level info message
@@ -123,6 +130,9 @@ $user.email   // Email address
 
 ### Auto-Calculate Total
 
+This example provides browser feedback. Enforce required totals in `submit` or
+an appropriate platform constraint, accounting for partial mutation inputs.
+
 ```javascript
 export default async ({ $form }) => {
   if ($form.event === 'update' && $form.updated('quantity', 'unit_price')) {
@@ -135,12 +145,21 @@ export default async ({ $form }) => {
 
 ### Default Values on Load
 
+Fill explicitly blank fields present in the input; leave omitted update fields
+alone. These defaults also run when an existing form opens.
+
 ```javascript
 export default async ({ $form, $user }) => {
-  if ($form.event === 'load') {
-    if (!$form('assigned_to').value()) {
-      $form('assigned_to').set($user.id)
-    }
+  if ($form.event !== 'load')
+    return
+
+  const values = $form.record()
+  if (Object.prototype.hasOwnProperty.call(values, 'assigned_to')
+    && (values.assigned_to == null || values.assigned_to === '') && $user.id) {
+    $form('assigned_to').set($user.id)
+  }
+  if (Object.prototype.hasOwnProperty.call(values, 'status')
+    && (values.status == null || values.status === '')) {
     $form('status').set('Draft')
   }
 }

@@ -1,0 +1,45 @@
+<!-- Standalone section tabs. Import the UI Kit theme through the Space bundler,
+     then space-tabs.css. Record Spaces declare host tabs with ui.tabs.set(). -->
+<link rel="stylesheet" href="./space-tabs.css">
+<div class="space-tabs" role="tablist" aria-label="Service desk screens">
+  <button type="button" role="tab" id="incident-tab" aria-selected="true"
+    aria-controls="incident-panel" tabindex="0">Incident triage</button>
+  <button type="button" role="tab" id="change-tab" aria-selected="false"
+    aria-controls="change-panel" tabindex="-1">Change calendar</button>
+</div>
+<section role="tabpanel" id="incident-panel" aria-labelledby="incident-tab" tabindex="0">
+  <!-- Mount the authorized incident collection and selected record workflow. -->
+</section>
+<section role="tabpanel" id="change-panel" aria-labelledby="change-tab" tabindex="0" hidden>
+  <!-- Mount the authorized change collection. Keep drafts mounted when hidden. -->
+</section>
+<script>
+  document.querySelectorAll('.space-tabs').forEach(list => {
+    const tabs = [...list.querySelectorAll('[role="tab"]')]
+    function select(tab) {
+      tabs.forEach(item => {
+        const active = item === tab
+        item.setAttribute('aria-selected', String(active))
+        item.tabIndex = active ? 0 : -1
+        document.getElementById(item.getAttribute('aria-controls')).hidden = !active
+      })
+      const bounds = list.getBoundingClientRect()
+      const target = tab.getBoundingClientRect()
+      if (target.left < bounds.left || target.right > bounds.right)
+        tab.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    }
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => select(tab))
+      tab.addEventListener('keydown', event => {
+        const direction = getComputedStyle(list).direction === 'rtl' ? -1 : 1
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+          : event.key === 'ArrowRight' ? (index + direction + tabs.length) % tabs.length
+            : event.key === 'ArrowLeft' ? (index - direction + tabs.length) % tabs.length : undefined
+        if (next === undefined) return
+        event.preventDefault()
+        tabs[next].focus({ preventScroll: true })
+        select(tabs[next])
+      })
+    })
+  })
+</script>

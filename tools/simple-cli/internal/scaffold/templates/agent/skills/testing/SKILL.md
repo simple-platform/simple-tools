@@ -123,3 +123,14 @@ describe('order behavior', () => {
   })
 })
 ```
+
+## Spaces
+
+Run a Space's unit tests with `simple test <app-id> --space <space-name>`. Follow
+the [frontend finish gate](../space-frontend-design/SKILL.md#finish-with-visual-critique).
+Mock public clients and record handles; check failed connections and queries,
+rejected saves, and preservation of entered values when those flows change.
+Browser-check each changed page, tab, and dialog on phone and desktop, including
+keyboard focus, zoom, and tenant light and dark themes. Unit tests cannot verify
+an embedded handshake, host navigation, or managed-component lifecycle. Report
+checks that could not run; do not claim runtime authorization from a mock.

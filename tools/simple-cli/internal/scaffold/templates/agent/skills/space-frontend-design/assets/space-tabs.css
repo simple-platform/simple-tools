@@ -1,0 +1,49 @@
+/* Match the platform Record Space strip. Import after the UI Kit theme. */
+.space-tabs {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  gap: calc(var(--simple-space-1) / 2);
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--simple-color-border-default);
+  background: transparent;
+}
+.space-tabs::-webkit-scrollbar { display: none; }
+.space-tabs > [role='tab'] {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: calc(var(--simple-space-1) * 1.5);
+  height: var(--simple-control-height-md);
+  padding: calc(var(--simple-space-1) * 1.5) calc(var(--simple-space-1) * 2.5) calc(var(--simple-space-1) / 2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--simple-color-text-secondary);
+  font-family: var(--simple-font-family-sans);
+  font-size: var(--simple-font-size-sm);
+  font-weight: var(--simple-font-weight-medium);
+  line-height: var(--simple-line-height-normal);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--simple-duration-fast) var(--simple-easing-standard),
+    border-color var(--simple-duration-fast) var(--simple-easing-standard);
+}
+.space-tabs > [role='tab']:hover { color: var(--simple-color-text-primary); }
+.space-tabs > [role='tab'][aria-selected='true'] {
+  border-bottom-color: var(--simple-color-action-primary);
+  color: var(--simple-color-text-primary);
+}
+.space-tabs > [role='tab']:focus-visible {
+  outline: 2px solid var(--simple-color-focus-ring);
+  outline-offset: -2px;
+}
+@media (min-width: 768px) { .space-tabs { gap: var(--simple-space-2); } }
+@media (pointer: coarse) { .space-tabs > [role='tab'] { min-height: 44px; } }
+@media (prefers-reduced-motion: reduce) { .space-tabs > [role='tab'] { transition: none; } }

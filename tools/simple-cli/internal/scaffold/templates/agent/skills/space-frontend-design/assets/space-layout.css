@@ -1,0 +1,169 @@
+/* Import after Tailwind and the UI Kit theme. This file adds no brand tokens. */
+@layer components {
+  .space-page [hidden] { display: none !important; }
+  .space-page {
+    width: 100%;
+    max-width: var(--simple-content-width-xl);
+    margin-inline: auto;
+    padding: var(--simple-space-6);
+    color: var(--simple-color-text-primary);
+    font-family: var(--simple-font-family-sans);
+    font-size: var(--simple-font-size-sm);
+    line-height: var(--simple-line-height-normal);
+  }
+
+  .space-page > * + * { margin-top: var(--simple-space-6); }
+  .space-page :where(h1, h2, h3, h4, p) { margin-block: 0; }
+  .space-page :where(h1) {
+    font-size: var(--simple-font-size-2xl);
+    font-weight: var(--simple-font-weight-semibold);
+    line-height: var(--simple-line-height-tight);
+    letter-spacing: var(--simple-letter-spacing-tight);
+  }
+  .space-page :where(h2) {
+    font-size: var(--simple-font-size-lg);
+    font-weight: var(--simple-font-weight-semibold);
+    line-height: var(--simple-line-height-tight);
+  }
+  .space-page :where(h3, h4) { font-weight: var(--simple-font-weight-semibold); }
+  .space-page :where(p) { max-width: 75ch; }
+  .space-page :where(pre, code) { font-family: var(--simple-font-family-mono); }
+  .space-page :where(pre) { max-width: 100%; overflow-x: auto; }
+  .space-page :where(button, input, select, textarea) { font: inherit; }
+  .space-page :where(button, select, input:not([type='checkbox'], [type='radio'], [type='file'])) {
+    min-height: var(--simple-control-height-md);
+    border-radius: var(--simple-radius-md);
+  }
+  .space-page :where(button) {
+    cursor: pointer;
+    transition: background-color var(--simple-duration-fast) var(--simple-easing-standard),
+      border-color var(--simple-duration-fast) var(--simple-easing-standard);
+  }
+  .space-page :where(button:disabled) { cursor: not-allowed; }
+  .space-page :where(input, select, textarea) {
+    min-width: 0;
+    max-width: 100%;
+    color: var(--simple-color-field-text);
+    background: var(--simple-color-field-background);
+    border-color: var(--simple-color-field-border);
+  }
+  .space-page :where(input, textarea)::placeholder { color: var(--simple-color-field-placeholder); }
+  .space-page :where(button, a, input, select, textarea, summary):focus-visible {
+    outline: 2px solid var(--simple-color-focus-ring);
+    outline-offset: 3px;
+  }
+  .space-page :where(a) { color: var(--simple-color-text-link); }
+  .space-page :where(a:hover) { color: var(--simple-color-text-link-hover); }
+  .space-page :where(summary) { cursor: pointer; }
+  .space-page :where([role='alert']) { overflow-wrap: anywhere; }
+
+  .space-page-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--simple-space-4);
+    padding-bottom: var(--simple-space-4);
+    border-bottom: 1px solid var(--simple-color-border-default);
+  }
+  .space-page-header p { margin-top: var(--simple-space-2); color: var(--simple-color-text-secondary); }
+  .space-panel {
+    min-width: 0;
+    padding: var(--simple-space-4);
+    border: 1px solid var(--simple-color-border-default);
+    border-radius: var(--simple-radius-lg);
+    background: var(--simple-color-surface);
+  }
+  .space-panel-heading {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--simple-space-3);
+    margin-bottom: var(--simple-space-4);
+  }
+  .space-panel-heading p { margin-top: var(--simple-space-1); color: var(--simple-color-text-secondary); }
+  .space-studio {
+    display: grid;
+    grid-template-columns: minmax(0, var(--simple-sidebar-width)) minmax(0, 1fr);
+    align-items: start;
+    gap: var(--simple-space-6);
+  }
+  .space-review {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+    align-items: start;
+    gap: var(--simple-space-4);
+  }
+  .space-overview {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, var(--simple-sidebar-width));
+    align-items: start;
+    gap: var(--simple-space-6);
+  }
+  .space-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--simple-space-2);
+  }
+  .space-toolbar > button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--simple-space-2);
+    padding-inline: var(--simple-space-3);
+    border: 1px solid var(--simple-color-border-default);
+    background: var(--simple-color-surface);
+    color: var(--simple-color-text-secondary);
+    font-weight: var(--simple-font-weight-medium);
+  }
+  .space-toolbar > button:hover { background: var(--simple-color-surface-hover); color: var(--simple-color-text-primary); }
+  .space-toolbar > button[aria-pressed='true'] {
+    background: var(--simple-color-surface-selected);
+    border-color: var(--simple-color-border-strong);
+    color: var(--simple-color-text-primary);
+  }
+  .space-view-frame {
+    min-width: 0;
+    height: min(68svh, 48rem);
+    min-height: 26rem;
+    overflow: hidden;
+    background: var(--simple-color-canvas);
+  }
+  .space-empty {
+    display: flex;
+    min-height: 12rem;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--simple-space-2);
+    padding: var(--simple-space-6);
+    text-align: center;
+    color: var(--simple-color-text-secondary);
+  }
+  .space-empty h2, .space-empty h3 { color: var(--simple-color-text-primary); }
+  .space-disclosure {
+    padding: var(--simple-space-4);
+    border-top: 1px solid var(--simple-color-border-default);
+    color: var(--simple-color-text-secondary);
+  }
+  .space-disclosure > summary { font-weight: var(--simple-font-weight-medium); }
+  .space-disclosure[open] > summary { margin-bottom: var(--simple-space-3); }
+  .space-note { color: var(--simple-color-text-secondary); font-size: var(--simple-font-size-xs); }
+
+  @media (max-width: 900px) {
+    .space-studio, .space-review, .space-overview { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 600px) {
+    .space-page { padding: var(--simple-space-4); }
+    .space-page-header { flex-direction: column; }
+  }
+  @media (pointer: coarse) {
+    .space-page :where(button, select, input:not([type='checkbox'], [type='radio'])) {
+      min-height: max(44px, var(--simple-control-height-md));
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .space-page :where(button) { transition: none; }
+  }
+}

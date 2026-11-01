@@ -8,12 +8,12 @@ description: Guide to building custom React-based Spaces in Simple.
 ## 1. Concepts
 
 - **Space:** A custom React application embedded within the Simple platform. Spaces provide complete UI freedom when Custom Views aren't flexible enough.
-- **Routing:** Spaces are typically single-page applications (SPAs) that handle their own internal routing if needed (e.g., using `react-router-dom`).
-- **Styling:** Reuse the UI Kit, shared host theme, and Tailwind/shadcn patterns. Follow the current Space design skill when the host supplies it.
+- **Routing:** Use local routing only for Space-owned pages. Record tabs, record URLs, and browser history belong to the host; do not add a competing router for them.
+- **Styling:** Follow the [Space frontend design skill](../space-frontend-design/SKILL.md) for layout, tenant tokens, accessibility, responsive behavior, and browser QA; keep host and SDK contracts authoritative.
 
 ## 2. Directory Structure
 
-Spaces reside in the `spaces/` directory of an app in your workspace:
+Spaces reside in the `spaces/` directory of an app under the configured workspace root:
 
 ```
 apps/<app-id>/spaces/<space-name>/
@@ -31,7 +31,7 @@ apps/<app-id>/spaces/<space-name>/
 
 ## 3. Scaffolding a Space
 
-Use the Simple CLI to generate a new space. Run it from the workspace root, the folder that holds `simple.scl`:
+Use the Simple CLI to generate a new Space in this workspace:
 
 ```bash
 simple new space <app-id> <space-name> <display-name>
@@ -45,22 +45,46 @@ Spaces operate in an isolated, secure iframe served from `assets.simple.dev` wit
 
 Therefore, Space developers **MUST NOT** use raw `fetch()` to query the Simple Backend. Use the published `@simpleplatform/sdk` Space API instead. Its browser adapter establishes the secure MessageChannel with the parent frame and the host authorizes every request.
 
-The scaffold imports `connect()` directly from the published SDK. Do not add a copied bridge or a local wrapper just to rename the connection. Pass an explicit trusted host origin as `targetOrigin`. The embedded example uses the parent origin from `document.referrer`; when that is missing, configure a trusted platform origin rather than guessing from the Space URL. The scaffold shows a visible error if neither is available.
+The scaffold imports `connect()` directly from the published SDK. Prefer the
+embedding page's referrer, and use `VITE_SIMPLE_HOST_ORIGIN` only as trusted
+configuration when the browser omits the referrer. Never guess an origin from
+the Space URL or accept one from user input.
 
 ```tsx
 import { connect } from '@simpleplatform/sdk/space'
 
-const spaceConnection = Promise.resolve().then(() => {
-  if (!document.referrer)
+function resolveHostOrigin(): string {
+  const candidate = document.referrer || import.meta.env.VITE_SIMPLE_HOST_ORIGIN
+  if (!candidate)
     throw new Error('Open this Space from the platform or configure a trusted host origin.')
 
-  return connect({ targetOrigin: new URL(document.referrer).origin })
+  const host = new URL(candidate)
+  if (host.protocol !== 'http:' && host.protocol !== 'https:')
+    throw new Error('The trusted host origin must use HTTP(S).')
+
+  return host.origin
+}
+
+const spaceConnection = Promise.resolve().then(() =>
+  connect({ targetOrigin: resolveHostOrigin() }),
+)
+
+spaceConnection.catch(() => {
+  const root = document.getElementById('space-root')
+  if (!root)
+    return
+  const alert = document.createElement('p')
+  alert.setAttribute('role', 'alert')
+  alert.textContent = 'Unable to connect to Simple. Open this Space from the platform or check its trusted host configuration.'
+  root.replaceChildren(alert)
 })
 
 const simple = await spaceConnection
 ```
 
-Create one connection promise per Space and reuse it. Calling `connect()` again starts another handshake, which the host does not provide for the same iframe.
+Create one connection promise per Space and reuse it. Never load an SDK
+connection alongside a copied bridge; they compete for the iframe connection.
+Render connection failures visibly instead of leaving a blank Space.
 
 ### Host-provided context
 
@@ -69,7 +93,6 @@ Every embedded Space receives explicit context from its host at connection time.
 ```ts
 switch (simple.context.kind) {
   case 'standalone':
-    // A dashboard, tool, or another embedded page without record context.
     break
   case 'record':
     console.log(simple.context.applicationId, simple.context.tableName, simple.context.recordId)
@@ -77,49 +100,27 @@ switch (simple.context.kind) {
 }
 ```
 
-`simple.context.kind` is currently either `standalone` or `record`. List context is not available yet. There is no inferred or unknown context state. A missing or malformed host context makes `connect()` reject with a structured SDK error.
+`simple.context.kind` is currently either `standalone` or `record`. List context is not available yet. There is no inferred or unknown context state. An invalid `targetOrigin` or missing/malformed host context makes `connect()` reject with a structured SDK error.
 
 ### Fetching Data via GraphQL
 
 Use `simple.data.query()` and `simple.data.mutate()` from the connected Space client.
 
-```tsx
-import { useEffect, useState } from 'react'
+Query the installed schema for exact qualified roots; alias results, select only
+needed fields, and bound lists. For example, after verifying a `customer` table:
 
-const GET_CUSTOMERS = `
-  query GetCustomers {
-    customer { id first_name last_name }
-  }
-`
-
-function CustomerList() {
-  const [data, setData] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    spaceConnection
-      .then(simple => simple.data.query(GET_CUSTOMERS))
-      .then(result => setData(result?.customer || []))
-      .catch(err => console.error('RPC Query Failed', err))
-      .finally(() => setLoading(false))
-  }, [])
-
-  if (loading)
-    return <p>Loading...</p>
-
-  return (
-    <ul>
-      {data.map(c => (
-        <li key={c.id}>
-          {c.first_name}
-          {' '}
-          {c.last_name}
-        </li>
-      ))}
-    </ul>
-  )
-}
+```typescript
+const { customers } = await simple.data.query<{
+  customers: Array<{ id: string; name: string }>
+}>(`query Customers {
+  customers: com_acme_crm__customers(limit: 25, order_by: { id: asc }) { id name }
+}`)
 ```
+
+Render query failure separately from an empty successful result and provide a
+retry path. Guard against stale results after unmount/selection changes. For a
+standard browse workflow prefer a managed collection when the installed UI Kit
+and host support it.
 
 ### Mutations (Insert, Update, Delete)
 
@@ -139,43 +140,14 @@ async function createTask(title: string) {
 }
 ```
 
-### Record Space workflow
-
-When `simple.context.kind === 'record'`, the platform has configured this Space as a record body and keeps the platform header and record workflow authoritative. Use `simple.records.current()` to work with that current route record:
-
-```ts
-const simple = await spaceConnection
-
-if (simple.context.kind === 'record') {
-  const record = await simple.records.current()
-  await record.update({ first_name: 'Ada' })
-  const result = await record.submit()
-
-  if (!result.ok) {
-    const snapshot = record.snapshot()
-    // Render snapshot.errors.form and each affected snapshot.fields[field].error.
-  }
-}
-```
-
-Do not use `simple.data.mutate()` to change the current record form. `record.update()` and `record.submit()` preserve Record Behaviors, validation, documents, permissions, and the shared state used by the platform Update button. In a standalone Space, `simple.records.current()` throws a structured unavailable error when called; `simple.data` remains available.
-
-Spaces can also run an action declared by their own app through the host:
-
-```ts
-const result = await simple.actions.run('my-action', { record_id: 'REC000001' })
-```
-
-The host authorizes the request; Spaces cannot name an action from another app. Handle the SDK's structured unavailable error when the host has not negotiated the action capability.
-
 ### Managed Record Views (`ListView`, `DataGrid`, `Board`)
 
-Spaces can render managed record views using supported components from `@simpleplatform/ui-kit/react`. These components integrate natively with host styles, themes, authorization, and data transport.
+When exported by the installed release and supported by the host, Spaces can render managed record views using supported components from `@simpleplatform/ui-kit/react`. These components integrate natively with host styles, themes, authorization, and data transport.
 
 Managed views accept an authorized database table source. Records are fetched and paged by the platform through the host bridge. Do not pass row arrays, query documents, or access grants.
 Spaces support List, DataGrid, and Board. Inbox presets are rendered only on platform collection pages.
 
-Managed views require `@simpleplatform/sdk` `^4.1.0` and `@simpleplatform/ui-kit` `^0.4.0`; keep both packages at compatible releases. Standalone ConditionBuilder/ConditionSummary remain private. Store multiple presets in `custom_view.customization.views`; select one supported preset for each Space component. Tile presentations are `standard`, `media`, and `message`; `subtitleFieldNames` accepts an ordered array. See the [Custom Views guide](https://simple.com/docs/features/custom-views) and [UI Kit API](https://github.com/simple-platform/simple-sdks/blob/main/sdks/space-ui/README.md#managed-database-backed-views).
+Inspect installed SDK/UI Kit exports and negotiated host capabilities; older published UI Kits expose only RecordForm/RecordActivity/StatusBadge. Keep both packages at compatible releases and use public compatibility documentation rather than a forecast version number. Standalone ConditionBuilder/ConditionSummary remain private. Store multiple presets in `custom_view.customization.views`; select one supported preset for each Space component. Tile presentations are `standard`, `media`, and `message`; `subtitleFieldNames` accepts an ordered array. See the [Custom Views guide](https://simple.dev/docs/features/custom-views/#configure-table-view-presets) and [UI Kit API](https://github.com/simple-platform/simple-sdks/blob/main/sdks/space-ui/README.md#managed-database-backed-views).
 
 #### Database-Backed Table Source (`TableRecordSource`)
 
@@ -212,11 +184,15 @@ const preset: ListPreset = {
   client={simple}
   preset={preset}
   source={source}
-  onItemOpen={(ref) => console.log('Opened record:', ref.recordId)}
+  onItemOpen={openRecord}
 />
 ```
 
+Implement `openRecord` with public `simple.navigation.open()` or a deliberate
+independent record session, handling failure visibly.
+
 Key characteristics:
+
 - **Database-backed:** Records are queried, sorted, and paginated automatically through the authenticated host bridge.
 - **Stable logical SCL names:** Presets and filters specify schema field names (e.g., `display_name`, `version`) directly without inspecting metadata tables.
 - **Table ID:** `source.tableId` is the platform table metadata record ID. Resolve it from the authorized metadata available to the Space; the managed renderer verifies it belongs to `source.appId` before loading fields or records.
@@ -224,11 +200,47 @@ Key characteristics:
 - **Tile styling is platform-owned:** Tile presets choose field bindings and one of `standard`, `media`, or `message`; typography, spacing, and sizing come from the platform.
 - **Preset icons follow kind:** The platform selects the view icon from `kind`; tile icon IDs use a provider prefix such as `lucide:star`.
 
+Board moves use an enum lane and persist through managed record update/submit;
+reject failed saves so the UI can roll back.
+
 Managed views do not render records supplied by external APIs or caller-owned arrays. For external data, build a Space-owned UI around that API instead of presenting it as platform-managed records.
 
 #### No Protocol Code Copying
 
 Do **not** copy, fork, or reimplement the internal `<simple-record-view>` custom element, MessagePort channels, or wire RPC protocols in your Space code. Import supported components (`ListView`, `DataGrid`, `Board`) from `@simpleplatform/ui-kit/react` and source/preset types from `@simpleplatform/ui-kit/contracts`.
+
+### Invoking app Actions
+
+When the host negotiates the Action capability, a Space can call `simple.actions.run(name, input)` to invoke an Action belonging to its own app. This is distinct from a header action, whose callback runs inside the Space; there is no public `RecordAction` component, and the API cannot target another app. For record-specific composition and rules, see the [Record Space Builder skill](../record-space-builder/SKILL.md).
+
+### Record Space workflow
+
+For record-bound Spaces—especially those using host tabs, managed record forms, header actions, app Actions, or platform theming—follow the [Record Space Builder skill](../record-space-builder/SKILL.md) for the current host and SDK contracts.
+
+When `simple.context.kind === 'record'`, the platform has configured this Space as a record body and keeps the record workflow authoritative. Use `simple.records.current()` for the current route record:
+
+```ts
+const simple = await spaceConnection
+
+if (simple.context.kind === 'record') {
+  const record = await simple.records.current()
+  const update = await record.update({ first_name: 'Ada' })
+  if (!update.ok) {
+    // Render the managed snapshot errors; do not submit a failed update.
+    return
+  }
+  const result = await record.submit()
+
+  if (!result.ok) {
+    const snapshot = record.snapshot()
+    // Render snapshot.errors.form and each affected snapshot.fields[field].error.
+  }
+}
+```
+
+Do not use `simple.data.mutate()` to change the current record form. `record.update()` and `record.submit()` preserve Record Behaviors, validation, document handling, permissions, and the managed record session. A Record Space supplies its own Save callback through the host header actions; check the submit result. In a standalone Space, `simple.records.current()` throws a structured unavailable error when called; `simple.data` remains available.
+
+An app Action does not update the managed route record; use its record handle for that workflow.
 
 ### Accessing External APIs
 
@@ -256,19 +268,17 @@ Once declared, you may then use standard `fetch()` for _those specific external 
 
 ## 5. Building, Testing, and Deploying
 
-All commands are run from the workspace root using the `simple` CLI:
+Run all commands from this workspace root using the `simple` CLI:
 
-- **Building:** `simple build` compiles all apps including their spaces.
+- **Building:** `simple build <app-id>` builds an app; `simple build --all` builds all apps. Build Spaces as well as Actions before deploying; deploy uploads their `dist` artifacts.
 - **Testing:** `simple test` runs all tests including space unit tests.
-- **Deploying:** `simple deploy <app-id>` deploys the app and its spaces to a dev instance.
+- **Deploying:** `simple deploy apps/<app-id> --env <configured-env>` publishes and installs the app. `--no-install` publishes without installation.
 
-> **Note:** There is currently no local live-preview for Spaces. To preview and debug a Space, deploy the app to a dev instance and load the deployed Space in the browser.
+Use the workspace's supported DevStudio or development-instance workflow for integrated preview. A Vite-only preview cannot prove the host handshake, record lifecycle, permissions, or theme negotiation. Check `simple devstudio serve --help` for the installed CLI.
 
 ## 6. Best Practices
 
-- **UI Components:** Build reusable React components for a consistent look and feel across your space.
-- **Record Views:** Use supported components from `@simpleplatform/ui-kit/react` (`ListView`, `DataGrid`, and `Board`) with a `{ kind: 'table', appId, tableId }` source. Managed views fetch rows through the host and provide built-in filtering; presets configure presentation and initial filters. Standalone filter-builder components are not public Space APIs. Inbox is platform-only. Never pass row arrays, copy protocol code, or embed raw `<simple-record-view>` custom elements.
-- **Error Handling:** Always handle loading and error states for queries and mutations to provide good UX.
-- **State Management:** For complex state, combine React Context or a state management library with the `query`/`mutate` SDK functions.
-- **Styling:** Reuse the UI Kit and shared theme; use shadcn primitives where a managed component does not fit.
-- **SDK:** Call `connect()` from `@simpleplatform/sdk/space`. Do not copy, fork, reimplement, or rename the MessageChannel connection protocol.
+- Use the [Space frontend design skill](../space-frontend-design/SKILL.md) as the source for visual composition, tokens, accessibility, responsive layouts, charts, and browser QA.
+- Prefer public platform components and the organization's shared UI package before local controls. Check installed package exports and host capabilities before importing managed views.
+- Handle query and mutation loading, error, retry, and stale-result states. Use managed record handles when changing the active Record Space form.
+- Keep one SDK connection per iframe and use `connect({ targetOrigin })` from `@simpleplatform/sdk/space`; never copy the MessageChannel protocol.

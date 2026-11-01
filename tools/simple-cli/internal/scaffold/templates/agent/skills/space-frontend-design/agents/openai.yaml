@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simple Space Frontend Design"
+  short_description: "Craft consistent, branded enterprise Spaces"
+  default_prompt: "Use $space-frontend-design to build or refine this Simple Space with platform components and tenant branding."
