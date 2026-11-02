@@ -3,6 +3,10 @@ globs: "apps/**/*.{ts,js}"
 ---
 # Logic Boundaries & API Constraints
 
+WASM/QuickJS restrictions apply to Action runtime code. Spaces and external
+frontends run in the browser; their build/test tools run in Node. Record
+Behaviors use the platform's injected APIs described below.
+
 ## 1. Record Behaviors (`scripts/record-behaviors/*.js`)
 Lightweight form logic. Runs independently in Browser and Server.
 
@@ -15,7 +19,7 @@ Lightweight form logic. Runs independently in Browser and Server.
 *   **PROHIBITED:**
     *   `$db.mutate(...)` / `mutation { ... }`.
     *   `alert()`, `console.log()` (Use `$form.info()` instead).
-    *   External HTTP calls (Use Actions instead).
+    *   Browser secrets or privileged integrations. `$http` is supported; follow the public behavior API and keep credentials server-side.
 
 ## 2. Server Actions (`actions/**/*.ts`)
 Heavy business logic. Runs primarily in Server Sandbox.
@@ -34,5 +38,5 @@ Heavy business logic. Runs primarily in Server Sandbox.
 *   **Engine:** QuickJS (via Javy).
 *   **Compliance:**
     *   **No Node.js Built-ins:** `fs`, `path`, `process`, `os`, `crypto` are NOT available.
-    *   **No NPM Binaries:** You can trust type-only packages (e.g., `lodash`, `date-fns`), but packages relying on Node.js bindings will fail.
+    *   **No NPM Binaries:** Use compatible pure-JavaScript dependencies; `lodash` and `date-fns` are runtime code, not type-only packages. Node.js bindings will fail.
     *   **Async/Await:** ALWAYS use `async/await`. The runtime is asynchronous.

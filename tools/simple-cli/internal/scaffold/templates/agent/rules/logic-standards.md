@@ -37,8 +37,8 @@
 
 *   ❌ **Imperative Seeding**:
     *   Using an Action to loop and `create()` static data (e.g. `seed_data` action).
-    *   **CORRECTION**: Use SCL `instance` blocks for all static data.
+    *   **CORRECTION**: Use SCL `set` blocks for app-owned static configuration (see the data-seeding skill).
 
 ## 3. Storage Usage
 *   **Record Behaviors**: `$db` is **Read-Only** (Querying reference data). You rarely write to DB directly in a behavior; you modify the `$form` and let the system save.
-*   **Server Actions**: Use the SDK generated clients (e.g., `client.com_acme_crm.reservation.create({...})`) to perform writes.
+*   **Server Actions**: Use `@simpleplatform/sdk/graphql` mutations with the execution context to perform authorized writes.

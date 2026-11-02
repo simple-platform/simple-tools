@@ -22,7 +22,7 @@ You MUST use the exact atoms below. **DO NOT** use `uuid`, `text`, or SQL types.
 | `:json` / `:jsonb` | JSON data | - |
 | `:document` | Files | `allowed_types`, `max_size` |
 | `:version` | Semver | - |
-| `:enum` | Fixed list | `values` (**MUST BE SNAKE_CASE**) |
+| `:enum` | Fixed list | `values` (exact declared enum values) |
 
 ## 2. Invalid Types (Anti-Patterns)
 *   **NO** `:uuid`: Use `:string` + `id_prefix` in table definition.
@@ -38,12 +38,11 @@ table my_table {
 ```
 
 ## 4. Enum Constraints (CRITICAL)
-*   **Syntax:** Enum keys are **IDENTIFIERS**, not strings.
-*   **Rule:** They MUST be `snake_case`. They CANNOT contain spaces.
-*   **Bad:** `values "Checked In", "In Progress"` (Syntax Error)
-*   **Good:** `values "checked_in", "in_progress"`
+*   **Syntax:** Follow the app's declared values, e.g. `values Draft, Approved` or quoted strings.
+*   **Compatibility:** Preserve existing spelling/case; do not rename stored values for stylistic consistency.
+*   **New values:** Prefer identifier-safe names and verify schema/API representation against the installed platform.
 
 ## 5. Relationship Enforcement
-*   **Bidirectional:** Every `belongs :to` implies a `has :many` exists somewhere.
+*   **Bidirectional:** Define the needed inverse `has :many` or `has :one` explicitly; do not assume one is generated.
 *   **Cross-App:** `belongs :to` uses fully qualified names (`app.table`).
 *   **Cross-App Inverse:** `has :many` for external tables is defined dynamically via `table_relationship` records.

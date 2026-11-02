@@ -1,6 +1,6 @@
 # SDK Reference
 
-Complete API reference for the TypeScript SDK (`@simpleplatform/sdk`).
+Common patterns for the TypeScript SDK (`@simpleplatform/sdk`).
 
 > [!IMPORTANT]
 > This SDK is designed for use within Simple Platform **Actions** (WASM modules).

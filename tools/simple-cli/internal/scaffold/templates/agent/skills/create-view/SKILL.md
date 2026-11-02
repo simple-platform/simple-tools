@@ -1,112 +1,79 @@
 ---
 name: create-view
-description: Guide to building Custom Views, Dashboards, and Action Buttons.
+description: Configure platform Custom Views, collection presets, record Spaces, and trigger-backed View Actions.
 ---
-# Create View Skill
 
-## 1. Concepts
-*   **Custom View:** A specialized UI configuration for a specific task (e.g., "Manager Dashboard", "Triage Queue").
-*   **View Action:** A button placed on a view that triggers a backend Logic/Workflow.
+# Create a view
 
-## 2. Defining a Custom View
-Records go in `records/100_metadata.scl` (typically).
+Use platform configuration before adding a Space. Read
+[Custom Views](https://simple.dev/docs/features/custom-views/#configure-table-view-presets) for supported preset
+schemas and [View Actions](https://simple.dev/docs/features/view-actions/#where-actions-appear) for
+placement and invocation context. Inspect existing metadata and installed package
+exports; a source-only component is not automatically available in customer apps.
+
+## Configuration records
+
+For a target table, there is one Custom View per `(target_table, type)`; update
+its existing record rather than creating competing list/record configurations.
+Resolve table IDs by application and exact name. `priority` defaults to 100;
+`is_active` defaults to true. Follow the app's metadata query pattern:
 
 ```scl
-set dev_simple_system.custom_view, my_dashboard {
-  display_name "Manager Dashboard"
-  
-  # TYPE:
-  # - "record": Single record detail view.
-  # - "list": Collection presets (Table, List, Board, Inbox).
-  # - "dashboard": Widget canvas.
-  type dashboard 
-
-  # LINK:
-  # Use variable lookup to find target table ID
+# meta must contain the intended application's table metadata.
+set dev_simple_system.custom_view, order_list {
+  display_name "Orders"
+  type list
   target_table_id `$var('meta') |> $jq('.tables[] | select(.name == "order") | .id')`
 }
 ```
 
-### Collection preset JSON
-
-Use an active `type list` Custom View for the target table. Put the preset set in its **Customization** field under `views`:
+Store collection presets under `customization.views`, with unique preset IDs and
+a valid `defaultPresetId`. The envelope uses `version: 1`. Preset filters require
+native `RecordWhere`; shorthand and predicate-tree filters are rejected without
+conversion. Tile layouts also use `version: 1`.
+Use real logical fields and public preset validators where available. Tile
+presentations are `standard`, `media`, or `message`.
+For the complete SCL example, including the `var` block and `$json()` assignment
+to `customization`, see `.simple/context/09-custom-views.md`.
+A minimal list tile config for a declared `number` field is:
 
 ```json
-{
-  "views": {
-    "version": 1,
-    "defaultPresetId": "orders",
-    "presets": [
-      {
-        "id": "orders", "title": "Orders", "kind": "list",
-        "config": { "tile": { "version": 1, "presentation": "standard", "titleFieldName": "number" } }
-      },
-      {
-        "id": "orders-table", "title": "Orders table", "kind": "table",
-        "config": { "columns": [{ "fieldName": "number" }, { "fieldName": "amount" }] }
-      }
-    ]
-  }
-}
+{ "tile": { "version": 1, "presentation": "standard", "titleFieldName": "number" } }
 ```
 
-Use fields that exist on the target table. In SCL, put this JSON in a `var` value block and set `customization` with `$var('order_views_customization') |> $json()`, following existing metadata recipes. Give presets unique IDs and select a valid `defaultPresetId`.
+Presets configure fields/filters/order, not record arrays or per-tile CSS.
+Board lanes require an enum field. Platform routes support table/list/board/inbox;
+Spaces can use the managed collection exports supported by their installed UI Kit
+and host. Standalone condition editors and Inbox are platform-only.
 
-Tile presentations are `standard`, `media`, and `message`. The platform controls tile typography, spacing, and sizing; configure field bindings and presentation rather than per-tile styles.
+For a record Space, bind `type record` and `space_id` to the app's Space record,
+then follow [Record Space Builder](../record-space-builder/SKILL.md). Host tabs,
+header actions, managed forms, and record sessions have distinct ownership.
 
-Platform routes support `table`, `list`, `board`, and `inbox`. Spaces support List/DataGrid/Board with built-in filters; select one supported preset for the UI Kit component. Board lanes require an enum field. Sources are database identities `{ kind: 'table', appId, tableId }`; preset/tile JSON never supplies rows. Standalone ConditionBuilder remains private.
+## View Actions
 
-See the [Custom Views guide](https://simple.com/docs/features/custom-views) for filters, ordering, tile fields, Board summaries, Inbox, and record-Space configuration. Keep View Actions outside the `views` preset object.
-
-## 3. Defining a View Action (Button)
-Buttons connect the UI to your **Actions** (via Triggers).
+Scaffold the Action with the CLI. For a UI button, declare a bare trigger and
+`logic_trigger` in SCL; use the [button wiring recipe](https://simple.dev/docs/features/view-actions/#configure-an-action-button).
+Do not add an unrelated DB event, schedule, webhook, or invented `type manual`.
+Then link the button to the existing Custom View and trigger. The following
+example uses previously declared logical keys:
 
 ```scl
-set dev_simple_system.view_action, btn_approve {
+set dev_simple_system.view_action, approve_order_button {
   name "approve-order"
-  label "Approve Order"
-  icon "check-circle"  # Feather Icon
-  
-  # STYLE:
-  # - "primary": Solid color (Call to Action)
-  # - "outline": Border only (Secondary)
-  # - "danger": Red (Destructive)
+  label "Approve order"
+  icon "check-circle"
   type primary
-  
-  # PLACEMENT:
-  # Link to the Custom View ID
-  custom_view_id `$var('ids') |> $jq('.views[0].id')`
+  position 10
+  custom_view_id `$app_record('order_list')`
+  trigger_id `$app_record('approve_order_trigger')`
 }
 ```
 
-## 4. View Properties
-| Property | Description |
-| :--- | :--- |
-| `icon` | Feather icon name (e.g., `file-text`, `download`). |
-| `name` | Internal identifier (kebab-case). |
-| `label` | Button text shown to user. |
-| `type` | `primary`, `outline`, `danger`. |
-
-## 5. Complete Recipe: "Generate PDF" Button
-1.  **Logic:** Create `actions/generate-pdf`.
-2.  **Trigger:** Create `trigger, generate_pdf_trigger` (Manual type).
-3.  **Bind:** Link Logic+Trigger in `logic_trigger`.
-4.  **View:** Create `custom_view, order_view`.
-5.  **Button:** Create `view_action` linking View+Trigger.
-
-```scl
-set dev_simple_system.view_action, btn_gen_pdf {
-  name "gen-pdf"
-  label "Generate PDF"
-  icon "file-text"
-  type outline
-  
-  custom_view_id `$var('ids') |> $jq('.view_id')`
-  trigger_id     `$var('ids') |> $jq('.trigger_id')`
-}
-```
-
-## 6. Best Practices
-*   **Context:** Actions receive the ID(s) of the expected record(s).
-*   **Feedback:** The UI handles loading states automatically while the WASM Action runs.
-*   **Permissions:** Action visibility respects the underlying Logic permissions.
+Types are `primary`, `secondary`, `destructive`, `outline`; icon names use the
+platform's Lucide identifiers. Position must be unique within the Custom View.
+A collection action receives table/view context, **not selected record IDs**.
+Dashboard View Actions are not currently rendered. A Record Space supplies
+its main buttons through the SDK header actions instead of persisted View Actions.
+Treat visibility as UI configuration, never proof of authorization. Verify the
+Action's actual input contract and server refusal behavior before exposing it.

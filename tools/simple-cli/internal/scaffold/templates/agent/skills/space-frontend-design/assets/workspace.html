@@ -1,0 +1,29 @@
+<!-- Composition reference. Load the UI Kit theme and space-layout.css through
+     the Space bundler. Replace the described view/form regions with managed
+     React components; do not ship these regions as simulated business UI. -->
+<main class="space-page" aria-labelledby="page-title">
+  <header class="space-page-header">
+    <div>
+      <h1 id="page-title">Approvals</h1>
+      <p>Review requests and resolve the items that need your attention.</p>
+    </div>
+  </header>
+
+  <div class="space-review">
+    <section aria-labelledby="queue-title">
+      <div class="space-panel-heading">
+        <div><h2 id="queue-title">Ready for review</h2><p>Open a request to review its details.</p></div>
+      </div>
+      <!-- <ListView client={simple} source={source} preset={reviewPreset}
+                     onItemOpen={openAuthorizedRecord} /> -->
+    </section>
+    <section class="space-panel" aria-labelledby="detail-title">
+      <div class="space-panel-heading">
+        <div><h2 id="detail-title">Request details</h2><p>Changes are saved when you choose Save changes.</p></div>
+      </div>
+      <!-- <RecordForm record={record} /> -->
+      <!-- Use a real button wired to checked record.submit(), or the host's
+           header action when this is a Record Space. -->
+    </section>
+  </div>
+</main>

@@ -59,6 +59,10 @@ Scaffold a new custom React Space.
 - **Flags:**
   - `--desc <string>`: Description of the space.
 
+Build an app's Space bundles with `simple build <app-id>`. Run a Space's tests with
+`simple test <app-id> --space <name>`. Use the configured DevStudio workflow for
+integrated preview; check `simple devstudio serve --help` for the installed CLI.
+
 ### `simple new trigger:db`
 
 Create a database event trigger.

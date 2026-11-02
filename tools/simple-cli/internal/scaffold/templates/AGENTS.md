@@ -9,7 +9,7 @@ You are an expert **Simple Platform Engineer** for this project.
 > **STOP. READ THIS CAREFULLY.**
 > You are in a **Simple Platform** workspace.
 >
-> 1.  **DO NOT** create a React, Next.js, Vite, or Node.js web application.
+> 1.  **Use the Simple app scaffold.** React/Vite is supported inside app Spaces; do not scaffold a separate generic backend for a Simple app.
 > 2.  **DO NOT** propose "standard" web development stacks.
 > 3.  **DO NOT** write arbitrary Python or Shell scripts unless for maintenance.
 >
@@ -27,7 +27,7 @@ You are an expert **Simple Platform Engineer** for this project.
 > - **Skills:** `.agent/skills/` (Tool usage and capabilities)
 > - **Rules:** `.agent/rules/` (Coding standards and constraints)
 > - **Context:** `.simple/context/` (Platform documentation)
->   **YOU MUST READ THESE FILES BEFORE DOING ANYTHING.**
+>   **Read the relevant workflow, rules, and skill for the task; load references on demand.**
 
 ## Your Role
 
@@ -44,7 +44,7 @@ You are an expert **Simple Platform Engineer** for this project.
 
 - **Platform:** Simple Platform (Enterprise schema-first platform)
 - **Languages:** SCL (Schema/Config), TypeScript (Logic/SDK), GraphQL (Data Access)
-- **Runtime:** Javy (QuickJS WASM runtime) - **NO Node.js APIs**
+- **Action runtime:** Javy (QuickJS WASM; no Node.js APIs). Spaces run in the browser; their build and test tooling runs in Node.
 
 ### File Structure
 
@@ -60,24 +60,30 @@ Use these commands to build and deploy your work.
 | :--------------------------------------------- | :------------------------------------------------------------- |
 | `simple init <path>`                           | Initialize a new workspace                                     |
 | `simple new app <app> <name>`                  | Scaffold a new application directory                           |
-| `simple new action <app> <name> --lang ts`     | Scaffold a new TypeScript action                               |
-| `simple new action <app> <name> --lang rust`   | Scaffold a new Rust action (a cargo crate; takes no `--scope`) |
+| `simple new action <app> <name> "<Display name>" --lang ts --scope <org>`     | Scaffold a new TypeScript action                               |
+| `simple new action <app> <name> "<Display name>" --lang rust`   | Scaffold a new Rust action (a cargo crate; takes no `--scope`) |
 | `simple new space <app> <name> <display_name>` | Scaffold a new React space (custom UI)                         |
 | `simple build <app>/<action>`                  | Build a single action                                          |
 | `simple build <app>`                           | Build all actions and spaces in an app in parallel             |
 | `simple build --all`                           | Build all actions and spaces in all apps in parallel           |
-| `simple deploy <app>`                          | Bundle and deploy an application (Schema, Logic, and Spaces)   |
+| `simple deploy apps/<app> --env <env>`                          | Bundle and deploy an application (Schema, Logic, and Spaces)   |
 
 ## AI Coding Guidelines
 
 > [!IMPORTANT]
 > **AI AGENTS: READ THIS FIRST**
-> Before attempting any task in this workspace, you MUST read the "Self-Driving Kit" located in `.simple/context/` and `.agent/`.
+> Start with this guide and the target app's `docs/kb/INDEX.md` when present.
+> Load applicable rules and one relevant workflow; open only the skills/references
+> needed for the change. Use public docs and installed declarations for exact API
+> contracts; `simple <command> --help` describes the installed CLI.
 >
-> 1.  **Understand the Plan**: Read `.simple/context/workflows.md`.
-> 2.  **Know the Rules**: Read `.agent/rules/*.md` for strict coding standards (Logic, Versioning, Commits).
-> 3.  **Know the Tools**: Read `.simple/context/cli-manifest.json` and `.agent/skills/*/SKILL.md`.
-> 4.  **Know the Syntax**: Read `.simple/context/scl-grammar.txt`.
+> - Schema/configuration: `data-modeling`, `data-seeding`, `configure-metadata`.
+> - Actions/Behaviors: `develop-logic`, `sdk-reference`, `testing`.
+> - Queries: `query-data`; expression details: `scl-expressions`.
+> - UI: `create-view`; custom Spaces: `build-spaces` + `space-frontend-design`;
+>   record composition: `record-space-builder`.
+> - Releases: `simple-cli`, `app-versioning`; app decisions: `knowledge-base`.
+> Do not read every skill or the full grammar for an unrelated change.
 
 > [!NOTE]
 > **Enterprise Standard**: Simple Platform is an ENTERPRISE business platform.
@@ -94,8 +100,8 @@ Use these commands to build and deploy your work.
 | ✅ **Always**    | Store external UUIDs as `:string` with `length 36`.                |
 | ✅ **Always**    | Write tests first (TDD) with 80%+ coverage.                        |
 | ✅ **Always**    | Use `kebab-case` for Action names and `snake_case` for Tables.     |
-| ⚠️ **Ask First** | Before modifying existing `.scl` schema definitions.               |
-| ⚠️ **Ask First** | Before adding new `npm` dependencies (must be QuickJS compatible). |
+| ⚠️ **Ask First** | Before modifying an existing `.scl` schema definition unless the current task explicitly authorizes that schema change. |
+| ⚠️ **Ask First** | Before adding a dependency unless the current task explicitly authorizes it. Action runtime packages must support QuickJS; Space runtime code targets browsers, while build/test tools use Node. |
 | 🚫 **Never**     | Use SQL directly. Use SCL for DDL and GraphQL for DML.             |
 | 🚫 **Never**     | Use UUIDs as primary keys.                                         |
 | 🚫 **Never**     | Commit secrets or API keys.                                        |
@@ -108,9 +114,9 @@ Simple Platform is a **Schema-First Application Platform**. You define your appl
 
 - **Schema First:** Everything starts with data. You define the core data model in `.scl` (Simple Configuration Language) files.
 - **Declarative vs. Imperative:**
-  - **Data & UI:** 100% Declarative (SCL).
+  - **Data & UI:** SCL declares data and platform views; app Spaces supply custom frontend code.
   - **Logic:** Imperative (TypeScript/Go compiled to WASM).
-- **Compilation:** The `simple deploy` command handles compilation and updates the running instance.
+- **Compilation:** Build Actions/Spaces first; `simple deploy` publishes artifacts and installs them unless `--no-install` is set.
 
 ---
 
@@ -120,27 +126,27 @@ Consult these documents for detailed syntax and behavior.
 
 **Foundation**
 
-- [Platform Overview](./context/01-platform-overview.md) - Architecture & Principles
-- [App Records Overview](./context/05-app-records-overview.md) - Configuration Record Types
-- [Expression Language](./context/04-expression-language.md) - Dynamic Values (`$var`, `$jq`)
+- [Platform Overview](./.simple/context/01-platform-overview.md) - Architecture & Principles
+- [App Records Overview](./.simple/context/05-app-records-overview.md) - Configuration Record Types
+- [Expression Language](./.simple/context/04-expression-language.md) - Dynamic Values (`$var`, `$jq`)
 
 **Data Layer**
 
-- [SCL Grammar](./context/02-scl-grammar.md) - Syntax Rules
-- [Data Layer: SCL](./context/03-data-layer-scl.md) - Schema Definitions (`tables.scl`)
-- [Metadata Configuration](./context/06-metadata-configuration.md) - UI Overrides (`records/100_metadata.scl`)
+- [SCL Grammar](./.simple/context/02-scl-grammar.md) - Syntax Rules
+- [Data Layer: SCL](./.simple/context/03-data-layer-scl.md) - Schema Definitions (`tables.scl`)
+- [Metadata Configuration](./.simple/context/06-metadata-configuration.md) - UI Overrides (`records/100_metadata.scl`)
 
 **Logic Layer**
 
-- [Actions and Triggers](./context/07-actions-and-triggers.md) - Server Logic & Scheduling
-- [Record Behaviors](./context/08-record-behaviors.md) - Client/Form Logic
-- [SDK Reference](./context/11-sdk-reference.md) - TypeScript API (`@simpleplatform/sdk`)
-- [Tasks](./context/12-tasks.md) - Task types, creating tasks, `start_after` scheduling, `read-task-output`
+- [Actions and Triggers](./.simple/context/07-actions-and-triggers.md) - Server Logic & Scheduling
+- [Record Behaviors](./.simple/context/08-record-behaviors.md) - Client/Form Logic
+- [SDK Reference](./.simple/context/11-sdk-reference.md) - TypeScript API (`@simpleplatform/sdk`)
+- [Tasks](./.simple/context/12-tasks.md) - Task types, creating tasks, `start_after` scheduling, `read-task-output`
 
 **UI Layer**
 
-- [Custom Views](./context/09-custom-views.md) - **Configuration Records** (`records/*.scl`) that register views and Action buttons.
-- [GraphQL API](./context/10-graphql-api.md) - Data Access Patterns
+- [Custom Views](./.simple/context/09-custom-views.md) - **Configuration Records** (`records/*.scl`) that register views and Action buttons.
+- [GraphQL API](./.simple/context/10-graphql-api.md) - Data Access Patterns
 
 ---
 
@@ -232,4 +238,4 @@ A: You can use `npm install`. However, **CAUTION:** Actions are compiled to WASM
 A: Read the error message carefully. It is usually a syntax error in `.scl` or a compilation error in TypeScript. Fix the file and run the command again.
 
 **Q: Where do I find the GraphQL URL?**
-A: `https://graph.<instance-url>/`. See [GraphQL API](./context/10-graphql-api.md).
+A: `https://graph.<instance-url>/`. See [GraphQL API](./.simple/context/10-graphql-api.md).

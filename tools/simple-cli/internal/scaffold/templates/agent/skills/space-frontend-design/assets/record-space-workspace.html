@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enterprise Record Space - 2-Column Split Workspace</title>
+  <style>
+    :root {
+      --simple-color-canvas: #f8fafc;
+      --simple-color-surface: #ffffff;
+      --simple-color-surface-hover: #f1f5f9;
+      --simple-color-surface-selected: #e2e8f0;
+      --simple-color-border: #e2e8f0;
+      --simple-color-border-subtle: #cbd5e1;
+      --simple-color-text-primary: #0f172a;
+      --simple-color-text-secondary: #475569;
+      --simple-color-text-muted: #94a3b8;
+      --simple-color-action-primary: #2563eb;
+      --simple-color-action-primary-hover: #1d4ed8;
+      --simple-color-action-primary-foreground: #ffffff;
+      --simple-color-status-success: #16a34a;
+      --simple-color-status-warning: #d97706;
+      --simple-color-status-danger: #dc2626;
+      --simple-color-status-info: #2563eb;
+      --simple-radius-sm: 4px;
+      --simple-radius-md: 6px;
+      --simple-radius-lg: 10px;
+      --simple-radius-full: 9999px;
+      --simple-font-family-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --simple-font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--simple-font-family-sans);
+      background: var(--simple-color-canvas);
+      color: var(--simple-color-text-primary);
+      font-size: 13.5px;
+      line-height: 1.5;
+      padding: 24px;
+      min-height: 100vh;
+    }
+
+    .record-space-container {
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    /* Record Space Header */
+    .record-header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--simple-color-border-default);
+    }
+    .record-header-left h1 {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+    .record-header-left p {
+      margin-top: 4px;
+      font-size: 13px;
+      color: var(--simple-color-text-secondary);
+    }
+    .record-header-right {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .id-chip {
+      font-family: var(--simple-font-family-mono);
+      font-size: 12px;
+      padding: 4px 10px;
+      border-radius: var(--simple-radius-full);
+      background: var(--simple-color-surface-hover);
+      border: 1px solid var(--simple-color-border-default);
+      color: var(--simple-color-text-secondary);
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 10px;
+      border-radius: var(--simple-radius-full);
+      font-size: 12px;
+      font-weight: 500;
+      background: color-mix(in srgb, var(--simple-color-status-info) 12%, transparent);
+      color: var(--simple-color-status-info);
+    }
+
+    /* 2-Column Split Layout */
+    .split-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 340px;
+      gap: 24px;
+      align-items: start;
+    }
+    @media (max-width: 1024px) {
+      .split-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Left / Main Stage */
+    .main-stage {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+      min-width: 0;
+    }
+
+    /* Platform Line Tabs: Matched exactly to RecordSpaceTabList */
+    .tab-bar-strip {
+      background: transparent;
+      border-bottom: 1px solid var(--simple-color-border-default);
+      padding: 0;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 12px;
+    }
+    .tab-pills {
+      display: flex;
+      gap: 4px;
+    }
+    .tab-pill {
+      height: 40px;
+      padding: 8px 12px 6px;
+      border-radius: 0;
+      font-size: 13.5px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      border-bottom: 2px solid transparent;
+      background: transparent;
+      color: var(--simple-color-text-secondary);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: color 0.15s ease, border-color 0.15s ease;
+    }
+    .tab-pill:hover {
+      color: var(--simple-color-text-primary);
+    }
+    .tab-pill.active {
+      background: transparent;
+      color: var(--simple-color-text-primary);
+      border-bottom-color: var(--simple-color-action-primary);
+      font-weight: 500;
+    }
+    .tab-badge {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: var(--simple-radius-full);
+      background: var(--simple-color-surface-hover);
+      color: var(--simple-color-text-secondary);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+    }
+    .tab-pill.active .tab-badge {
+      background: var(--simple-color-surface-selected);
+      color: var(--simple-color-text-primary);
+    }
+
+    /* AI Record Briefing Callout */
+    .ai-briefing {
+      background: var(--simple-color-surface);
+      border: 1px solid var(--simple-color-border-subtle);
+      border-radius: var(--simple-radius-lg);
+      padding: 16px;
+    }
+    .ai-briefing-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .ai-tag {
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 2px 8px;
+      border-radius: var(--simple-radius-full);
+      background: color-mix(in srgb, var(--simple-color-status-info) 12%, transparent);
+      color: var(--simple-color-status-info);
+      border: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .ai-text {
+      font-size: 13.5px;
+      line-height: 1.6;
+      color: var(--simple-color-text-primary);
+    }
+
+    /* KPI Summary Row */
+    .kpi-row {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    @media (max-width: 640px) {
+      .kpi-row { grid-template-columns: 1fr; }
+    }
+    .summary-card {
+      background: var(--simple-color-surface);
+      border: 1px solid var(--simple-color-border-default);
+      border-radius: var(--simple-radius-md);
+      padding: 14px 16px;
+    }
+    .summary-card-label {
+      font-size: 12.5px;
+      color: var(--simple-color-text-secondary);
+    }
+    .summary-card-value {
+      font-size: 18px;
+      font-weight: 600;
+      margin-top: 4px;
+      color: var(--simple-color-text-primary);
+    }
+
+    /* Panel Card */
+    .panel {
+      background: var(--simple-color-surface);
+      border: 1px solid var(--simple-color-border-default);
+      border-radius: var(--simple-radius-lg);
+      padding: 18px 20px;
+    }
+    .panel-title {
+      font-size: 15px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    .panel-desc {
+      font-size: 13px;
+      color: var(--simple-color-text-secondary);
+    }
+
+    /* Right Sticky Inspector Rail */
+    .inspector-rail {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      position: sticky;
+      top: 24px;
+    }
+    .inspector-card {
+      background: var(--simple-color-surface);
+      border: 1px solid var(--simple-color-border-default);
+      border-radius: var(--simple-radius-lg);
+      padding: 16px;
+    }
+    .inspector-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .inspector-card-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--simple-color-text-secondary);
+    }
+    .attribute-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      font-size: 12.5px;
+    }
+    .attribute-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .attribute-name {
+      color: var(--simple-color-text-secondary);
+    }
+    .attribute-val {
+      font-weight: 500;
+      color: var(--simple-color-text-primary);
+    }
+    .ci-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 7px 10px;
+      border-radius: var(--simple-radius-md);
+      background: var(--simple-color-surface-hover);
+      font-size: 12px;
+    }
+    .ci-name {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-family: var(--simple-font-family-mono);
+      font-size: 11.5px;
+    }
+    .ci-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: var(--simple-radius-full);
+    }
+    .ci-dot-success { background: var(--simple-color-status-success); }
+    .ci-dot-warning { background: var(--simple-color-status-warning); }
+  </style>
+</head>
+<body>
+
+  <div class="record-space-container">
+    <!-- Header -->
+    <header class="record-header">
+      <div class="record-header-left">
+        <h1>Prepare the customer record</h1>
+        <p>Edit the active record with a managed form or compare custom controls using the same session.</p>
+      </div>
+      <div class="record-header-right">
+        <span class="id-chip">ID: UIF000001</span>
+        <span class="status-badge">Review in progress</span>
+      </div>
+    </header>
+
+    <!-- 2-Column Split Workspace -->
+    <main class="split-layout">
+      <!-- Left / Main Stage -->
+      <div class="main-stage">
+        <!-- Host Tab Controls Bar -->
+        <div class="tab-bar-strip">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="font-size: 11.5px; font-weight: 600; text-transform: uppercase; color: var(--simple-color-text-secondary);">Host tab:</span>
+            <span style="font-family: var(--simple-font-family-mono); font-size: 12px; padding: 2px 6px; background: var(--simple-color-surface-hover); border-radius: var(--simple-radius-sm); border: 1px solid var(--simple-color-border-default);">overview</span>
+          </div>
+          <div class="tab-pills">
+            <button class="tab-pill active">
+              Overview
+              <span class="tab-badge">0</span>
+            </button>
+            <button class="tab-pill">
+              Record details
+              <span class="tab-badge">2</span>
+            </button>
+            <button class="tab-pill">
+              Activity and files
+              <span class="tab-badge">1</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- AI Record Briefing Callout -->
+        <article class="ai-briefing">
+          <div class="ai-briefing-header">
+            <span class="ai-tag">✦ AI Record Briefing</span>
+            <span style="font-size: 12px; color: var(--simple-color-text-secondary);">Updated telemetry · rev-3</span>
+          </div>
+          <p class="ai-text">
+            Primary contact reported operational discrepancy during peak traffic window. Record session is synchronized with the platform host and ready for review.
+          </p>
+        </article>
+
+        <!-- KPI Summary Cards -->
+        <section class="kpi-row" aria-label="Summary KPIs">
+          <div class="summary-card">
+            <div class="summary-card-label">Account health</div>
+            <div class="summary-card-value">Healthy</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-card-label">Open follow-ups</div>
+            <div class="summary-card-value">3</div>
+          </div>
+          <div class="summary-card">
+            <div class="summary-card-label">Next review</div>
+            <div class="summary-card-value">Friday</div>
+          </div>
+        </section>
+
+        <!-- Main Panel: Customer Overview -->
+        <section class="panel">
+          <h2 class="panel-title">Sample customer overview</h2>
+          <p class="panel-desc">Illustrative summary values for UIF000001.</p>
+        </section>
+
+        <!-- Related Work Panel -->
+        <section class="panel" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+          <div>
+            <h2 class="panel-title">Related work</h2>
+            <p class="panel-desc">Sample related-work content. Scheduling is a visual example only.</p>
+          </div>
+          <button style="padding: 7px 13px; border-radius: var(--simple-radius-md); font-size: 12.5px; border: 1px solid var(--simple-color-border-default); background: var(--simple-color-surface); color: var(--simple-color-text-secondary); cursor: not-allowed;" disabled>
+            Schedule follow-up
+          </button>
+        </section>
+      </div>
+
+      <!-- Right / Context Inspector Rail (Sticky) -->
+      <aside class="inspector-rail" aria-label="Record Context Inspector">
+        <!-- Card 1: Record Properties -->
+        <div class="inspector-card">
+          <div class="inspector-card-header">
+            <span class="inspector-card-title">Record Properties</span>
+            <span style="font-family: var(--simple-font-family-mono); font-size: 11px; padding: 1px 6px; background: var(--simple-color-surface-hover); border-radius: var(--simple-radius-sm);">UIF000001</span>
+          </div>
+          <div class="attribute-list">
+            <div class="attribute-row">
+              <span class="attribute-name">Status</span>
+              <span class="attribute-val">Ready</span>
+            </div>
+            <div class="attribute-row">
+              <span class="attribute-name">Priority</span>
+              <span style="font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: var(--simple-radius-full); background: color-mix(in srgb, var(--simple-color-status-warning) 12%, transparent); color: var(--simple-color-status-warning);">P1 - High</span>
+            </div>
+            <div class="attribute-row">
+              <span class="attribute-name">Assignee</span>
+              <span class="attribute-val" style="display: flex; align-items: center; gap: 6px;">
+                <span style="display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: var(--simple-radius-full); background: var(--simple-color-action-primary); color: var(--simple-color-action-primary-foreground); font-size: 10px; font-weight: 600;">P</span>
+                Platform Ops
+              </span>
+            </div>
+            <div class="attribute-row">
+              <span class="attribute-name">Stage</span>
+              <span class="attribute-val">Investigation</span>
+            </div>
+            <div class="attribute-row">
+              <span class="attribute-name">Last Revision</span>
+              <span style="font-family: var(--simple-font-family-mono); color: var(--simple-color-text-secondary);">rev-3</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: Customer 360 -->
+        <div class="inspector-card">
+          <div class="inspector-card-header">
+            <span class="inspector-card-title">Customer 360</span>
+            <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 2px 10px; border-radius: var(--simple-radius-full); background: color-mix(in srgb, var(--simple-color-status-success) 12%, transparent); color: var(--simple-color-status-success);">Enterprise VIP</span>
+          </div>
+          <div class="attribute-list">
+            <div>
+              <div style="font-weight: 600; font-size: 13.5px;">Acme Global Corp</div>
+              <div style="font-size: 11.5px; color: var(--simple-color-text-secondary); margin-top: 2px;">Contract: $240,000 / yr · Platinum Tier</div>
+            </div>
+            <div style="border-top: 1px solid var(--simple-color-border-default); padding-top: 8px; display: flex; flex-direction: column; gap: 8px;">
+              <div class="attribute-row">
+                <span class="attribute-name">SLA Target</span>
+                <span class="attribute-val">99.95% (32m left)</span>
+              </div>
+              <div class="attribute-row">
+                <span class="attribute-name">Primary Region</span>
+                <span class="attribute-val">us-east-1</span>
+              </div>
+              <div class="attribute-row">
+                <span class="attribute-name">Technical Contact</span>
+                <span class="attribute-val">ops@acme.global</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 3: Linked CI Dependencies -->
+        <div class="inspector-card">
+          <div class="inspector-card-header">
+            <span class="inspector-card-title">Linked Dependencies</span>
+            <span style="font-family: var(--simple-font-family-mono); font-size: 11px; color: var(--simple-color-text-secondary);">3 items</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px;">
+            <div class="ci-item">
+              <span class="ci-name"><span class="ci-dot ci-dot-success"></span>api-gateway-01</span>
+              <span style="color: var(--simple-color-text-secondary);">Operational</span>
+            </div>
+            <div class="ci-item">
+              <span class="ci-name"><span class="ci-dot ci-dot-warning"></span>postgres-primary</span>
+              <span style="color: var(--simple-color-status-warning); font-weight: 600;">High I/O</span>
+            </div>
+            <div class="ci-item">
+              <span class="ci-name"><span class="ci-dot ci-dot-success"></span>auth-connector</span>
+              <span style="color: var(--simple-color-text-secondary);">Operational</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+</body>
+</html>

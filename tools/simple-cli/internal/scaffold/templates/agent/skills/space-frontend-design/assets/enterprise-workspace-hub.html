@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enterprise Workspaces Hub — Reference Layout</title>
+  <style>
+    :root {
+      --simple-color-surface-canvas: #f8fafc;
+      --simple-color-surface: #ffffff;
+      --simple-color-surface-subtle: #f1f5f9;
+      --simple-color-surface-hover: #f8fafc;
+      --simple-color-surface-selected: #e2e8f0;
+      --simple-color-surface-sunken: #e2e8f0;
+      --simple-color-border-default: #e2e8f0;
+      --simple-color-border-subtle: #cbd5e1;
+      --simple-color-text-primary: #0f172a;
+      --simple-color-text-secondary: #334155;
+      --simple-color-text-muted: #64748b;
+      --simple-color-text-on-action: #ffffff;
+      --simple-color-action-primary: #2563eb;
+      --simple-color-status-success: #16a34a;
+      --simple-color-status-success-subtle: #dcfce7;
+      --simple-color-status-warning: #d97706;
+      --simple-color-status-warning-subtle: #fef3c7;
+      --simple-color-status-danger: #dc2626;
+      --simple-color-status-danger-subtle: #fee2e2;
+      --simple-color-status-info: #2563eb;
+      --simple-color-status-info-subtle: #dbeafe;
+      --simple-radius-sm: 4px;
+      --simple-radius-md: 6px;
+      --simple-radius-lg: 8px;
+      --simple-radius-full: 9999px;
+      --simple-font-family-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --simple-font-family-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --simple-color-surface-canvas: #090d16;
+        --simple-color-surface: #111827;
+        --simple-color-surface-subtle: #1f2937;
+        --simple-color-surface-hover: #1e293b;
+        --simple-color-surface-selected: #334155;
+        --simple-color-surface-sunken: #1e293b;
+        --simple-color-border-default: #1f2937;
+        --simple-color-border-subtle: #374151;
+        --simple-color-text-primary: #f8fafc;
+        --simple-color-text-secondary: #cbd5e1;
+        --simple-color-text-muted: #94a3b8;
+        --simple-color-text-on-action: #ffffff;
+        --simple-color-action-primary: #3b82f6;
+        --simple-color-status-success: #4ade80;
+        --simple-color-status-success-subtle: rgba(74, 222, 128, 0.15);
+        --simple-color-status-warning: #fbbf24;
+        --simple-color-status-warning-subtle: rgba(251, 191, 36, 0.15);
+        --simple-color-status-danger: #f87171;
+        --simple-color-status-danger-subtle: rgba(248, 113, 113, 0.15);
+        --simple-color-status-info: #60a5fa;
+        --simple-color-status-info-subtle: rgba(96, 165, 250, 0.15);
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: var(--simple-font-family-sans);
+      background: var(--simple-color-surface-canvas);
+      color: var(--simple-color-text-primary);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .header {
+      background: var(--simple-color-surface);
+      border-bottom: 1px solid var(--simple-color-border-default);
+      padding: 16px 24px 0 24px;
+    }
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding-bottom: 14px;
+    }
+    .brand-title {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .brand-badge {
+      width: 44px;
+      height: 44px;
+      border-radius: var(--simple-radius-md);
+      background: var(--simple-color-surface-sunken);
+      border: 1px solid var(--simple-color-border-subtle);
+      color: var(--simple-color-text-primary);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .header-eyebrow {
+      font-size: 12px;
+      color: var(--simple-color-text-secondary);
+      line-height: 16px;
+    }
+    .header-title-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-top: 2px;
+    }
+    .header-title-text {
+      font-size: 24px;
+      font-weight: 600;
+      line-height: 32px;
+      letter-spacing: -0.015em;
+      color: var(--simple-color-text-primary);
+    }
+    .workspace-switcher {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    select {
+      height: 32px;
+      padding: 0 10px;
+      border-radius: var(--simple-radius-md);
+      border: 1px solid var(--simple-color-border-default);
+      background: var(--simple-color-surface);
+      color: var(--simple-color-text-primary);
+      font-size: 12px;
+    }
+    .line-tabs {
+      display: flex;
+      gap: 20px;
+      margin-top: 0;
+      padding-top: 0;
+    }
+    .line-tab {
+      background: none;
+      border: none;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--simple-color-text-secondary);
+      cursor: pointer;
+      padding: 8px 0;
+      position: relative;
+    }
+    .line-tab.active {
+      color: var(--simple-color-text-primary);
+      font-weight: 600;
+    }
+    .line-tab.active::after {
+      content: "";
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      background: var(--simple-color-action-primary);
+    }
+    .content-viewport {
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+    .card {
+      background: var(--simple-color-surface);
+      border: 1px solid var(--simple-color-border-default);
+      border-radius: var(--simple-radius-lg);
+      padding: 14px;
+    }
+    .metric-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 12px;
+    }
+    .metric-value {
+      font-size: 24px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      margin-top: 4px;
+    }
+    .table-container {
+      overflow-x: auto;
+      scrollbar-width: none;
+      -webkit-overflow-scrolling: touch;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 12px;
+    }
+    th {
+      background: var(--simple-color-surface-subtle);
+      color: var(--simple-color-text-secondary);
+      padding: 8px 12px;
+      font-weight: 500;
+      border-bottom: 1px solid var(--simple-color-border-subtle);
+    }
+    td {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--simple-color-border-subtle);
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 8px;
+      border-radius: var(--simple-radius-full);
+      font-size: 11px;
+      font-weight: 500;
+    }
+    .pill-success {
+      background: var(--simple-color-status-success-subtle);
+      color: var(--simple-color-status-success);
+    }
+    .pill-danger {
+      background: var(--simple-color-status-danger-subtle);
+      color: var(--simple-color-status-danger);
+    }
+    .tabular {
+      font-family: var(--simple-font-family-mono);
+      font-variant-numeric: tabular-nums;
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-top">
+      <div class="brand-title">
+        <div class="brand-badge">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+        </div>
+        <div>
+          <div class="header-eyebrow">Simple UI Fixtures</div>
+          <div class="header-title-row">
+            <h1 class="header-title-text">Enterprise Workspaces</h1>
+            <span class="pill pill-success" style="font-size: 11px">Operational</span>
+          </div>
+        </div>
+      </div>
+      <div class="workspace-switcher">
+        <label for="hub-select" style="font-size: 12px; color: var(--simple-color-text-secondary)">Workspace:</label>
+        <select id="hub-select">
+          <option>IT Service Desk & Ticketing</option>
+          <option>CRM & Account Pipeline</option>
+          <option>CMDB Fleet & Infrastructure</option>
+          <option>Financial Operations & Treasury</option>
+        </select>
+        <button style="height: 32px; padding: 0 12px; border-radius: var(--simple-radius-md); border: 1px solid var(--simple-color-border-default); background: var(--simple-color-surface); color: var(--simple-color-text-secondary); font-size: 12px; cursor: pointer;">
+          ↻ Refresh
+        </button>
+      </div>
+    </div>
+    <nav class="line-tabs">
+      <button class="line-tab active">IT Service Desk & Ticketing</button>
+      <button class="line-tab">CRM & Account Pipeline</button>
+      <button class="line-tab">CMDB Fleet & Infrastructure</button>
+      <button class="line-tab">Financial Operations & Treasury</button>
+    </nav>
+  </header>
+
+  <main class="content-viewport">
+    <div class="metric-grid">
+      <div class="card">
+        <div style="font-size: 11px; color: var(--simple-color-text-secondary)">Active Incident Queue</div>
+        <div class="metric-value">4 Tickets</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-danger); margin-top: 2px">2 Urgent P1</div>
+      </div>
+      <div class="card">
+        <div style="font-size: 11px; color: var(--simple-color-text-secondary)">SLA Adherence (30d)</div>
+        <div class="metric-value">99.982%</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-success); margin-top: 2px">↗ +0.04% vs SLA Target</div>
+      </div>
+      <div class="card">
+        <div style="font-size: 11px; color: var(--simple-color-text-secondary)">Pipeline Volume (ARR)</div>
+        <div class="metric-value">$4,820,000</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-success); margin-top: 2px">28 Active Opportunities</div>
+      </div>
+      <div class="card">
+        <div style="font-size: 11px; color: var(--simple-color-text-secondary)">Fleet Availability</div>
+        <div class="metric-value">1,428 CIs</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-success); margin-top: 2px">● All Systems Operational</div>
+      </div>
+    </div>
+
+    <!-- Borderless primary table view -->
+    <div style="display: flex; flex-direction: column; gap: 8px;">
+      <div style="font-size: 13px; font-weight: 600; color: var(--simple-color-text-primary);">Configuration Items & Active Incidents</div>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Ticket / CI ID</th>
+              <th>Domain Summary</th>
+              <th>Severity / Tier</th>
+              <th>Status</th>
+              <th>Owner</th>
+              <th>Impact / Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="tabular" style="font-weight: 600; color: var(--simple-color-action-primary)">T-1049</td>
+              <td style="font-weight: 600">Defective banner print — refund or reprint request</td>
+              <td><span class="pill pill-danger">P1 Urgent</span></td>
+              <td>Needs first response</td>
+              <td>Maya Chen</td>
+              <td class="tabular">$380,000 ARR</td>
+            </tr>
+            <tr>
+              <td class="tabular" style="font-weight: 600; color: var(--simple-color-action-primary)">T-1048</td>
+              <td style="font-weight: 600">Production API Gateway 502 spike on /v2/events</td>
+              <td><span class="pill pill-danger">P1 Urgent</span></td>
+              <td>Investigating</td>
+              <td>Alex Rivera</td>
+              <td class="tabular">$520,000 ARR</td>
+            </tr>
+            <tr>
+              <td class="tabular" style="font-weight: 600; color: var(--simple-color-action-primary)">CI-GW-01</td>
+              <td style="font-weight: 600">api-gw-prod-01 (Kong Gateway Cluster)</td>
+              <td>Tier 0 Core</td>
+              <td><span class="pill pill-success">Operational</span></td>
+              <td>Platform SRE</td>
+              <td class="tabular">99.99% Uptime</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

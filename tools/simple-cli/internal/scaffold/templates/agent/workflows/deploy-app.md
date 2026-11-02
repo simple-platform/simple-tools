@@ -17,7 +17,7 @@ description: Production readiness checklist, testing, and deployment procedure.
     - **Security:** Are all PII fields marked `secret: true`?
 2.  **Schema Evolution:**
     - **Rule:** You cannot DROP a column in Production without a deprecation cycle of at least one full release cycle (recommended minimum 30 days).
-    - **Check:** Does this deploy remove any fields? If so, STOP. Rename them to `_deprecated_` first.
+    - **Check:** Does this deploy remove any fields? If so, inspect the supported cleanup/install plan and obtain authorization for data deletion. Do not rename a live field to simulate deprecation; that changes its identity.
 3.  **Data Integrity:**
     - Are all new `belongs :to` relationships required? If so, is there existing data that will fail validation?
 
@@ -37,18 +37,19 @@ description: Production readiness checklist, testing, and deployment procedure.
 1.  **Select Environment:**
     - "Deploying to `dev`, `staging`, or `prod`?"
 2.  **Execute:**
-    - Preview (optional): `simple deploy <app> --env <target> --dry-run` shows the next version and the files to upload, and changes nothing.
-    - Command: `simple deploy <app> --env <target>`
-    - _Flags:_ `--bump minor` (if feature), `--bump patch` (if fix). Add `--progress=plain` to get one line per step when capturing the output.
+    - Command: `simple deploy apps/<app> --env <target>`
+    - _Flags:_ `--bump minor` (if feature), `--bump patch` (if fix).
+    - Preview first when useful: `simple deploy apps/<app> --env <target> --dry-run` reports the next version and upload files without signing in, contacting the server, uploading, or changing `app.scl`.
+    - Use `--progress=plain` when capturing output to get one line per deploy step.
 3.  **Monitor:**
-    - Watch the steps: config, authenticate, bump version, collect files, connect, compare with server, upload files, publish version, install.
-    - Confirm the run ends with `✅ Deployed <app-id>@<version> (Installed)`.
-    - If it prints `⚠️  Deploy successful but install failed`, the version is published: fix the cause, then run the `simple install` command it prints. If it prints `⚠️  Deploy successful but the install result is unknown`, the server may still be installing: let that finish before running that command.
+    - Watch the output stream.
+    - Check the reported publish/install steps and final state; do not rely on invented success strings.
+    - On failure, inspect version changes and any completed publish before retrying.
 
 ## Phase 4: Final Handover
 
 Provide the User with:
 
-1.  **Instance URL:** `https://<tenant>-<env>.on.simple.dev`
-2.  **GraphQL Endpoint:** `https://<tenant>-<env>.on.simple.dev/v1/graphql`
+1.  **Instance URL:** Use the configured instance URL.
+2.  **API Endpoint:** Report the configured/discovered endpoint; do not invent tenant URL patterns.
 3.  **Changelog:** Summary of what changed (Tables, Logics, Behaviors).
