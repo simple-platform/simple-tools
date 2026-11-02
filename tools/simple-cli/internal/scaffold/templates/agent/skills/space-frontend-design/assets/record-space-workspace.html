@@ -18,18 +18,10 @@
       --simple-color-action-primary: #2563eb;
       --simple-color-action-primary-hover: #1d4ed8;
       --simple-color-action-primary-foreground: #ffffff;
-      --simple-color-status-success-background: #ecfdf5;
-      --simple-color-status-success-foreground: #065f46;
-      --simple-color-status-success-border: #a7f3d0;
-      --simple-color-status-warning-background: #fffbeb;
-      --simple-color-status-warning-foreground: #92400e;
-      --simple-color-status-warning-border: #fde68a;
-      --simple-color-status-error-background: #fef2f2;
-      --simple-color-status-error-foreground: #991b1b;
-      --simple-color-status-error-border: #fecaca;
-      --simple-color-status-info-background: #eff6ff;
-      --simple-color-status-info-foreground: #1e40af;
-      --simple-color-status-info-border: #bfdbfe;
+      --simple-color-status-success: #16a34a;
+      --simple-color-status-warning: #d97706;
+      --simple-color-status-danger: #dc2626;
+      --simple-color-status-info: #2563eb;
       --simple-radius-sm: 4px;
       --simple-radius-md: 6px;
       --simple-radius-lg: 10px;
@@ -95,13 +87,12 @@
     .status-badge {
       display: inline-flex;
       align-items: center;
-      padding: 4px 10px;
+      padding: 2px 10px;
       border-radius: var(--simple-radius-full);
       font-size: 12px;
       font-weight: 500;
-      background: var(--simple-color-status-info-background);
-      color: var(--simple-color-status-info-foreground);
-      border: 1px solid var(--simple-color-status-info-border);
+      background: color-mix(in srgb, var(--simple-color-status-info) 12%, transparent);
+      color: var(--simple-color-status-info);
     }
 
     /* 2-Column Split Layout */
@@ -197,9 +188,9 @@
       font-weight: 600;
       padding: 2px 8px;
       border-radius: var(--simple-radius-full);
-      background: var(--simple-color-status-info-background);
-      color: var(--simple-color-status-info-foreground);
-      border: 1px solid var(--simple-color-status-info-border);
+      background: color-mix(in srgb, var(--simple-color-status-info) 12%, transparent);
+      color: var(--simple-color-status-info);
+      border: none;
       display: inline-flex;
       align-items: center;
       gap: 4px;
@@ -319,8 +310,8 @@
       height: 6px;
       border-radius: var(--simple-radius-full);
     }
-    .ci-dot-success { background: var(--simple-color-status-success-foreground); }
-    .ci-dot-warning { background: var(--simple-color-status-warning-foreground); }
+    .ci-dot-success { background: var(--simple-color-status-success); }
+    .ci-dot-warning { background: var(--simple-color-status-warning); }
   </style>
 </head>
 <body>
@@ -424,7 +415,7 @@
             </div>
             <div class="attribute-row">
               <span class="attribute-name">Priority</span>
-              <span style="font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: var(--simple-radius-full); background: var(--simple-color-status-warning-background); color: var(--simple-color-status-warning-foreground); border: 1px solid var(--simple-color-status-warning-border);">P1 - High</span>
+              <span style="font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: var(--simple-radius-full); background: color-mix(in srgb, var(--simple-color-status-warning) 12%, transparent); color: var(--simple-color-status-warning);">P1 - High</span>
             </div>
             <div class="attribute-row">
               <span class="attribute-name">Assignee</span>
@@ -448,7 +439,7 @@
         <div class="inspector-card">
           <div class="inspector-card-header">
             <span class="inspector-card-title">Customer 360</span>
-            <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 2px 6px; border-radius: var(--simple-radius-sm); background: var(--simple-color-status-success-background); color: var(--simple-color-status-success-foreground); border: 1px solid var(--simple-color-status-success-border);">Enterprise VIP</span>
+            <span style="font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 2px 10px; border-radius: var(--simple-radius-full); background: color-mix(in srgb, var(--simple-color-status-success) 12%, transparent); color: var(--simple-color-status-success);">Enterprise VIP</span>
           </div>
           <div class="attribute-list">
             <div>
@@ -485,7 +476,7 @@
             </div>
             <div class="ci-item">
               <span class="ci-name"><span class="ci-dot ci-dot-warning"></span>postgres-primary</span>
-              <span style="color: var(--simple-color-status-warning-foreground); font-weight: 600;">High I/O</span>
+              <span style="color: var(--simple-color-status-warning); font-weight: 600;">High I/O</span>
             </div>
             <div class="ci-item">
               <span class="ci-name"><span class="ci-dot ci-dot-success"></span>auth-connector</span>

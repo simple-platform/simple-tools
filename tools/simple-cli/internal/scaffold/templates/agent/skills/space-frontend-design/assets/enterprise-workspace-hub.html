@@ -19,13 +19,13 @@
       --simple-color-text-muted: #64748b;
       --simple-color-text-on-action: #ffffff;
       --simple-color-action-primary: #2563eb;
-      --simple-color-status-success-foreground: #16a34a;
+      --simple-color-status-success: #16a34a;
       --simple-color-status-success-subtle: #dcfce7;
-      --simple-color-status-warning-foreground: #d97706;
+      --simple-color-status-warning: #d97706;
       --simple-color-status-warning-subtle: #fef3c7;
-      --simple-color-status-danger-foreground: #dc2626;
+      --simple-color-status-danger: #dc2626;
       --simple-color-status-danger-subtle: #fee2e2;
-      --simple-color-status-info-foreground: #2563eb;
+      --simple-color-status-info: #2563eb;
       --simple-color-status-info-subtle: #dbeafe;
       --simple-radius-sm: 4px;
       --simple-radius-md: 6px;
@@ -49,13 +49,13 @@
         --simple-color-text-muted: #94a3b8;
         --simple-color-text-on-action: #ffffff;
         --simple-color-action-primary: #3b82f6;
-        --simple-color-status-success-foreground: #4ade80;
+        --simple-color-status-success: #4ade80;
         --simple-color-status-success-subtle: rgba(74, 222, 128, 0.15);
-        --simple-color-status-warning-foreground: #fbbf24;
+        --simple-color-status-warning: #fbbf24;
         --simple-color-status-warning-subtle: rgba(251, 191, 36, 0.15);
-        --simple-color-status-danger-foreground: #f87171;
+        --simple-color-status-danger: #f87171;
         --simple-color-status-danger-subtle: rgba(248, 113, 113, 0.15);
-        --simple-color-status-info-foreground: #60a5fa;
+        --simple-color-status-info: #60a5fa;
         --simple-color-status-info-subtle: rgba(96, 165, 250, 0.15);
       }
     }
@@ -212,11 +212,11 @@
     }
     .pill-success {
       background: var(--simple-color-status-success-subtle);
-      color: var(--simple-color-status-success-foreground);
+      color: var(--simple-color-status-success);
     }
     .pill-danger {
       background: var(--simple-color-status-danger-subtle);
-      color: var(--simple-color-status-danger-foreground);
+      color: var(--simple-color-status-danger);
     }
     .tabular {
       font-family: var(--simple-font-family-mono);
@@ -265,22 +265,22 @@
       <div class="card">
         <div style="font-size: 11px; color: var(--simple-color-text-secondary)">Active Incident Queue</div>
         <div class="metric-value">4 Tickets</div>
-        <div style="font-size: 11px; color: var(--simple-color-status-danger-foreground); margin-top: 2px">2 Urgent P1</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-danger); margin-top: 2px">2 Urgent P1</div>
       </div>
       <div class="card">
         <div style="font-size: 11px; color: var(--simple-color-text-secondary)">SLA Adherence (30d)</div>
         <div class="metric-value">99.982%</div>
-        <div style="font-size: 11px; color: var(--simple-color-status-success-foreground); margin-top: 2px">↗ +0.04% vs SLA Target</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-success); margin-top: 2px">↗ +0.04% vs SLA Target</div>
       </div>
       <div class="card">
         <div style="font-size: 11px; color: var(--simple-color-text-secondary)">Pipeline Volume (ARR)</div>
         <div class="metric-value">$4,820,000</div>
-        <div style="font-size: 11px; color: var(--simple-color-status-success-foreground); margin-top: 2px">28 Active Opportunities</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-success); margin-top: 2px">28 Active Opportunities</div>
       </div>
       <div class="card">
         <div style="font-size: 11px; color: var(--simple-color-text-secondary)">Fleet Availability</div>
         <div class="metric-value">1,428 CIs</div>
-        <div style="font-size: 11px; color: var(--simple-color-status-success-foreground); margin-top: 2px">● All Systems Operational</div>
+        <div style="font-size: 11px; color: var(--simple-color-status-success); margin-top: 2px">● All Systems Operational</div>
       </div>
     </div>
 

@@ -18,18 +18,10 @@
       --simple-color-action-primary: #2563eb;
       --simple-color-action-primary-hover: #1d4ed8;
       --simple-color-action-primary-foreground: #ffffff;
-      --simple-color-status-success-background: #ecfdf5;
-      --simple-color-status-success-foreground: #065f46;
-      --simple-color-status-success-border: #a7f3d0;
-      --simple-color-status-warning-background: #fffbeb;
-      --simple-color-status-warning-foreground: #92400e;
-      --simple-color-status-warning-border: #fde68a;
-      --simple-color-status-error-background: #fef2f2;
-      --simple-color-status-error-foreground: #991b1b;
-      --simple-color-status-error-border: #fecaca;
-      --simple-color-status-info-background: #eff6ff;
-      --simple-color-status-info-foreground: #1e40af;
-      --simple-color-status-info-border: #bfdbfe;
+      --simple-color-status-success: #16a34a;
+      --simple-color-status-warning: #d97706;
+      --simple-color-status-danger: #dc2626;
+      --simple-color-status-info: #2563eb;
       --simple-radius-sm: 4px;
       --simple-radius-md: 6px;
       --simple-radius-lg: 10px;
@@ -86,8 +78,8 @@
       border-radius: var(--simple-radius-full);
       font-size: 12px;
       font-weight: 500;
-      background: var(--simple-color-status-success-background);
-      color: var(--simple-color-status-success-foreground);
+      background: color-mix(in srgb, var(--simple-color-status-success) 12%, transparent);
+      color: var(--simple-color-status-success);
       border: 1px solid var(--simple-color-status-success-border);
     }
     .status-dot {
@@ -185,8 +177,8 @@
       font-weight: 600;
       padding: 2px 7px;
       border-radius: var(--simple-radius-full);
-      background: var(--simple-color-status-success-background);
-      color: var(--simple-color-status-success-foreground);
+      background: color-mix(in srgb, var(--simple-color-status-success) 12%, transparent);
+      color: var(--simple-color-status-success);
     }
 
     /* Sparkline SVG */
@@ -367,13 +359,13 @@
       font-weight: 600;
     }
     .severity-p1 {
-      background: var(--simple-color-status-error-background);
-      color: var(--simple-color-status-error-foreground);
+      background: color-mix(in srgb, var(--simple-color-status-danger) 12%, transparent);
+      color: var(--simple-color-status-danger);
       border: 1px solid var(--simple-color-status-error-border);
     }
     .severity-p2 {
-      background: var(--simple-color-status-warning-background);
-      color: var(--simple-color-status-warning-foreground);
+      background: color-mix(in srgb, var(--simple-color-status-warning) 12%, transparent);
+      color: var(--simple-color-status-warning);
       border: 1px solid var(--simple-color-status-warning-border);
     }
     .severity-p3 {
@@ -437,7 +429,7 @@
         <div>
           <div class="kpi-card-header">
             <span class="kpi-label">Cluster Fleet Health</span>
-            <span style="font-size: 11px; font-weight: 700; color: var(--simple-color-status-success-foreground); background: var(--simple-color-status-success-background); padding: 2px 6px; border-radius: var(--simple-radius-sm);">4/5 OPERATIONAL</span>
+            <span style="font-size: 11px; font-weight: 700; color: var(--simple-color-status-success); background: color-mix(in srgb, var(--simple-color-status-success) 12%, transparent); padding: 2px 6px; border-radius: var(--simple-radius-sm);">4/5 OPERATIONAL</span>
           </div>
           <ul class="kpi-list">
             <li class="kpi-list-item">
@@ -465,7 +457,7 @@
         <div>
           <div class="kpi-card-header">
             <span class="kpi-label">Incident & Change Workload</span>
-            <span style="font-size: 11px; font-weight: 700; color: var(--simple-color-status-error-foreground);">1 CRITICAL</span>
+            <span style="font-size: 11px; font-weight: 700; color: var(--simple-color-status-danger);">1 CRITICAL</span>
           </div>
           <ul class="kpi-list">
             <li class="kpi-list-item">
@@ -543,7 +535,7 @@
               <td><span class="severity-badge severity-p1">P1 Urgent</span></td>
               <td style="color: var(--simple-color-text-secondary);">14m ago</td>
               <td>Maya Chen</td>
-              <td><span style="background: var(--simple-color-status-info-background); color: var(--simple-color-status-info-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Investigating</span></td>
+              <td><span style="background: color-mix(in srgb, var(--simple-color-status-info) 12%, transparent); color: var(--simple-color-status-info); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Investigating</span></td>
               <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
             </tr>
             <tr>
@@ -556,7 +548,7 @@
               <td><span class="severity-badge severity-p2">P2 High</span></td>
               <td style="color: var(--simple-color-text-secondary);">42m ago</td>
               <td>Alex Rivera</td>
-              <td><span style="background: var(--simple-color-status-warning-background); color: var(--simple-color-status-warning-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">In Progress</span></td>
+              <td><span style="background: color-mix(in srgb, var(--simple-color-status-warning) 12%, transparent); color: var(--simple-color-status-warning); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">In Progress</span></td>
               <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
             </tr>
             <tr>
@@ -569,7 +561,7 @@
               <td><span class="severity-badge severity-p3">P3 Normal</span></td>
               <td style="color: var(--simple-color-text-secondary);">2h ago</td>
               <td>Marcus Vance</td>
-              <td><span style="background: var(--simple-color-status-info-background); color: var(--simple-color-status-info-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Investigating</span></td>
+              <td><span style="background: color-mix(in srgb, var(--simple-color-status-info) 12%, transparent); color: var(--simple-color-status-info); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Investigating</span></td>
               <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
             </tr>
             <tr>
@@ -582,7 +574,7 @@
               <td><span class="severity-badge severity-p3">P3 Normal</span></td>
               <td style="color: var(--simple-color-text-secondary);">4h ago</td>
               <td>DevOps Bot</td>
-              <td><span style="background: var(--simple-color-status-success-background); color: var(--simple-color-status-success-foreground); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Completed</span></td>
+              <td><span style="background: color-mix(in srgb, var(--simple-color-status-success) 12%, transparent); color: var(--simple-color-status-success); padding: 3px 8px; border-radius: var(--simple-radius-full); font-size: 11.5px; font-weight: 500;">Completed</span></td>
               <td style="text-align: right;"><button class="btn" style="padding: 4px 8px; font-size: 11.5px;">Review ▾</button></td>
             </tr>
           </tbody>

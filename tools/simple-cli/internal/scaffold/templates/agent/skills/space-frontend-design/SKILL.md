@@ -56,8 +56,8 @@ Bound to a specific record route (`/om/:app/:table/:record`) for CRM, IT service
     - *Activity and files:* Full `<RecordActivity record={record} />` stream with note composer and field change audit timeline.
 - **Right / Context inspector rail (~30%–33% width, sticky):**
   - Stays sticky in the viewport as the user works through the main stage tabs.
-  - **Record properties card:** Status pill, Priority badge (`var(--simple-color-status-warning-*)`), Assignee avatar and name, Stage, and Last Revision.
-  - **Customer / Entity 360 card:** Account name, VIP tier badge (`var(--simple-color-status-success-*)`), contract value, SLA clock/target, primary cloud region, technical contact.
+  - **Record properties card:** Status pill, Priority badge (`var(--simple-color-status-warning)`), Assignee avatar and name, Stage, and Last Revision.
+  - **Customer / Entity 360 card:** Account name, VIP tier badge (`var(--simple-color-status-success)`), contract value, SLA clock/target, primary cloud region, technical contact.
   - **Linked dependencies card:** Associated infrastructure / CMDB items with live status dots (e.g. `api-gateway-01` Operational, `postgres-primary` High I/O).
 - Reference HTML: See [`assets/record-space-workspace.html`](assets/record-space-workspace.html).
 
@@ -91,10 +91,14 @@ For high-level business dashboards, multi-experience suites, system monitoring, 
    - Text scale: `text-sm` (14px) for primary data and table cells, `text-xs` (12px) for secondary metadata and timestamps. Reserve `text-xl` or `text-2xl font-semibold` for page titles and hero metrics.
 2. **Tabular numbers:**
    - Always use tabular numerals (`font-variant-numeric: tabular-nums` or `font-mono`) for currency, timestamps, percentages, counters, and IDs so figures align vertically.
-3. **Status dots & pill badges:**
-   - Combine a colored status dot (`size-1.5` or `size-2 rounded-full inline-block mr-1.5`) with a concise label inside a subtle pill (`px-2 py-0.5 rounded-full text-xs font-medium`), consuming theme status tokens (`--simple-color-status-*`).
+3. **Status dots & pill badges (single status token, borderless layout & sleek padding):**
+   - **Single base status tokens:** The platform theme contract defines 4 single base status tokens: `--simple-color-status-info`, `--simple-color-status-success`, `--simple-color-status-warning`, and `--simple-color-status-danger` (there are NO separate `-background` or `-foreground` tokens in the theme contract). Status backgrounds derive automatically via `color-mix(in srgb, var(--simple-color-status-*) 12%, transparent)`, while text and icons use the base token directly `var(--simple-color-status-*)`.
+   - Combine a colored status dot (`size-1.5` or `size-2 rounded-full inline-block mr-1.5`) with a concise label inside a subtle pill (`px-2.5 py-0.5 rounded-full text-xs font-medium`).
+   - **Padding for badges and enum options:** Keep vertical (y) padding tight and horizontal (x) padding generous (`px-2.5 py-0.5` / `padding: 0.125rem 0.625rem`). Maintain consistent padding across status badges, pills, chips, and enum options so elements share uniform capsule proportions without bulbous or boxy vertical stretching.
+   - **Enum options:** Enum options follow the same capsule layout (`rounded-full px-2.5 py-0.5`) with both the text and icon matching the same resolved status color, on top of the 12% `color-mix` background.
+   - **No borders on badges, status pills, or tags:** Do NOT add borders (`border`, `border-color`, or `1px solid ...`) to badges, status pills, tags, chips, or enum options. For an elegant, uncluttered appearance, these small elements should rely strictly on their tinted/translucent background, foreground text, and icon or status dot. Outlines/borders on small badges add visual noise and make the UI feel heavy.
 4. **Subtle surface contrast & borders:**
-   - Keep borders crisp and quiet (`1px solid var(--simple-color-border-default)` or `var(--simple-color-border-subtle)`).
+   - Keep borders crisp and quiet (`1px solid var(--simple-color-border-default)` or `var(--simple-color-border-subtle)`) on structural containers, cards, and input controls. Do NOT put borders on badges, pills, or enum options.
    - Use soft surface contrast: canvas background (`var(--simple-color-canvas)`), card panels (`var(--simple-color-surface)`), and subtle hover fills (`var(--simple-color-surface-hover)`). Do not add artificial keyboard shortcut badges to buttons or inputs.
 5. **Borderless primary elements standard:**
    - **No outer perimeter border on primary elements:** The primary element of the page or view—such as the main Table, DataGrid, ListView, Activity Stream (`RecordActivity`), or primary Record Form—should **never have an outer card border or perimeter stroke surrounding it** (e.g. avoid enclosing them in `rounded-lg border bg-surface p-3.5` or `.space-panel`).
