@@ -425,7 +425,7 @@ jobs:
       # file on the machine it was built for, and that is worth knowing before
       # a merge.
       - name: Upload programs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: simple-cli
           path: tools/simple-cli/dist
@@ -461,7 +461,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload changelog
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: changelog-simple-cli
           path: changelog.md
@@ -699,7 +699,7 @@ jobs:
           fi
 
       - name: Upload programs
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: contextualizer
           path: tools/contextualizer/dist
@@ -722,7 +722,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload changelog
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: changelog-contextualizer
           path: changelog.md
@@ -950,7 +950,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload changelog
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: changelog-scl-parser
           path: changelog.md
@@ -1091,7 +1091,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload changelog
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: changelog-scl-parser-cli
           path: changelog.md
@@ -1244,7 +1244,7 @@ jobs:
           esac
 
       - name: Upload program
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: scl-parser-cli-${{ matrix.target }}
           path: tools/scl_parser_cli/dist
