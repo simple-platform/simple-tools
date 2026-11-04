@@ -889,7 +889,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Elixir
-        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: ${{ needs.version.outputs.erlang }}
           elixir-version: ${{ needs.version.outputs.elixir }}
@@ -1006,7 +1006,7 @@ jobs:
         run: scripts/release-create.sh "$TAG" "SCL Parser ${VERSION}" changelog.md
 
       - name: Set up Elixir
-        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: ${{ needs.version.outputs.erlang }}
           elixir-version: ${{ needs.version.outputs.elixir }}
@@ -1052,7 +1052,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Elixir
-        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: ${{ needs.version.outputs.erlang }}
           elixir-version: ${{ needs.version.outputs.elixir }}
@@ -1132,7 +1132,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Elixir
-        uses: erlef/setup-beam@fc68ffb90438ef2936bbb3251622353b3dcb2f93 # v1
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1
         with:
           otp-version: ${{ needs.version.outputs.erlang }}
           elixir-version: ${{ needs.version.outputs.elixir }}
