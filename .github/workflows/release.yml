@@ -514,7 +514,7 @@ jobs:
         run: go test -count=1 -tags integration -run '^TestUpdateReplacesARunningProgram$' -v ./internal/selfupdate/
 
       - name: Download programs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: simple-cli
           path: dist
@@ -601,13 +601,13 @@ jobs:
           persist-credentials: false
 
       - name: Download programs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: simple-cli
           path: dist
 
       - name: Download changelog
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: changelog-simple-cli
 
@@ -768,13 +768,13 @@ jobs:
           persist-credentials: false
 
       - name: Download programs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: contextualizer
           path: dist
 
       - name: Download changelog
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: changelog-contextualizer
 
@@ -992,7 +992,7 @@ jobs:
           persist-credentials: false
 
       - name: Download changelog
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: changelog-scl-parser
 
@@ -1271,14 +1271,14 @@ jobs:
       # The five programs were uploaded one from each build, and are gathered
       # into one folder here.
       - name: Download programs
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: scl-parser-cli-*
           path: dist
           merge-multiple: true
 
       - name: Download changelog
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: changelog-scl-parser-cli
 
