@@ -77,20 +77,32 @@ $form.event              // Current event: 'load', 'update', 'submit'
 $form.record()           // Current input values; server mutations can be partial
 $form.updated('field')   // Check if field changed (update event)
 $form.error('message')   // Set form-level error (blocks save)
+$form.warning('message') // Set form-level warning (never blocks save)
 $form.info('message')    // Set form-level info message
 ```
 
 ### Field-Level Methods (Chainable)
 
 ```javascript
-$form('status').value()        // Get value
-$form('status').set('Active')  // Set value
-$form('notes').visible(false)  // Hide field
-$form('email').required(true)  // Make required
-$form('total').editable(false) // Make read-only
-$form('name').error('Required') // Show field error
-$form('name').info('Hint text') // Show field info
+$form('status').value()             // Get value
+$form('status').set('Active')       // Set value
+$form('notes').visible(false)       // Hide field
+$form('email').required(true)       // Make required
+$form('total').editable(false)      // Make read-only
+$form('name').error('Required')     // Show field error (blocks save)
+$form('name').warning('Check this') // Show field warning (never blocks save)
+$form('name').info('Hint text')     // Show field info
 ```
+
+### Choosing a Message Level
+
+| Level     | Use it for                                                                                         | Blocks the save |
+| :-------- | :------------------------------------------------------------------------------------------------- | :-------------- |
+| `info`    | A hint. Nothing needs to change.                                                                   | No              |
+| `warning` | Something a person should act on that must not stop the save, such as a detail that looks wrong.   | No              |
+| `error`   | A problem that must be fixed before the record can be saved. Set it on `submit` to stop that save. | Yes             |
+
+Each method takes a message to show it and `null` to clear it, for example `$form('name').warning(null)`.
 
 ---
 
