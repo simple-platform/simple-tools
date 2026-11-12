@@ -1,51 +1,41 @@
 {
   "lockfile_version": "1",
   "packages": {
-    "act@0.2.86": {
-      "last_modified": "2026-03-28T12:40:58Z",
-      "resolved": "github:NixOS/nixpkgs/b63fe7f000adcfa269967eeff72c64cafecbbebe#act",
+    "act@0.2.97": {
+      "last_modified": "2026-11-11T14:42:58Z",
+      "resolved": "github:NixOS/nixpkgs/9397dcb09c9598a33509fbc0cce699bd4e6c84d5#act",
       "source": "devbox-search",
-      "version": "0.2.86",
+      "version": "0.2.97",
       "systems": {
         "aarch64-darwin": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/6yz9qq67arhh4xw7xy0qbk1vani8k71r-act-0.2.86",
+              "path": "/nix/store/lbd0i4khdlgqykl1w1r98jc5j6513hzg-act-0.2.97",
               "default": true
             }
           ],
-          "store_path": "/nix/store/6yz9qq67arhh4xw7xy0qbk1vani8k71r-act-0.2.86"
+          "store_path": "/nix/store/lbd0i4khdlgqykl1w1r98jc5j6513hzg-act-0.2.97"
         },
         "aarch64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/n6vppmxldcg7cx5s6harzsp06f0xwnjd-act-0.2.86",
+              "path": "/nix/store/5jwg5wn5gfqnbl8x24zj7zsphg1g7fiq-act-0.2.97",
               "default": true
             }
           ],
-          "store_path": "/nix/store/n6vppmxldcg7cx5s6harzsp06f0xwnjd-act-0.2.86"
-        },
-        "x86_64-darwin": {
-          "outputs": [
-            {
-              "name": "out",
-              "path": "/nix/store/zx97l1p596xpmkc45yf1xj08wpbs4m05-act-0.2.86",
-              "default": true
-            }
-          ],
-          "store_path": "/nix/store/zx97l1p596xpmkc45yf1xj08wpbs4m05-act-0.2.86"
+          "store_path": "/nix/store/5jwg5wn5gfqnbl8x24zj7zsphg1g7fiq-act-0.2.97"
         },
         "x86_64-linux": {
           "outputs": [
             {
               "name": "out",
-              "path": "/nix/store/ajm54wc9dg9s20cdb6sx622gx74ahd7c-act-0.2.86",
+              "path": "/nix/store/71l1m3fcsh1y3yjiz9k89k2jfy1y4n0l-act-0.2.97",
               "default": true
             }
           ],
-          "store_path": "/nix/store/ajm54wc9dg9s20cdb6sx622gx74ahd7c-act-0.2.86"
+          "store_path": "/nix/store/71l1m3fcsh1y3yjiz9k89k2jfy1y4n0l-act-0.2.97"
         }
       }
     },
@@ -344,7 +334,7 @@
     },
     "nodejs@25.9.0": {
       "last_modified": "2026-04-01T17:36:14Z",
-      "plugin_version": "0.0.5",
+      "plugin_version": "0.0.6",
       "resolved": "github:NixOS/nixpkgs/6ebfbc38bdc6b22822a6f991f2d922306f33cfbc#nodejs_25",
       "source": "devbox-search",
       "version": "25.9.0",
