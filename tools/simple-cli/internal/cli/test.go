@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -245,7 +246,28 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 	sem := make(chan struct{}, limit)
 
+	// Every target's missing packages are installed before any test starts,
+	// rather than by each target on its way to its own test. A test can read a
+	// neighbour's packages: a folder of shared contract tests under `actions/`
+	// has no package.json of its own and borrows the SDK from an action beside
+	// it. Run side by side, that test could start before the neighbour's
+	// install had finished, and pass or fail on which got there first.
+	//
+	// The targets that run their tests through npm: everything with a
+	// package.json except Rust actions, and except a run of one record
+	// behaviour (-b), which goes straight to vitest.
+	runsUnderNpm := func(tDir string) bool {
+		return !rustDirs[tDir] && behaviorName == "" && scaffold.PathExists(fsys, filepath.Join(tDir, "package.json"))
+	}
+
+	installFailed := installMissingPackages(fsys, testDirs, runsUnderNpm, sem, jsonMode)
+	failed += len(installFailed)
+
 	for _, tDir := range testDirs {
+		if installFailed[tDir] {
+			continue
+		}
+
 		wg.Add(1)
 		go func(tDir string) {
 			defer wg.Done()
@@ -253,8 +275,6 @@ func runTest(cmd *cobra.Command, args []string) error {
 			defer func() { <-sem }()
 
 			var fullArgs []string
-
-			hasPackageJSON := scaffold.PathExists(fsys, filepath.Join(tDir, "package.json"))
 
 			// Rust first, and before the package.json question rather than
 			// after it: a Rust action carries no package.json, so without this
@@ -271,29 +291,13 @@ func runTest(cmd *cobra.Command, args []string) error {
 				if !jsonMode {
 					fullArgs = append(fullArgs, "--color", "always")
 				}
-			} else if hasPackageJSON && behaviorName == "" {
+			} else if runsUnderNpm(tDir) {
 				// Use `npm run test` for directories containing a package.json (Actions and Spaces).
 				// This ensures package managers (npm/pnpm/yarn) naturally map their own
 				// workspace resolution graphs for hoisted dependencies like @simpleplatform/sdk.
 				//
-				// Install only when the packages are genuinely unreachable, which
-				// is the same question the comment above answers for the runner:
-				// a workspace member does not carry its own node_modules, and
-				// asking only for one is how a hoisted action gets a full
-				// install it does not need on every run.
-				_, resolvable := fsx.ResolveUpward(fsys, tDir, "node_modules")
-				if !resolvable {
-					if err := build.EnsureDependenciesFunc(tDir); err != nil {
-						mu.Lock()
-						if !jsonMode {
-							fmt.Printf("Error installing dependencies for %s: %v\n", filepath.Base(tDir), err)
-						}
-						failed++
-						mu.Unlock()
-						return
-					}
-				}
-
+				// Any packages it was missing were installed before the first
+				// test started (installMissingPackages).
 				fullArgs = []string{"npm", "run", "test", "--"}
 				if jsonMode {
 					fullArgs = append(fullArgs, "--reporter=json")
@@ -329,7 +333,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 			}
 
 			// Execute FROM the target directory
-			execCmd := exec.Command(fullArgs[0], fullArgs[1:]...)
+			execCmd := testCommandFunc(fullArgs[0], fullArgs[1:]...)
 			execCmd.Dir = tDir
 
 			// Vitest strips colors if not directly attached to a TTY.
@@ -382,4 +386,104 @@ func runTest(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\n✅ All %d test suites passed.\n", passed)
 	}
 	return nil
+}
+
+// testCommandFunc builds the command that runs one target's tests, replaced in
+// tests.
+var testCommandFunc = exec.Command
+
+// installMissingPackages installs, side by side, the packages of every target
+// that runs under npm and is missing any of them, and answers with the targets
+// whose install failed. Each failure is printed as it happens, unless the run
+// reports JSON.
+func installMissingPackages(fsys fsx.FileSystem, testDirs []string, runsUnderNpm func(string) bool, sem chan struct{}, jsonMode bool) map[string]bool {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	failed := make(map[string]bool)
+
+	var pending []string
+	for _, tDir := range testDirs {
+		if runsUnderNpm(tDir) && packagesMissing(fsys, tDir) {
+			pending = append(pending, tDir)
+		}
+	}
+
+	// Every test now waits for the slowest install, so say why nothing is
+	// reported yet.
+	if len(pending) > 0 && !jsonMode {
+		fmt.Printf("Installing packages for %d target(s) before the tests start...\n", len(pending))
+	}
+
+	for _, tDir := range pending {
+		wg.Add(1)
+		go func(tDir string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if err := build.EnsureDependenciesFunc(tDir); err != nil {
+				mu.Lock()
+				defer mu.Unlock()
+
+				if !jsonMode {
+					fmt.Printf("Error installing dependencies for %s: %v\n", filepath.Base(tDir), err)
+				}
+				failed[tDir] = true
+			}
+		}(tDir)
+	}
+
+	wg.Wait()
+
+	return failed
+}
+
+// packagesMissing answers whether any package a target's package.json lists
+// cannot be found from the target's own folder.
+//
+// IT ASKS ABOUT THE TARGET'S OWN PACKAGES, NOT ABOUT ANY node_modules. It used
+// to ask only whether a `node_modules` folder existed anywhere above the
+// target, and one nearly always does: the repository root, installed for its
+// own tools. So an action or a space outside any workspace, whose packages had
+// never been installed, had its install skipped and its tests failed on a
+// missing module.
+//
+// Each package is looked for in the `node_modules` folders from the target's
+// folder upward (ResolveUpward), so a workspace member whose packages are
+// hoisted to the workspace root still finds them there and is not installed
+// again. Optional packages may be absent by design, so they are not asked
+// about, including one that is also listed as a dependency: npm lets the
+// optional entry win. A manifest that cannot be read or parsed gets an
+// install, which reports the problem in npm's own words.
+func packagesMissing(fsys fsx.FileSystem, dir string) bool {
+	raw, err := fsys.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return true
+	}
+
+	// npm reads a manifest saved with a byte-order mark; Go's decoder does not.
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+
+	var manifest struct {
+		Dependencies         map[string]string `json:"dependencies"`
+		DevDependencies      map[string]string `json:"devDependencies"`
+		OptionalDependencies map[string]string `json:"optionalDependencies"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return true
+	}
+
+	for _, listed := range []map[string]string{manifest.Dependencies, manifest.DevDependencies} {
+		for name := range listed {
+			if _, optional := manifest.OptionalDependencies[name]; optional {
+				continue
+			}
+
+			if _, found := fsx.ResolveUpward(fsys, dir, "node_modules", name); !found {
+				return true
+			}
+		}
+	}
+
+	return false
 }
