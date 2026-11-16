@@ -338,3 +338,55 @@ func TestTest_InstallsAgainWhenTheLockfileMoves(t *testing.T) {
 	run("the lockfile moved", 1)
 	run("the run after", 0)
 }
+
+// THE REPOSITORY ROOT'S VITEST RUNS FROM INSIDE THE TARGET.
+//
+// Record behaviours and folders of shared code carry no package.json, so their
+// tests run on the vitest installed at the repository root. It was found by a
+// path relative to the root, then started from inside the target, where that
+// path leads nowhere: each of those suites failed at once and printed nothing.
+func TestTest_RunsTheRootsVitestFromInsideTheTarget(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in vitest is a shell script")
+	}
+
+	root := t.TempDir()
+	behaviors := filepath.Join(root, "apps", "demo.app", "scripts", "record-behaviors")
+	if err := os.MkdirAll(behaviors, 0o755); err != nil {
+		t.Fatalf("could not build the behaviours folder: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(behaviors, "order.test.js"), nil, 0o644); err != nil {
+		t.Fatalf("could not write the test: %v", err)
+	}
+
+	// A stand-in for the root's vitest that writes down the folder it runs in.
+	ranIn := filepath.Join(root, "ran-in")
+	bin := filepath.Join(root, "node_modules", ".bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatalf("could not build the root's bin folder: %v", err)
+	}
+
+	script := "#!/bin/sh\npwd -P > '" + ranIn + "'\n"
+	if err := os.WriteFile(filepath.Join(bin, "vitest"), []byte(script), 0o755); err != nil {
+		t.Fatalf("could not write the stand-in vitest: %v", err)
+	}
+
+	if err := runFrom(t, root, "demo.app"); err != nil {
+		t.Fatalf("the behaviours suite failed: %v", err)
+	}
+
+	got, err := os.ReadFile(ranIn)
+	if err != nil {
+		t.Fatalf("the root's vitest never ran: %v", err)
+	}
+
+	want, err := filepath.EvalSymlinks(behaviors)
+	if err != nil {
+		t.Fatalf("could not resolve the behaviours folder: %v", err)
+	}
+
+	if strings.TrimSpace(string(got)) != want {
+		t.Errorf("vitest ran in %q, want %q", strings.TrimSpace(string(got)), want)
+	}
+}

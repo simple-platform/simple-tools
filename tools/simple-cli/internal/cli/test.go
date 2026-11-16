@@ -319,6 +319,16 @@ func runTest(cmd *cobra.Command, args []string) error {
 				vitestBin, found := fsx.ResolveUpward(fsys, tDir, "node_modules", ".bin", "vitest")
 
 				if found {
+					// The walk starts from tDir as given, relative to the folder
+					// this command was started in, so the runner comes back as a
+					// relative path, such as the repository root's
+					// `node_modules/.bin/vitest`. The runner is started inside
+					// tDir, where that path leads nowhere: every suite whose
+					// runner was found this way failed at once, printing nothing.
+					if abs, err := filepath.Abs(vitestBin); err == nil {
+						vitestBin = abs
+					}
+
 					fullArgs = []string{vitestBin, "run", reporterFlag}
 				} else {
 					fullArgs = []string{"npx", "vitest", "run", reporterFlag}
