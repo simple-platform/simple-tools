@@ -1,13 +1,12 @@
 //! THE PAYLOAD'S SHAPE, READ OFF THE TYPE THAT DECLARES IT.
 //!
-//! A Rust member says what it accepts in its type and nowhere else. There is no
-//! constraint vocabulary here: TypeScript writes `@minimum` and `@pattern` in a
-//! member's doc comment and Go writes them in a struct tag, and Rust has
-//! neither. NONE IS INVENTED. A doc comment that writes `@minimum 0` is prose,
-//! it stays in the description exactly as its author wrote it, and no
+//! A Rust member says what it accepts in its type, and limits it in the
+//! `#[simple(…)]` attribute the Rust SDK checks. TypeScript writes `@minimum`
+//! and `@pattern` in a member's doc comment and Go writes them in a struct tag;
+//! a Rust doc comment is not read for them. One that writes `@minimum 0` is
+//! prose, it stays in the description exactly as its author wrote it, and no
 //! `minimum` reaches the schema — because a constraint this generator made up
-//! would be advertised to a model as a rule the action does not actually
-//! enforce.
+//! would be advertised to a model as a rule its author never wrote.
 //!
 //! A TYPE THIS MODULE CANNOT DESCRIBE IS REFUSED RATHER THAN APPROXIMATED.
 //! The nearest thing to an approximation is an open object, and an open object
@@ -26,6 +25,7 @@ use syn::{
 };
 
 use crate::serde_attrs::{container_attrs, member_attrs, ContainerAttrs, RenameRule};
+use crate::simple_attrs::{constraints_of, Bounds, Constraint};
 use crate::tags::{constraint_names_in, refuse, Refusal};
 
 /// Every type an action's own file declares, wherever it declares them —
@@ -176,9 +176,8 @@ pub struct SchemaBuilder<'a> {
     /// The types currently being described, so a type that reaches itself is
     /// refused rather than silently flattened into a bare object.
     visiting: Vec<String>,
-    /// Members whose author asked for something this language has no way to
-    /// state. Collected rather than refused, and reported rather than guessed
-    /// at.
+    /// Members whose author asked for something the schema does not state.
+    /// Collected rather than refused, and reported rather than guessed at.
     gaps: Vec<String>,
     /// The member currently being described, so a gap found deep in its type
     /// names the member its author can see rather than the type it fell out of.
@@ -315,6 +314,17 @@ impl<'a> SchemaBuilder<'a> {
             }
 
             if attrs.flatten {
+                // A FLATTENED MEMBER IS NOT A PROPERTY OF ITS OWN, so a limit
+                // it writes on itself has nowhere to sit. The members that take
+                // its place keep what THEY wrote.
+                if !constraints_of(&field.attrs).is_empty() {
+                    self.gaps.push(format!(
+                        "`{ident}` is flattened, so what it writes in #[simple(…)] is left out of \
+                         the schema: the members of its type stand in its place, and there is no \
+                         property for it to sit on"
+                    ));
+                }
+
                 members.extend(self.flattened_members(&field.ty, ident.to_string())?);
                 continue;
             }
@@ -332,19 +342,19 @@ impl<'a> SchemaBuilder<'a> {
             // out once.
             let description = documented.trim().to_string();
 
-            // A CONSTRAINT THIS LANGUAGE CANNOT STATE IS NAMED RATHER THAN
+            // A CONSTRAINT WRITTEN IN A DOC COMMENT IS NAMED RATHER THAN
             // INVENTED OR IGNORED.
             //
             // The author wrote a rule and the schema will not carry it, which
             // is a difference nobody can see from inside the source: the line
             // is still there in the description, and the build is green. So it
             // is said out loud, once per member, and the artifact is left
-            // exactly as the type describes it.
+            // exactly as the type and the attribute describe it.
             for named in constraint_names_in(&documented) {
                 self.gaps.push(format!(
-                    "`{name}` writes @{named}, and a Rust member has no way to state a \
-                     constraint. The line stays in the description and no `{named}` reaches the \
-                     schema",
+                    "`{name}` writes @{named} in its doc comment, where a Rust member's limits \
+                     are not read: they are written in #[simple(…)]. The line stays in the \
+                     description and no `{named}` reaches the schema",
                 ));
             }
 
@@ -354,6 +364,8 @@ impl<'a> SchemaBuilder<'a> {
                 }
             }
 
+            self.constrain(&name, &mut schema, constraints_of(&field.attrs));
+
             members.push(Member {
                 name,
                 required: !optional,
@@ -362,6 +374,104 @@ impl<'a> SchemaBuilder<'a> {
         }
 
         Ok(members)
+    }
+
+    /// WHAT A MEMBER WROTE IN `#[simple(…)]`, PUT INTO ITS SCHEMA.
+    ///
+    /// The match is the table the SDK documents, one row a line: what is
+    /// written, the kind of member it applies to, and the keywords it becomes.
+    /// `length` is the one read by type: it counts characters on a string and
+    /// elements on a list.
+    ///
+    /// EVERYTHING ELSE IS LEFT OUT AND REPORTED, in the name of the member.
+    /// The SDK checks how a limit is spelled, not the member it is written on,
+    /// so `range` on a string compiles. Written into the schema it would tell
+    /// a caller nothing, since JSON Schema applies `minimum` to a number only,
+    /// and left out in silence it would be a rule its author believes a caller
+    /// is told.
+    fn constrain(&mut self, member: &str, schema: &mut Value, constraints: Vec<Constraint>) {
+        let Value::Object(stated) = schema else {
+            return;
+        };
+
+        // A fieldless enum is a string on the wire, but not one of the strings
+        // the SDK's table means: its values are already listed.
+        let kind = match stated.contains_key("enum") {
+            true => String::new(),
+            false => stated
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        };
+
+        for constraint in constraints {
+            let written = constraint.name().to_string();
+
+            let keywords = match (constraint, kind.as_str()) {
+                (Constraint::Range(bounds), "integer" | "number") => {
+                    Ok(ends("minimum", "maximum", bounds))
+                }
+                (Constraint::Length(bounds), "string") => {
+                    Ok(ends("minLength", "maxLength", bounds))
+                }
+                (Constraint::Length(bounds), "array") => Ok(ends("minItems", "maxItems", bounds)),
+                (Constraint::Pattern(text), "string") => Ok(vec![("pattern", Value::String(text))]),
+                // Only a format a live call has shown the model accepts in a
+                // strict tool schema. Another could make it refuse the tool on
+                // every round that offers it.
+                (Constraint::Format(text), "string") if text == "email" => {
+                    Ok(vec![("format", Value::String(text))])
+                }
+                (Constraint::Format(text), "string") => Err(format!(
+                    "`{text}` is not yet proven to be a format the model accepts in a tool's \
+                     schema. `email` is the one proven so far"
+                )),
+                (Constraint::Default(value), _) if takes(stated, &value) => {
+                    Ok(vec![("default", value)])
+                }
+                (Constraint::Example(value), _) if takes(stated, &value) => {
+                    Ok(vec![("example", value)])
+                }
+                (Constraint::Default(_) | Constraint::Example(_), _) => {
+                    Err(format!("its value is not one `{member}` takes"))
+                }
+                (Constraint::Deprecated, _) => Ok(vec![("deprecated", Value::Bool(true))]),
+                (
+                    Constraint::Range(_)
+                    | Constraint::Length(_)
+                    | Constraint::Pattern(_)
+                    | Constraint::Format(_),
+                    _,
+                ) if stated.contains_key("enum") => {
+                    Err(format!("`{member}` takes only the values its enum lists"))
+                }
+                (Constraint::Range(_), _) => Err(format!(
+                    "it applies to a number, and `{member}` is not declared as one"
+                )),
+                (Constraint::Length(_), _) => Err(format!(
+                    "it applies to a string or a list, and `{member}` is declared as neither"
+                )),
+                (Constraint::Pattern(_) | Constraint::Format(_), _) => Err(format!(
+                    "it applies to a string, and `{member}` is not declared as one"
+                )),
+                (Constraint::Unread(_, why), _) => Err(why.to_string()),
+            };
+
+            let keywords = match keywords {
+                Ok(keywords) => keywords,
+                Err(why) => {
+                    self.gaps.push(format!(
+                        "`{member}` writes `{written}`, which is left out of the schema: {why}"
+                    ));
+                    continue;
+                }
+            };
+
+            for (keyword, value) in keywords {
+                stated.insert(keyword.to_string(), value);
+            }
+        }
     }
 
     /// `#[serde(flatten)]` puts another struct's members in this one's place, so
@@ -561,6 +671,20 @@ impl<'a> SchemaBuilder<'a> {
                     return Err(self.refuse(&format!("declares `{name}`, which contains itself")));
                 }
 
+                // A LIMIT WRITTEN ON A TYPE IS NOT CARRIED TO THE MEMBERS TYPED
+                // BY IT. There it would meet the member's own limits, and how
+                // two sources combine is more than this step models. Written on
+                // the member, it is read.
+                if !constraints_of(&fields.unnamed[0].attrs).is_empty() {
+                    self.gaps.push(format!(
+                        "`{name}` (reached through `{}`) writes #[simple(…)] on the value it \
+                         wraps, which is left out of the schema: only a member's own #[simple(…)] \
+                         is read. Where a member is itself a `{name}`, write the limit on that \
+                         member",
+                        self.member
+                    ));
+                }
+
                 self.visiting.push(name);
                 let resolved = self.type_schema(&fields.unnamed[0].ty);
                 self.visiting.pop();
@@ -682,6 +806,33 @@ fn array_schema(items: Value) -> Value {
     schema.insert("type".to_string(), Value::String("array".to_string()));
 
     Value::Object(schema)
+}
+
+/// The keywords the two ends of a `range` or a `length` become, for whichever
+/// ends were written.
+fn ends(min: &'static str, max: &'static str, bounds: Bounds) -> Vec<(&'static str, Value)> {
+    [(min, bounds.min), (max, bounds.max)]
+        .into_iter()
+        .filter_map(|(keyword, end)| Some((keyword, Value::Number(end?))))
+        .collect()
+}
+
+/// Whether a member a schema describes takes a value: one of its listed
+/// values, or a value of its JSON type. A member typed `Value` states no type
+/// and takes any.
+fn takes(schema: &Map<String, Value>, value: &Value) -> bool {
+    if let Some(Value::Array(listed)) = schema.get("enum") {
+        return listed.contains(value);
+    }
+
+    match schema.get("type").and_then(Value::as_str) {
+        None => true,
+        Some("string") => value.is_string(),
+        Some("boolean") => value.is_boolean(),
+        Some("number") => value.is_number(),
+        Some("integer") => value.is_i64() || value.is_u64(),
+        Some(_) => false,
+    }
 }
 
 /// The type an `Option` wraps, if the type is one.

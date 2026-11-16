@@ -20,12 +20,12 @@
 //!
 //! The CONSTRAINT NAMES are listed for one purpose: reporting the gap. None of
 //! them is claimed. TypeScript writes them in a member's doc comment and its
-//! schema generator reads them; Go writes them in a struct tag; Rust has
-//! neither and no vocabulary for them has been ruled on. So a Rust member that
-//! writes one gets exactly what its author wrote — the line stays in the
-//! description and no constraint reaches the schema — and the difference
-//! between the languages, which is invisible from inside either one, is said
-//! out loud instead of guessed at.
+//! schema generator reads them; Go writes them in a struct tag; Rust writes
+//! its limits in `#[simple(…)]`, which `simple_attrs.rs` reads. So a Rust
+//! member that writes one in its doc comment gets exactly what its author
+//! wrote — the line stays in the description and no constraint reaches the
+//! schema — and the difference between the languages, which is invisible from
+//! inside either one, is said out loud instead of guessed at.
 
 /// The struct an author may point at when their payload type is not named
 /// `Payload`.
