@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"simple-cli/internal/build"
+	"simple-cli/internal/fsx"
 )
 
 // A manifest that lists vitest, the one package every action's tests need.
@@ -276,4 +277,64 @@ func TestTest_SkipsTheTestOfATargetWhoseInstallFailed(t *testing.T) {
 	if strings.Join(ran, " ") != "fine" {
 		t.Errorf("ran the tests of %v, want only fine, whose install succeeded", ran)
 	}
+}
+
+// recordInstalls replaces the install with one that counts itself and notes
+// what it installed from, as the real install does once npm has finished.
+func recordInstalls(t *testing.T) *int {
+	t.Helper()
+
+	installed := 0
+	original := build.EnsureDependenciesFunc
+	build.EnsureDependenciesFunc = func(dir string) error {
+		installed++
+
+		return build.RecordInstall(fsx.OSFileSystem{}, dir)
+	}
+
+	t.Cleanup(func() { build.EnsureDependenciesFunc = original })
+
+	return &installed
+}
+
+// A TARGET IS INSTALLED AGAIN WHEN ITS LOCKFILE MOVES.
+//
+// Its packages were installed only when one was missing. A dependency update
+// moves the lockfile under packages already installed, so the tests kept
+// running against the old versions while `simple build` bundled the new ones.
+func TestTest_InstallsAgainWhenTheLockfileMoves(t *testing.T) {
+	root := t.TempDir()
+	action := writeAction(t, root, "thing", actionManifest)
+
+	// vitest is installed throughout, so a missing package never decides.
+	if err := os.MkdirAll(filepath.Join(action, "node_modules", "vitest"), 0o755); err != nil {
+		t.Fatalf("could not install vitest: %v", err)
+	}
+
+	lock := func(version string) {
+		content := `{"lockfileVersion":3,"packages":{"node_modules/vitest":{"version":"` + version + `"}}}`
+		if err := os.WriteFile(filepath.Join(action, "package-lock.json"), []byte(content), 0o644); err != nil {
+			t.Fatalf("could not write the lockfile: %v", err)
+		}
+	}
+
+	installed := recordInstalls(t)
+	recordTests(t, nil)
+
+	run := func(step string, want int) {
+		*installed = 0
+		_ = runFrom(t, root, "demo.app", "-a", "thing")
+
+		if *installed != want {
+			t.Errorf("%s: installed %d time(s), want %d", step, *installed, want)
+		}
+	}
+
+	lock("4.0.1")
+	run("first run, with nothing noted about the install", 1)
+	run("second run, nothing changed", 0)
+
+	lock("4.0.2")
+	run("the lockfile moved", 1)
+	run("the run after", 0)
 }

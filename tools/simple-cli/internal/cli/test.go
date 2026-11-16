@@ -246,12 +246,13 @@ func runTest(cmd *cobra.Command, args []string) error {
 	}
 	sem := make(chan struct{}, limit)
 
-	// Every target's missing packages are installed before any test starts,
-	// rather than by each target on its way to its own test. A test can read a
-	// neighbour's packages: a folder of shared contract tests under `actions/`
-	// has no package.json of its own and borrows the SDK from an action beside
-	// it. Run side by side, that test could start before the neighbour's
-	// install had finished, and pass or fail on which got there first.
+	// Every target whose packages are missing or out of date is installed before
+	// any test starts, rather than by each target on its way to its own test. A
+	// test can read a neighbour's packages: a folder of shared contract tests
+	// under `actions/` has no package.json of its own and borrows the SDK from
+	// an action beside it. Run side by side, that test could start before the
+	// neighbour's install had finished, and pass or fail on which got there
+	// first.
 	//
 	// The targets that run their tests through npm: everything with a
 	// package.json except Rust actions, and except a run of one record
@@ -260,7 +261,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 		return !rustDirs[tDir] && behaviorName == "" && scaffold.PathExists(fsys, filepath.Join(tDir, "package.json"))
 	}
 
-	installFailed := installMissingPackages(fsys, testDirs, runsUnderNpm, sem, jsonMode)
+	installFailed := installPackages(fsys, testDirs, runsUnderNpm, sem, jsonMode)
 	failed += len(installFailed)
 
 	for _, tDir := range testDirs {
@@ -296,8 +297,8 @@ func runTest(cmd *cobra.Command, args []string) error {
 				// This ensures package managers (npm/pnpm/yarn) naturally map their own
 				// workspace resolution graphs for hoisted dependencies like @simpleplatform/sdk.
 				//
-				// Any packages it was missing were installed before the first
-				// test started (installMissingPackages).
+				// Any packages it was missing or held out of date were
+				// installed before the first test started (installPackages).
 				fullArgs = []string{"npm", "run", "test", "--"}
 				if jsonMode {
 					fullArgs = append(fullArgs, "--reporter=json")
@@ -392,18 +393,18 @@ func runTest(cmd *cobra.Command, args []string) error {
 // tests.
 var testCommandFunc = exec.Command
 
-// installMissingPackages installs, side by side, the packages of every target
-// that runs under npm and is missing any of them, and answers with the targets
-// whose install failed. Each failure is printed as it happens, unless the run
-// reports JSON.
-func installMissingPackages(fsys fsx.FileSystem, testDirs []string, runsUnderNpm func(string) bool, sem chan struct{}, jsonMode bool) map[string]bool {
+// installPackages installs, side by side, the packages of every target that
+// runs under npm and needs an install (needsInstall), and answers with the
+// targets whose install failed. Each failure is printed as it happens, unless
+// the run reports JSON.
+func installPackages(fsys fsx.FileSystem, testDirs []string, runsUnderNpm func(string) bool, sem chan struct{}, jsonMode bool) map[string]bool {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	failed := make(map[string]bool)
 
 	var pending []string
 	for _, tDir := range testDirs {
-		if runsUnderNpm(tDir) && packagesMissing(fsys, tDir) {
+		if runsUnderNpm(tDir) && needsInstall(fsys, tDir) {
 			pending = append(pending, tDir)
 		}
 	}
@@ -436,6 +437,32 @@ func installMissingPackages(fsys fsx.FileSystem, testDirs []string, runsUnderNpm
 	wg.Wait()
 
 	return failed
+}
+
+// needsInstall answers whether a target's packages must be installed before
+// its tests run: because a package its package.json lists cannot be found
+// (packagesMissing), or because its packages were not installed from the
+// files the target holds now (build.InstalledFromCurrentFiles).
+//
+// A LOCKFILE MOVES UNDER PACKAGES ALREADY INSTALLED. A dependency update, from
+// Renovate or a pull, moves versions in the lockfile while the old versions
+// are still installed. Asking only whether each package exists missed it, so
+// the tests ran against the old version while `simple build`, which installs
+// every time, bundled the new one.
+//
+// A target with no lockfile of its own is asked only the first question.
+// Whatever pins its packages, such as a workspace's lockfile above it, is not
+// among the files InstalledFromCurrentFiles reads.
+func needsInstall(fsys fsx.FileSystem, dir string) bool {
+	if packagesMissing(fsys, dir) {
+		return true
+	}
+
+	if !scaffold.PathExists(fsys, filepath.Join(dir, "package-lock.json")) {
+		return false
+	}
+
+	return !build.InstalledFromCurrentFiles(fsys, dir)
 }
 
 // packagesMissing answers whether any package a target's package.json lists
