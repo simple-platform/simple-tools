@@ -141,7 +141,7 @@ func withRustBuildHarness(t *testing.T, cargoErr error) *rustBuildHarness {
 		OptimizeWasmFunc = origOpt
 	})
 
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error { return nil }
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) { return "", nil }
 	EnsureCargoFunc = func() (string, error) { return "/usr/bin/cargo", nil }
 	EnsureRustWasmTargetFunc = func() error { return nil }
 
@@ -438,7 +438,7 @@ func TestBuildAction_Rust_MetadataFailureStopsTheBuild(t *testing.T) {
 	refusal := &AnnotationRefusal{
 		Refusal: `greet-user: @tool is a modifier tag and takes no value, and this one carries "true"`,
 	}
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error { return refusal }
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) { return "", refusal }
 
 	actionDir := rustAction(t, t.TempDir())
 	m := NewBuildManager(DefaultBuildOptions())

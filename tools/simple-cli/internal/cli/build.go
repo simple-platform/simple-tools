@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"simple-cli/internal/build"
@@ -226,16 +227,37 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 	return runBuildAll(manager, actionDirs, spaceDirs)
 }
 
+// buildResult is the outcome of building one action or space.
+type buildResult struct {
+	name    string
+	isSpace bool
+	err     error
+	// notes is what the action's metadata step wrote to its error stream, such
+	// as a limit its description leaves out. Shown to the author, and never a
+	// reason for the build to fail.
+	notes string
+}
+
+// printBuildNotes writes each action's notes to w, one action after another in
+// the order the actions were given, so notes from actions built in parallel
+// never mix. It writes nothing when no action has notes.
+func printBuildNotes(w io.Writer, results []buildResult) {
+	for _, r := range results {
+		if r.notes == "" {
+			continue
+		}
+
+		_, _ = fmt.Fprintf(w, "\n⚠️  [Action] %s:\n", r.name)
+		for _, line := range strings.Split(r.notes, "\n") {
+			_, _ = fmt.Fprintf(w, "   %s\n", line)
+		}
+	}
+}
+
 // runBuildAll builds actions and spaces together in a single parallel pool.
 // This ensures maximum utilization of CPU cores by not waiting for all actions
 // to finish before starting space builds.
 func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) error {
-	type buildResult struct {
-		name    string
-		isSpace bool
-		err     error
-	}
-
 	totalCount := len(actionDirs) + len(spaceDirs)
 	results := make([]buildResult, totalCount)
 	ctx := context.Background()
@@ -267,7 +289,7 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 					}
 				}
 				res := manager.BuildAction(ctx, dir, reporter)
-				results[idx] = buildResult{name: res.ActionName, isSpace: false, err: res.Error}
+				results[idx] = buildResult{name: res.ActionName, isSpace: false, err: res.Error, notes: res.Notes}
 			}(i, dir)
 		}
 
@@ -304,8 +326,12 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 	var actionSuccesses, actionFailures, spaceSuccesses, spaceFailures int
 	var failedActions, failedSpaces []string
 	errors := make(map[string]string)
+	warnings := make(map[string]string)
 
 	for _, r := range results {
+		if r.notes != "" {
+			warnings[r.name] = r.notes
+		}
 		if r.isSpace {
 			if r.err != nil {
 				spaceFailures++
@@ -327,6 +353,13 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 
 	totalFailures := actionFailures + spaceFailures
 
+	// Printed after the progress view has closed, for the reason given for
+	// failures below, and only in plain mode: under --json they are the
+	// "warnings" member, so the normal output stays one JSON document.
+	if !jsonOutput {
+		printBuildNotes(os.Stderr, results)
+	}
+
 	if jsonOutput {
 		if err := printJSON(map[string]interface{}{
 			"status":        "complete",
@@ -336,6 +369,7 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 			"failedActions": failedActions,
 			"failedSpaces":  failedSpaces,
 			"errors":        errors,
+			"warnings":      warnings,
 		}); err != nil {
 			return err
 		}

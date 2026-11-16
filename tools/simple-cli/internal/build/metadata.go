@@ -49,16 +49,27 @@ import (
 // rejected edit still ships, because every later reader sees a well-formed file
 // and nothing that says which source it came from.
 func ExtractMetadata(fs fsx.FileSystem, actionDir string) error {
+	_, err := ExtractMetadataWithNotes(fs, actionDir)
+	return err
+}
+
+// ExtractMetadataWithNotes is ExtractMetadata, and also returns the notes the
+// generator wrote while describing the action: things the description leaves
+// out, such as a limit it has no way to state. The build shows them to the
+// author. They are empty when the generator had nothing to say, and they never
+// make a build fail.
+func ExtractMetadataWithNotes(fs fsx.FileSystem, actionDir string) (string, error) {
 	lang, err := detectActionLanguage(fs, actionDir)
 	if err != nil {
-		return fmt.Errorf("failed to detect action language: %w", err)
+		return "", fmt.Errorf("failed to detect action language: %w", err)
 	}
 
-	if err := describeActionFromSource(fs, actionDir, lang); err != nil {
-		return discardStaleActionJSON(fs, actionDir, err)
+	notes, err := describeActionFromSource(fs, actionDir, lang)
+	if err != nil {
+		return "", discardStaleActionJSON(fs, actionDir, err)
 	}
 
-	return nil
+	return notes, nil
 }
 
 // discardStaleActionJSON removes a generated action.json that the source it was

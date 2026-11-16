@@ -54,12 +54,12 @@ func withGoBuildHarness(t *testing.T, describeErr error) *goBuildHarness {
 		ParseExecutionEnvironmentFunc = origParseEnv
 	})
 
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) {
 		h.mu.Lock()
 		h.described = append(h.described, actionDir)
 		h.mu.Unlock()
 
-		return describeErr
+		return "", describeErr
 	}
 	ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
 
