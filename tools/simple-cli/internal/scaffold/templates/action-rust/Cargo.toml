@@ -12,22 +12,22 @@ publish = false
 # `serde_json` are direct dependencies because `#[derive(Deserialize)]` expands
 # to code that names `serde` by crate, so the action depends on it even though
 # the prelude re-exports the derive.
-simpleplatform-sdk = "0.4"
+simpleplatform-sdk = "0.7"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 [features]
 # THIS IS WHAT MAKES THE BROWSER ARTIFACT BUILDABLE.
 #
-# One source produces two modules, and each declares exactly the imports its
-# host binds: the server host binds six names, the browser host four. The SDK
-# selects between them with its own `async` feature, and a feature of a
-# dependency can only be turned on from the crate that is being built — so an
-# action built for the browser is built with `--features async`, and this line
-# is what gives that flag something to name. Without it the browser build stops
-# at "none of the selected packages contains these features: async", and an
-# action whose execution environment is `client` or `both` cannot be built at
-# all.
+# One source produces two modules, one for each host, and each imports only
+# names its own host binds: the server host and the browser host bind different
+# sets. The SDK selects between them with its own `async` feature, and a
+# feature of a dependency can only be turned on from the crate that is being
+# built — so an action built for the browser is built with `--features async`,
+# and this line is what gives that flag something to name. Without it the
+# browser build stops at "none of the selected packages contains these
+# features: async", and an action whose execution environment is `client` or
+# `both` cannot be built at all.
 async = ["simpleplatform-sdk/async"]
 
 # The profile the SDK asks a published action for: as small as the optimiser can

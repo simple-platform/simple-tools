@@ -13,13 +13,11 @@ use simpleplatform_sdk::prelude::*;
 // rather than two that can drift. Replace the doc line below with what this
 // action does; this block is an ordinary comment and never reaches it.
 //
-// THE NAME IS PART OF THE CONTRACT. The payload is found by being called
-// `Payload`, the same name an action written in TypeScript declares its
-// interface under. A payload type called anything else is not found at all, and
-// nothing says so: what ships is an action advertising that it takes no input,
-// beside a handler that requires this field. A model then calls it with nothing
-// and the action refuses for a reason nobody can see. Rename this type only
-// together with a `@Payload` line naming what it is now called.
+// THE NAME IS PART OF THE CONTRACT. The input is found by the name `Payload`,
+// the same name an action written in TypeScript declares its interface under,
+// and its doc comment is then the action's description. Rename this type only
+// together with a `@Payload` line naming the new one, so the description and
+// the schema keep coming from this one declaration.
 //
 // The doc comment on a member is that member's description, its type is what
 // says whether it is required, and `#[simple(…)]` carries the bounds — so the
