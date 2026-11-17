@@ -10,8 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-
-	"simple-cli/internal/fsx"
 )
 
 const (
@@ -59,7 +57,7 @@ var rustBrowserWasmOptFlags = []string{
 // A Rust action is a crate, so there is no dependency install and no bundling
 // step: cargo resolves and fetches what the manifest names as part of building
 // it, and the module comes out of the crate itself.
-func (m *BuildManager) buildRustAction(actionDir, actionName string, needsSync, needsAsync bool, report func(string)) ActionBuildResult {
+func (m *BuildManager) buildRustAction(actionDir, actionName string, needsSync, needsAsync bool, describe func() error, report func(string)) ActionBuildResult {
 	fail := func(err error) ActionBuildResult {
 		report("Failed")
 		return ActionBuildResult{ActionName: actionName, Error: err}
@@ -116,7 +114,7 @@ func (m *BuildManager) buildRustAction(actionDir, actionName string, needsSync, 
 	// exact sentence its author has to read to fix their source, and every other
 	// failure this step raises already names what could not be done.
 	report("Extracting metadata...")
-	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
+	if err := describe(); err != nil {
 		return fail(err)
 	}
 

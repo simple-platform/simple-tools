@@ -36,13 +36,16 @@ var goExtractorSource string
 var rustCompanionCrate embed.FS
 
 const (
-	// generatorScriptName and the two names below are the names the generator
-	// knows. It looks for both companions BESIDE ITSELF, by name, so these are
-	// not this package's choice to make: they are the platform's file names,
-	// carried here with the files.
-	generatorScriptName = "extract-action-metadata.js"
-	goExtractorName     = "extract_godoc.go"
-	rustCompanionName   = "extract_rustdoc"
+	// The generator is unpacked as an .mjs file, which Node loads as the ES
+	// module it is without first trying to read it as CommonJS. Its content is
+	// the embedded file's, unchanged.
+	generatorScriptName = "extract-action-metadata.mjs"
+
+	// The two names below are the names the generator knows. It looks for both
+	// companions BESIDE ITSELF, by name, so these are not this package's choice
+	// to make: they are the platform's file names, carried here with the files.
+	goExtractorName   = "extract_godoc.go"
+	rustCompanionName = "extract_rustdoc"
 
 	// Where the embedded crate lives inside this binary.
 	rustCompanionEmbedDir = "scripts/" + rustCompanionName
@@ -72,6 +75,9 @@ const (
 // tool left behind was not the file the other tool writes from the same source,
 // which is the one thing a generated contract may not do.
 //
+// On success it returns the notes the generator wrote to its error stream,
+// which is empty when it had nothing to say.
+//
 // Returns error if:
 //   - Node.js is not available
 //   - Required npm packages are not installed
@@ -79,15 +85,15 @@ const (
 //   - Extraction script is not found
 //   - Script execution fails, including refusing a malformed exposure statement
 //   - No readable action.json was produced
-func describeActionFromSource(fs fsx.FileSystem, actionDir string, lang ActionLanguage) error {
+func describeActionFromSource(fs fsx.FileSystem, actionDir string, lang ActionLanguage) (string, error) {
 	// Check if Node.js is available
 	if err := checkNodeJS(); err != nil {
-		return fmt.Errorf("node.js is required for action metadata extraction: %w", err)
+		return "", fmt.Errorf("node.js is required for action metadata extraction: %w", err)
 	}
 
 	// Ensure required npm packages are installed
 	if err := ensureNPMPackages(); err != nil {
-		return fmt.Errorf("failed to install required npm packages: %w", err)
+		return "", fmt.Errorf("failed to install required npm packages: %w", err)
 	}
 
 	// THE TOOLCHAIN IS ASKED FOR HERE RATHER THAN INSIDE NODE.
@@ -99,33 +105,34 @@ func describeActionFromSource(fs fsx.FileSystem, actionDir string, lang ActionLa
 	// tell it — one fix, named once, wherever a developer meets it first.
 	if lang == LanguageRust {
 		if _, err := EnsureCargoFunc(); err != nil {
-			return err
+			return "", err
 		}
 	}
 
 	// Execute the generator
-	if err := executeScript(actionDir, lang); err != nil {
+	notes, err := executeScript(actionDir, lang)
+	if err != nil {
 		// A refusal is handed back as the generator wrote it. Wrapping it would
 		// put this layer's account of how a child process ended in front of the
 		// one sentence the author has to read to fix their source.
 		var refusal *AnnotationRefusal
 		if errors.As(err, &refusal) {
-			return err
+			return "", err
 		}
 
-		return fmt.Errorf("failed to execute extraction script: %w", err)
+		return "", fmt.Errorf("failed to execute extraction script: %w", err)
 	}
 
 	data, err := fs.ReadFile(filepath.Join(actionDir, "action.json"))
 	if err != nil {
-		return fmt.Errorf("failed to read generated action.json: %w", err)
+		return "", fmt.Errorf("failed to read generated action.json: %w", err)
 	}
 
 	if !json.Valid(data) {
-		return fmt.Errorf("the generator produced an action.json that is not valid JSON")
+		return "", fmt.Errorf("the generator produced an action.json that is not valid JSON")
 	}
 
-	return nil
+	return notes, nil
 }
 
 // checkNodeJS verifies that Node.js is available on the system
@@ -500,17 +507,18 @@ func writeRustCompanionCrate() (string, error) {
 	return crateDir, nil
 }
 
-// executeScript runs the embedded generator over one action
-func executeScript(actionDir string, lang ActionLanguage) error {
+// executeScript runs the embedded generator over one action, and returns what
+// it wrote to its error stream on a run that succeeds.
+func executeScript(actionDir string, lang ActionLanguage) (string, error) {
 	// Find workspace root to run the script from there (so Node.js can find packages)
 	workspaceRoot, err := findWorkspaceRoot()
 	if err != nil {
-		return fmt.Errorf("failed to find workspace root: %w", err)
+		return "", fmt.Errorf("failed to find workspace root: %w", err)
 	}
 
 	scriptPath, discard, err := unpackGenerator(workspaceRoot, lang)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	defer discard()
@@ -520,18 +528,38 @@ func executeScript(actionDir string, lang ActionLanguage) error {
 	cmd := exec.Command("node", scriptPath, actionDir)
 	cmd.Dir = workspaceRoot
 
-	if out, err := cmd.CombinedOutput(); err != nil {
+	return runGenerator(cmd)
+}
+
+// runGenerator runs the generator and keeps its two output streams apart.
+//
+// On a run that succeeds they mean different things. The normal output only
+// names the file that was written. The error stream carries the notes an
+// author should read, such as a limit the description leaves out, so it is
+// handed back for the build to show.
+//
+// On a run that fails, both streams are handed back together, error stream
+// first. The generator writes to its normal output only as its last step, so
+// this is the order it writes them in.
+func runGenerator(cmd *exec.Cmd) (string, error) {
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		out := stderr.String() + stdout.String()
+
 		// A refusal is the generator working, and it is the one failure whose
 		// text an author is meant to act on — so it is handed back as the
 		// sentence the generator wrote rather than buried under this layer's
 		// account of how the process ended.
 		var exit *exec.ExitError
 		if errors.As(err, &exit) && exit.ExitCode() == AnnotationRefusalExitCode {
-			return &AnnotationRefusal{Refusal: strings.TrimSpace(string(out))}
+			return "", &AnnotationRefusal{Refusal: strings.TrimSpace(out)}
 		}
 
-		return fmt.Errorf("script execution failed: %w\nOutput: %s", err, out)
+		return "", fmt.Errorf("script execution failed: %w\nOutput: %s", err, out)
 	}
 
-	return nil
+	return strings.TrimSpace(stderr.String()), nil
 }

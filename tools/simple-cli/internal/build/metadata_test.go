@@ -1,6 +1,8 @@
 package build
 
 import (
+	"errors"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -200,6 +202,75 @@ func TestExtractMetadata_LanguageDetectionErrors(t *testing.T) {
 
 			if err != nil {
 				t.Errorf("ExtractMetadata() unexpected error = %v", err)
+			}
+		})
+	}
+}
+
+// The generator's error stream is handed back as notes on a run that
+// succeeds, and its normal output is not. A failed run hands back both.
+// A small shell script stands in for the generator, so no language
+// toolchain is needed.
+func TestRunGeneratorKeepsTheErrorStreamApart(t *testing.T) {
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("sh is not available")
+	}
+
+	tests := []struct {
+		name        string
+		script      string
+		wantNotes   string
+		wantRefusal string
+		wantErrHas  []string
+	}{
+		{
+			name:      "a run with notes returns them and not the normal output",
+			script:    `echo "Generated action.json"; echo "demo: first note" >&2; echo "demo: second note" >&2`,
+			wantNotes: "demo: first note\ndemo: second note",
+		},
+		{
+			name:   "a run with an empty error stream returns no notes",
+			script: `echo "Generated action.json"`,
+		},
+		{
+			name:        "a refusal returns the generator's sentence",
+			script:      `echo "refused: @shortdesc is empty" >&2; exit 2`,
+			wantRefusal: "refused: @shortdesc is empty",
+		},
+		{
+			name:       "a failure returns both streams",
+			script:     `echo "partial"; echo "broken" >&2; exit 1`,
+			wantErrHas: []string{"partial", "broken"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			notes, err := runGenerator(exec.Command("sh", "-c", tt.script))
+
+			var refusal *AnnotationRefusal
+			switch {
+			case tt.wantRefusal != "":
+				if !errors.As(err, &refusal) || refusal.Refusal != tt.wantRefusal {
+					t.Fatalf("want refusal %q, got %v", tt.wantRefusal, err)
+				}
+			case len(tt.wantErrHas) > 0:
+				if err == nil {
+					t.Fatal("want an error, got none")
+				}
+				for _, part := range tt.wantErrHas {
+					if !strings.Contains(err.Error(), part) {
+						t.Errorf("error %q does not contain %q", err, part)
+					}
+				}
+			default:
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			}
+
+			if notes != tt.wantNotes {
+				t.Errorf("notes = %q, want %q", notes, tt.wantNotes)
 			}
 		})
 	}

@@ -158,7 +158,7 @@ export async function handler(req: any): Promise<{ success: boolean }> {
 
 	// Extract metadata
 	fs := fsx.OSFileSystem{}
-	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
+	if _, err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("describeActionFromSource failed: %v", err)
 	}
 
@@ -236,7 +236,7 @@ export async function handler(): Promise<{ success: boolean }> {
 	}
 
 	fs := fsx.OSFileSystem{}
-	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
+	if _, err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("describeActionFromSource failed: %v", err)
 	}
 
@@ -293,7 +293,7 @@ export async function handler(): Promise<{ ok: boolean }> {
 	}
 
 	fs := fsx.OSFileSystem{}
-	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
+	if _, err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("a member typed as a union stopped the extraction: %v", err)
 	}
 
@@ -314,7 +314,7 @@ export async function handler(): Promise<{ ok: boolean }> {
 
 	// Running the extractor again over the same source must not change a byte.
 	// A rewrite that reorders keys or drops what it cannot hold shows up here.
-	if err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
+	if _, err := describeActionFromSource(fs, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("second extraction failed: %v", err)
 	}
 
@@ -376,7 +376,7 @@ simple.Handle(() => ({ ok: true }))
 		t.Fatalf("Failed to write test TypeScript file: %v", err)
 	}
 
-	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir, LanguageTypeScript); err != nil {
+	if _, err := describeActionFromSource(fsx.OSFileSystem{}, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("expected the action to be described, got %v", err)
 	}
 
@@ -443,7 +443,7 @@ simple.Handle(() => ({ ok: true }))
 		t.Fatalf("Failed to write test TypeScript file: %v", err)
 	}
 
-	if err := describeActionFromSource(fsx.OSFileSystem{}, actionDir, LanguageTypeScript); err != nil {
+	if _, err := describeActionFromSource(fsx.OSFileSystem{}, actionDir, LanguageTypeScript); err != nil {
 		t.Fatalf("expected the action to be described, got %v", err)
 	}
 
