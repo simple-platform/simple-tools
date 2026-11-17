@@ -35,6 +35,7 @@
 mod comments;
 mod schema;
 mod serde_attrs;
+mod simple_attrs;
 mod tags;
 
 use std::path::Path;
@@ -347,7 +348,7 @@ fn object(members: &[(&str, String)]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     use super::{action_name, extract, render, Extracted};
     use crate::tags::Refusal;
@@ -807,5 +808,387 @@ fn handler() {}
         let refused = refusal(&source);
 
         assert!(refused.message.contains("DateTime"), "{refused}");
+    }
+
+    // -----------------------------------------------------------------------
+    // `#[simple(…)]`. Each limit a member writes becomes the keyword its type
+    // gives it. One this step does not write is reported and left out, and
+    // none of them ever refuses a build.
+    // -----------------------------------------------------------------------
+
+    /// The gaps a source reports, each checked to name its member and what it
+    /// wrote, in the order the members are written.
+    fn assert_gaps(source: &str, expected: &[(&str, &str)]) {
+        let gaps = describe(source).gaps;
+
+        assert_eq!(gaps.len(), expected.len(), "{gaps:?}");
+
+        for (gap, (member, written)) in gaps.iter().zip(expected) {
+            assert!(gap.contains(member) && gap.contains(written), "{gap}");
+        }
+    }
+
+    #[test]
+    fn a_range_becomes_a_minimum_and_a_maximum_on_a_number() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(range(min = 1, max = 90))]\n    days: u32,\n    #[simple(range(min = 0.5, max = 60))]\n    width: f64,\n    #[simple(range(min = -10))]\n    offset: i64,\n    #[simple(range(max = 1_000))]\n    retries: Option<u16>,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(
+            *property(&document, "days"),
+            json!({ "maximum": 90, "minimum": 1, "type": "integer" })
+        );
+        assert_eq!(
+            *property(&document, "width"),
+            json!({ "maximum": 60, "minimum": 0.5, "type": "number" })
+        );
+        assert_eq!(
+            *property(&document, "offset"),
+            json!({ "minimum": -10, "type": "integer" })
+        );
+        assert_eq!(
+            *property(&document, "retries"),
+            json!({ "maximum": 1000, "type": "integer" })
+        );
+        assert_eq!(document["gaps"], json!([]));
+    }
+
+    #[test]
+    fn a_length_counts_characters_on_a_string_and_elements_on_a_list() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(length(min = 5, max = 64))]\n    lead_id: String,\n    #[simple(length(min = 1, max = 500))]\n    ids: Vec<String>,\n    #[simple(length(max = 64))]\n    prefix: Option<String>,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(
+            *property(&document, "lead_id"),
+            json!({ "maxLength": 64, "minLength": 5, "type": "string" })
+        );
+        assert_eq!(
+            *property(&document, "ids"),
+            json!({
+                "items": { "type": "string" },
+                "maxItems": 500,
+                "minItems": 1,
+                "type": "array",
+            })
+        );
+        assert_eq!(
+            *property(&document, "prefix"),
+            json!({ "maxLength": 64, "type": "string" })
+        );
+        assert_eq!(document["gaps"], json!([]));
+    }
+
+    #[test]
+    fn a_pattern_and_the_email_format_constrain_a_string() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(pattern = \"^LEAD\")]\n    lead_id: String,\n    #[simple(format = \"email\")]\n    notify: String,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(
+            *property(&document, "lead_id"),
+            json!({ "pattern": "^LEAD", "type": "string" })
+        );
+        assert_eq!(
+            *property(&document, "notify"),
+            json!({ "format": "email", "type": "string" })
+        );
+        assert_eq!(document["gaps"], json!([]));
+    }
+
+    /// `email` is the one format a live call has shown the model accepts in a
+    /// strict tool schema. Any other could make the model refuse the tool on
+    /// every round that offers it, so it waits until one is proven.
+    #[test]
+    fn a_format_not_yet_proven_accepted_is_reported_and_left_out() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(format = \"uri\", length(max = 2048))]\n    link: String,\n}}\n{TOOL}"
+        );
+
+        assert_eq!(
+            *property(&json(&source), "link"),
+            json!({ "maxLength": 2048, "type": "string" })
+        );
+        assert_gaps(&source, &[("`link`", "`uri`")]);
+        assert!(
+            describe(&source).gaps[0].contains("not yet proven"),
+            "the report says why it was left out"
+        );
+    }
+
+    #[test]
+    fn a_default_an_example_and_a_deprecation_are_stated_on_any_member() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(default = \"nobody@example.com\", example = \"a@b.co\")]\n    notify: String,\n    #[simple(default = 30, example = -7)]\n    days: i64,\n    #[simple(default = 0.25)]\n    ratio: f64,\n    #[simple(default = true, deprecated)]\n    legacy: bool,\n    #[simple(deprecated)]\n    address: Address,\n    #[simple(example = 'x')]\n    initial: char,\n    #[simple(default = \"Open\")]\n    status: Status,\n    #[simple(example = 3)]\n    extra: Value,\n}}\n\nstruct Address {{\n    street: String,\n}}\n\nenum Status {{\n    Open,\n    Closed,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(
+            *property(&document, "notify"),
+            json!({ "default": "nobody@example.com", "example": "a@b.co", "type": "string" })
+        );
+        assert_eq!(
+            *property(&document, "days"),
+            json!({ "default": 30, "example": -7, "type": "integer" })
+        );
+        assert_eq!(
+            *property(&document, "ratio"),
+            json!({ "default": 0.25, "type": "number" })
+        );
+        assert_eq!(
+            *property(&document, "legacy"),
+            json!({ "default": true, "deprecated": true, "type": "boolean" })
+        );
+        assert_eq!(property(&document, "address")["deprecated"], true);
+        assert_eq!(property(&document, "address")["type"], "object");
+        assert_eq!(
+            *property(&document, "initial"),
+            json!({ "example": "x", "type": "string" })
+        );
+        assert_eq!(
+            *property(&document, "status"),
+            json!({ "default": "Open", "enum": ["Open", "Closed"], "type": "string" })
+        );
+        assert_eq!(*property(&document, "extra"), json!({ "example": 3 }));
+        assert_eq!(
+            required(&document).len(),
+            8,
+            "a default written here is a word for the caller, and whether a member must be \
+             sent is still its type"
+        );
+        assert_eq!(document["gaps"], json!([]));
+    }
+
+    #[test]
+    fn a_default_or_an_example_the_member_cannot_take_is_reported_and_left_out() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(default = \"ten\", example = 7)]\n    count: i64,\n    #[simple(example = 1.5)]\n    whole: u32,\n    #[simple(default = \"Archived\", example = \"Open\")]\n    status: Status,\n    #[simple(default = 1)]\n    address: Address,\n}}\n\nstruct Address {{\n    street: String,\n}}\n\nenum Status {{\n    Open,\n    Closed,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(
+            *property(&document, "count"),
+            json!({ "example": 7, "type": "integer" })
+        );
+        assert_eq!(*property(&document, "whole"), json!({ "type": "integer" }));
+        assert_eq!(
+            *property(&document, "status"),
+            json!({ "enum": ["Open", "Closed"], "example": "Open", "type": "string" })
+        );
+        assert!(property(&document, "address").get("default").is_none());
+        assert_gaps(
+            &source,
+            &[
+                ("`count`", "`default`"),
+                ("`whole`", "`example`"),
+                ("`status`", "`default`"),
+                ("`address`", "`default`"),
+            ],
+        );
+    }
+
+    #[test]
+    fn constraints_say_the_same_in_one_attribute_or_in_one_each() {
+        let together = format!(
+            "struct Payload {{\n    /// Only keys starting here.\n    #[simple(pattern = \"^KNOW\", length(max = 64))]\n    prefix: String,\n}}\n{TOOL}"
+        );
+        let apart = format!(
+            "struct Payload {{\n    /// Only keys starting here.\n    #[simple(pattern = \"^KNOW\")]\n    #[simple(length(max = 64))]\n    prefix: String,\n}}\n{TOOL}"
+        );
+
+        assert_eq!(
+            *property(&json(&together), "prefix"),
+            json!({
+                "description": "Only keys starting here.",
+                "maxLength": 64,
+                "pattern": "^KNOW",
+                "type": "string",
+            })
+        );
+        assert_eq!(json(&together)["schema"], json(&apart)["schema"]);
+    }
+
+    /// An alias is its type, so a limit on a member typed by one is read. A
+    /// limit written inside a newtype is not carried to the members typed by
+    /// it: it is reported, and the member's own limits are read as written.
+    #[test]
+    fn a_limit_reaches_a_member_through_an_alias_and_not_out_of_a_newtype() {
+        let source = format!(
+            "type Ids = Vec<String>;\n\nstruct LeadId(#[simple(pattern = \"^LEAD\")] String);\n\nstruct Payload {{\n    #[simple(length(min = 1))]\n    ids: Ids,\n    #[simple(length(max = 64))]\n    lead_id: LeadId,\n    others: Vec<LeadId>,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(property(&document, "ids")["minItems"], 1);
+        assert_eq!(
+            *property(&document, "lead_id"),
+            json!({ "maxLength": 64, "type": "string" })
+        );
+        assert_eq!(
+            property(&document, "others")["items"],
+            json!({ "type": "string" })
+        );
+        assert_gaps(
+            &source,
+            &[
+                ("`LeadId` (reached through `lead_id`)", "left out"),
+                ("`LeadId` (reached through `others`)", "left out"),
+            ],
+        );
+    }
+
+    /// The author reads a report about a limit at the place it is written, so
+    /// one written on a type names the type as well as the member it reached,
+    /// at every level a newtype wraps another.
+    #[test]
+    fn a_limit_written_on_a_type_is_reported_in_the_name_of_the_type() {
+        let source = format!(
+            "struct Bad(#[simple(range(min = 1))] String);\n\nstruct Min10(#[simple(range(min = 10))] u32);\n\nstruct Min5(#[simple(range(min = 5))] Min10);\n\nstruct Payload {{\n    bad: Bad,\n    y: Min5,\n}}\n{TOOL}"
+        );
+
+        assert_eq!(*property(&json(&source), "y"), json!({ "type": "integer" }));
+        assert_gaps(
+            &source,
+            &[
+                ("`Bad` (reached through `bad`)", "left out"),
+                ("`Min5` (reached through `y`)", "left out"),
+                ("`Min10` (reached through `y`)", "left out"),
+            ],
+        );
+    }
+
+    /// `cfg_attr` applies what it holds in some builds only, and which ones
+    /// this step cannot tell. The SDK reads a limit held there, so it is
+    /// reported rather than dropped.
+    #[test]
+    fn a_limit_held_in_cfg_attr_is_reported_and_left_out() {
+        let source = format!(
+            "struct Payload {{\n    #[cfg_attr(all(), simple(length(max = 4)))]\n    code: String,\n    #[cfg_attr(unix, cfg_attr(all(), simple(range(min = 1))))]\n    count: i64,\n    #[cfg_attr(all(), serde(default))]\n    note: String,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(*property(&document, "code"), json!({ "type": "string" }));
+        assert_eq!(*property(&document, "count"), json!({ "type": "integer" }));
+        assert_gaps(&source, &[("`code`", "cfg_attr"), ("`count`", "cfg_attr")]);
+    }
+
+    #[test]
+    fn a_limit_on_a_member_it_cannot_apply_to_is_reported_and_left_out() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(range(min = 1))]\n    name: String,\n    #[simple(length(max = 5))]\n    count: i64,\n    #[simple(pattern = \"^A\", format = \"email\")]\n    on: bool,\n    #[simple(length(max = 5))]\n    counts: HashMap<String, i64>,\n    #[simple(pattern = \"^O\")]\n    status: Status,\n    #[simple(deprecated)]\n    #[serde(flatten)]\n    page: Paging,\n}}\n\nenum Status {{\n    Open,\n    Closed,\n}}\n\nstruct Paging {{\n    #[simple(range(min = 1))]\n    limit: i64,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(*property(&document, "name"), json!({ "type": "string" }));
+        assert_eq!(*property(&document, "count"), json!({ "type": "integer" }));
+        assert_eq!(*property(&document, "on"), json!({ "type": "boolean" }));
+        assert_eq!(
+            *property(&document, "counts"),
+            json!({ "additionalProperties": { "type": "integer" }, "type": "object" })
+        );
+        assert_eq!(
+            *property(&document, "status"),
+            json!({ "enum": ["Open", "Closed"], "type": "string" }),
+            "an enum is a string on the wire, and its values are already listed"
+        );
+        assert_eq!(
+            *property(&document, "limit"),
+            json!({ "minimum": 1, "type": "integer" }),
+            "a flattened type's own members keep what they wrote"
+        );
+        assert_gaps(
+            &source,
+            &[
+                ("`name`", "`range`"),
+                ("`count`", "`length`"),
+                ("`on`", "`pattern`"),
+                ("`on`", "`format`"),
+                ("`counts`", "`length`"),
+                ("`status`", "only the values its enum lists"),
+                ("`page`", "flattened"),
+            ],
+        );
+    }
+
+    /// NONE OF THESE IS REFUSED. The first three stand for a limit a later SDK
+    /// may add; the rest are forms today's SDK refuses when the action is
+    /// compiled, at the line that holds them. A refusal here would add nothing
+    /// to that, and would break a build that passes the day the SDK accepts
+    /// more than this step reads. So each is left out and reported.
+    #[test]
+    fn a_simple_attribute_this_step_cannot_read_is_reported_and_never_refused() {
+        // Each on a member it could apply to, so what is reported is that it
+        // was not read, and not that it does not apply.
+        for (written, ty, kind) in [
+            ("#[simple(multiple_of = 5)]", "i64", "integer"),
+            ("#[simple(exclusive(min = 1))]", "i64", "integer"),
+            ("#[simple(unique)]", "i64", "integer"),
+            ("#[simple]", "i64", "integer"),
+            ("#[simple = \"range\"]", "i64", "integer"),
+            ("#[simple(rnage(min = 1))]", "i64", "integer"),
+            ("#[simple(range = 5)]", "i64", "integer"),
+            ("#[simple(range(low = 1))]", "i64", "integer"),
+            ("#[simple(range(min = \"one\"))]", "i64", "integer"),
+            ("#[simple(range(min = 1, min = 2))]", "i64", "integer"),
+            ("#[simple(range(min = 1e400))]", "f64", "number"),
+            (
+                "#[simple(range(max = 340282366920938463463374607431768211455))]",
+                "u128",
+                "integer",
+            ),
+            ("#[simple(length(min = -1))]", "String", "string"),
+            ("#[simple(length(max = 1.5))]", "String", "string"),
+            ("#[simple(pattern)]", "String", "string"),
+            ("#[simple(pattern = 5)]", "String", "string"),
+            ("#[simple(format = true)]", "String", "string"),
+            ("#[simple(default)]", "i64", "integer"),
+            ("#[simple(default = b\"x\")]", "String", "string"),
+            ("#[simple(example = -\"x\")]", "String", "string"),
+            ("#[simple(deprecated = true)]", "i64", "integer"),
+        ] {
+            let source = format!("struct Payload {{\n    {written}\n    limit: {ty},\n}}\n{TOOL}");
+            let gaps = describe(&source).gaps;
+
+            assert_eq!(
+                *property(&json(&source), "limit"),
+                json!({ "type": kind }),
+                "{written}"
+            );
+            assert_eq!(gaps.len(), 1, "{written}: {gaps:?}");
+            assert!(
+                gaps[0].contains("`limit`") && gaps[0].contains("this build step reads"),
+                "{written}: {gaps:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_limit_is_written_beside_one_that_is_not_read() {
+        let source = format!(
+            "struct Payload {{\n    #[simple(multiple_of = 5, range(min = 1))]\n    #[simple(range(max = 9), deprecated)]\n    limit: i64,\n}}\n{TOOL}"
+        );
+
+        assert_eq!(
+            *property(&json(&source), "limit"),
+            json!({ "deprecated": true, "minimum": 1, "type": "integer" }),
+            "a limit written twice keeps the first"
+        );
+        assert_gaps(
+            &source,
+            &[("`limit`", "`multiple_of`"), ("`limit`", "`range`")],
+        );
+    }
+
+    #[test]
+    fn a_member_that_is_skipped_is_not_read_for_constraints() {
+        let source = format!(
+            "struct Payload {{\n    #[serde(skip)]\n    #[simple(rnage(min = 1))]\n    cached: i64,\n    kept: String,\n}}\n{TOOL}"
+        );
+        let document = json(&source);
+
+        assert_eq!(required(&document), vec!["kept".to_string()]);
+        assert_eq!(document["gaps"], json!([]));
     }
 }
