@@ -1,6 +1,11 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"maps"
 	"os"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
@@ -77,14 +82,17 @@ func TestRunBuild(t *testing.T) {
 		return build.LanguageTypeScript, nil
 	}
 	build.ParseExecutionEnvironmentFunc = func(parser, dir string) (string, error) { return "server", nil }
-	build.ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
+	build.ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) {
+		if strings.HasSuffix(actionDir, "noted") {
+			return "noted: `link` format \"uri\" is left out", nil
+		}
 		if strings.HasSuffix(actionDir, "refused") {
-			return &build.AnnotationRefusal{
+			return "", &build.AnnotationRefusal{
 				Refusal: `refused: @shortdesc is written with nothing after it`,
 			}
 		}
 
-		return nil
+		return "", nil
 	}
 	// === MOCKING END ===
 
@@ -95,6 +103,9 @@ func TestRunBuild(t *testing.T) {
 		buildAll bool
 		wantErr  bool
 		errCheck func(error) bool
+		// When set, the JSON document the run prints must carry exactly
+		// these warnings.
+		wantWarnings map[string]string
 	}{
 		{
 			name:     "build all success",
@@ -116,6 +127,22 @@ func TestRunBuild(t *testing.T) {
 			args:     []string{"myapp/action"},
 			buildAll: false,
 			wantErr:  false,
+		},
+		// A note from the metadata step reaches the author without changing
+		// the outcome: the build succeeds, and the note is in "warnings".
+		{
+			name:         "a metadata note is a warning under --json",
+			args:         []string{"myapp/noted"},
+			buildAll:     false,
+			wantErr:      false,
+			wantWarnings: map[string]string{"noted": "noted: `link` format \"uri\" is left out"},
+		},
+		{
+			name:         "a build with no notes has no warnings under --json",
+			args:         []string{"myapp/action"},
+			buildAll:     false,
+			wantErr:      false,
+			wantWarnings: map[string]string{},
 		},
 		{
 			name:     "build no args error",
@@ -166,20 +193,40 @@ func TestRunBuild(t *testing.T) {
 			// directory with nothing in it fails, and a case named "success"
 			// that builds nothing would prove nothing.
 			switch tt.name {
-			case "build target success":
+			case "build target success", "a build with no notes has no warnings under --json":
 				_ = os.MkdirAll("myapp/action/src", 0755)
 				_ = os.WriteFile("myapp/action/action.scl", []byte{}, 0644)
 				_ = os.WriteFile("myapp/action/src/index.ts", []byte("export {}\n"), 0644)
 			case "build all success":
 				_ = os.MkdirAll("apps/myapp/action", 0755)
 				_ = os.WriteFile("apps/myapp/action/action.scl", []byte{}, 0644)
+			case "a metadata note is a warning under --json":
+				_ = os.MkdirAll("myapp/noted/src", 0755)
+				_ = os.WriteFile("myapp/noted/action.scl", []byte{}, 0644)
+				_ = os.WriteFile("myapp/noted/src/index.ts", []byte("export {}\n"), 0644)
 			case "a refused annotation fails the build under --json":
 				_ = os.MkdirAll("myapp/refused", 0755)
 				_ = os.WriteFile("myapp/refused/action.scl", []byte{}, 0644)
 			}
 
 			// Execution
-			err := runBuild(fsx.OSFileSystem{}, tt.args)
+			var err error
+			stdout := captureStdout(t, func() { err = runBuild(fsx.OSFileSystem{}, tt.args) })
+
+			if tt.wantWarnings != nil {
+				var summary struct {
+					Warnings map[string]string `json:"warnings"`
+				}
+				if jsonErr := json.Unmarshal([]byte(stdout), &summary); jsonErr != nil {
+					t.Fatalf("output is not one JSON document: %v\n%s", jsonErr, stdout)
+				}
+				if summary.Warnings == nil {
+					t.Fatalf("output has no warnings member:\n%s", stdout)
+				}
+				if !maps.Equal(summary.Warnings, tt.wantWarnings) {
+					t.Errorf("warnings = %v, want %v", summary.Warnings, tt.wantWarnings)
+				}
+			}
 
 			// Verify results
 			if (err != nil) != tt.wantErr {
@@ -196,4 +243,65 @@ func TestRunBuild(t *testing.T) {
 
 	// Reset global state
 	buildAll = false
+}
+
+// captureStdout returns what run writes to the process's standard output.
+func captureStdout(t *testing.T, run func()) string {
+	t.Helper()
+
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to open a pipe: %v", err)
+	}
+
+	original := os.Stdout
+	os.Stdout = writer
+	defer func() { os.Stdout = original }()
+
+	captured := make(chan string)
+	go func() {
+		data, _ := io.ReadAll(reader)
+		captured <- string(data)
+	}()
+
+	run()
+	_ = writer.Close()
+
+	return <-captured
+}
+
+// Notes are written one action after another, in the order given, under the
+// action's name; nothing is written when no action has notes.
+func TestPrintBuildNotes(t *testing.T) {
+	tests := []struct {
+		name    string
+		results []buildResult
+		want    string
+	}{
+		{
+			name:    "no notes prints nothing",
+			results: []buildResult{{name: "a"}, {name: "b", err: errors.New("failed")}, {name: "s", isSpace: true}},
+			want:    "",
+		},
+		{
+			name: "notes from several actions stay grouped by action",
+			results: []buildResult{
+				{name: "first", notes: "first: one\nfirst: two"},
+				{name: "quiet"},
+				{name: "second", notes: "second: three"},
+			},
+			want: "\n⚠️  [Action] first:\n   first: one\n   first: two\n" +
+				"\n⚠️  [Action] second:\n   second: three\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			printBuildNotes(&out, tt.results)
+			if out.String() != tt.want {
+				t.Errorf("printed %q, want %q", out.String(), tt.want)
+			}
+		})
+	}
 }

@@ -95,7 +95,7 @@ func TestBuildActions_Concurrency(t *testing.T) {
 	}()
 
 	EnsureDependenciesFunc = func(dir string) error { return nil }
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error { return nil }
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) { return "", nil }
 	BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
@@ -163,11 +163,11 @@ func TestBuildAction_MetadataExtractionCalled(t *testing.T) {
 	var metadataFS fsx.FileSystem
 
 	EnsureDependenciesFunc = func(dir string) error { return nil }
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) {
 		metadataCallCount++
 		metadataActionDir = actionDir
 		metadataFS = fs
-		return nil
+		return "", nil
 	}
 	BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
@@ -249,9 +249,9 @@ func TestBuildAction_MetadataExtractionFailureStopsTheBuild(t *testing.T) {
 	var metadataCallCount, bundleCount, compileCount, optimizeCount int
 
 	EnsureDependenciesFunc = func(dir string) error { return nil }
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) {
 		metadataCallCount++
-		return metadataError
+		return "", metadataError
 	}
 	BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error {
 		bundleCount++
@@ -351,7 +351,7 @@ func TestBuildAction_MetadataExtractionProgressReporting(t *testing.T) {
 	}()
 
 	EnsureDependenciesFunc = func(dir string) error { return nil }
-	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error { return nil }
+	ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) { return "", nil }
 	BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
 	BundleAsyncFunc = func(dir, entry, out string) error { return nil }
 	CompileToWasmFunc = func(javy, js, plugin, out string) error { return nil }
@@ -467,11 +467,11 @@ func TestBuildAction_MetadataExtractionIntegration(t *testing.T) {
 			var capturedActionDir string
 
 			EnsureDependenciesFunc = func(dir string) error { return nil }
-			ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) error {
+			ExtractMetadataFunc = func(fs fsx.FileSystem, actionDir string) (string, error) {
 				metadataCallCount++
 				capturedFS = fs
 				capturedActionDir = actionDir
-				return tt.metadataError
+				return "", tt.metadataError
 			}
 			BundleJSFunc = func(dir, entry, out string, min bool, defs map[string]string) error { return nil }
 			BundleAsyncFunc = func(dir, entry, out string) error { return nil }

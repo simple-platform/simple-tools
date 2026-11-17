@@ -18,7 +18,7 @@ var (
 	EnsureJavyFunc                = EnsureJavy
 	EnsureWasmOptFunc             = EnsureWasmOpt
 	EnsureDependenciesFunc        = EnsureDependencies
-	ExtractMetadataFunc           = ExtractMetadata
+	ExtractMetadataFunc           = ExtractMetadataWithNotes
 	BundleJSFunc                  = BundleJS
 	BundleAsyncFunc               = BundleAsync
 	CompileToWasmFunc             = CompileToWasm
@@ -155,6 +155,10 @@ func (m *BuildManager) EnsureTools(onProgress ProgressReporter) error {
 type ActionBuildResult struct {
 	ActionName string
 	Error      error
+	// Notes is what the metadata step wrote to its error stream, such as a
+	// limit the action's description leaves out. Empty when it wrote nothing.
+	// Notes never make a build fail.
+	Notes string
 }
 
 func (m *BuildManager) BuildActions(ctx context.Context, actionDirs []string, onProgress ProgressReporter) []ActionBuildResult {
@@ -224,13 +228,23 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 		}
 	}
 
+	// Every language describes the action through this one call, and its notes
+	// are kept here so the result carries them whichever step comes after.
+	var notes string
+	describe := func() error {
+		var err error
+		notes, err = ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir)
+		return err
+	}
+
+	var result ActionBuildResult
 	switch lang {
 	case LanguageTypeScript:
-		return m.buildTypeScriptAction(actionDir, actionName, needsSync, needsAsync, report)
+		result = m.buildTypeScriptAction(actionDir, actionName, needsSync, needsAsync, describe, report)
 	case LanguageRust:
-		return m.buildRustAction(actionDir, actionName, needsSync, needsAsync, report)
+		result = m.buildRustAction(actionDir, actionName, needsSync, needsAsync, describe, report)
 	case LanguageGo:
-		return m.buildGoAction(actionDir, actionName, report)
+		result = m.buildGoAction(actionName, describe, report)
 	default:
 		// Every language the detector can answer with is named above, so this is
 		// reached only by one added to the detector and not to the build. It is
@@ -243,6 +257,9 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 			Error:      fmt.Errorf("this action is written in %s, and this build has no path for that language", lang),
 		}
 	}
+
+	result.Notes = notes
+	return result
 }
 
 // buildGoAction describes a Go action, and says where its module comes from.
@@ -277,21 +294,21 @@ func (m *BuildManager) BuildAction(ctx context.Context, actionDir string, onProg
 // leaves one waiting for an artifact that was never going to appear. What the
 // build did do is named in the same sentence, so the failure is not read as
 // nothing having happened.
-func (*BuildManager) buildGoAction(actionDir, actionName string, report func(string)) ActionBuildResult {
+func (*BuildManager) buildGoAction(actionName string, describe func() error, report func(string)) ActionBuildResult {
 	fail := func(err error) ActionBuildResult {
 		report("Failed")
 		return ActionBuildResult{ActionName: actionName, Error: err}
 	}
 
 	report("Extracting metadata...")
-	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
+	if err := describe(); err != nil {
 		return fail(err)
 	}
 
 	return fail(fmt.Errorf("this action is written in Go: its action.json was written here from its source, and its module was not, because this CLI does not compile Go — the platform compiles a Go action when the app is deployed"))
 }
 
-func (m *BuildManager) buildTypeScriptAction(actionDir, actionName string, needsSync, needsAsync bool, report func(string)) ActionBuildResult {
+func (m *BuildManager) buildTypeScriptAction(actionDir, actionName string, needsSync, needsAsync bool, describe func() error, report func(string)) ActionBuildResult {
 	// Install dependencies
 	report("Installing dependencies...")
 	if err := EnsureDependenciesFunc(actionDir); err != nil {
@@ -319,7 +336,7 @@ func (m *BuildManager) buildTypeScriptAction(actionDir, actionName string, needs
 	// step produces already names what could not be done, and a refusal is the
 	// exact sentence its author has to read to fix their source.
 	report("Extracting metadata...")
-	if err := ExtractMetadataFunc(fsx.OSFileSystem{}, actionDir); err != nil {
+	if err := describe(); err != nil {
 		report("Failed")
 		return ActionBuildResult{ActionName: actionName, Error: err}
 	}
