@@ -81,7 +81,7 @@
       "description": "Create an agent and its persona guidance",
       "args": [
         { "name": "app-id", "type": "string", "description": "Existing target app ID" },
-        { "name": "name", "type": "string", "description": "Agent name using lowercase letters, digits, and hyphens" },
+        { "name": "name", "type": "string", "description": "Agent name using lowercase letters and digits in groups joined by single hyphens, starting with a letter" },
         { "name": "display-name", "type": "string", "description": "Required human-readable name" }
       ],
       "flags": [
@@ -94,12 +94,12 @@
       "description": "Create agent-owned or people-only work with input and output shapes",
       "args": [
         { "name": "app-id", "type": "string", "description": "Existing target app ID" },
-        { "name": "name", "type": "string", "description": "Kind-of-work name; lowercase letters, digits, hyphens, or underscores" },
+        { "name": "name", "type": "string", "description": "Kind-of-work name using lowercase letters and digits in groups joined by single hyphens or underscores, starting with a letter" },
         { "name": "plural-name", "type": "string", "description": "Human-readable plural name" }
       ],
       "flags": [
         { "name": "--agent", "type": "string", "description": "Default agent; optional only when the app has exactly one agent" },
-        { "name": "--tools", "type": "string", "description": "Comma-separated platform tools or existing app actions" },
+        { "name": "--tools", "type": "string", "description": "Comma-separated platform tools or existing app actions; create an unknown tool with simple new tool without --task-type, then run this command again" },
         { "name": "--every", "type": "string", "description": "Wake interval in whole seconds, such as 90s, 30m, or 1h" },
         { "name": "--no-agent", "type": "boolean", "description": "Create work only people do; cannot be combined with --agent, --tools, or --every" },
         { "name": "--desc", "type": "string", "description": "Kind-of-work description" },
@@ -111,7 +111,7 @@
       "description": "Create a skill and link it to a kind of work, or add a missing link",
       "args": [
         { "name": "app-id", "type": "string", "description": "Existing target app ID" },
-        { "name": "name", "type": "string", "description": "Skill name using lowercase letters, digits, and hyphens" },
+        { "name": "name", "type": "string", "description": "Skill name using lowercase letters and digits in groups joined by single hyphens, starting with a letter" },
         { "name": "title", "type": "string", "optional": true, "description": "Required when creating a new skill; omit for an existing skill" }
       ],
       "flags": [
@@ -125,7 +125,7 @@
       "description": "Create plain reference knowledge and link it to a kind of work, or add a missing link",
       "args": [
         { "name": "app-id", "type": "string", "description": "Existing target app ID" },
-        { "name": "name", "type": "string", "description": "Knowledge name using lowercase letters, digits, and hyphens; cannot start with skill-, tool-, or playbook-" },
+        { "name": "name", "type": "string", "description": "Knowledge name using lowercase letters and digits in groups joined by single hyphens, starting with a letter; cannot start with skill-, tool-, or playbook-" },
         { "name": "title", "type": "string", "optional": true, "description": "Required for a new body; omit for an existing body" }
       ],
       "flags": [

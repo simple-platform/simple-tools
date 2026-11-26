@@ -63,6 +63,11 @@ Use these commands to build and deploy your work.
 | `simple new action <app> <name> "<Display name>" --lang ts --scope <org>`     | Scaffold a new TypeScript action                               |
 | `simple new action <app> <name> "<Display name>" --lang rust`   | Scaffold a new Rust action (a cargo crate; takes no `--scope`) |
 | `simple new space <app> <name> <display_name>` | Scaffold a new React space (custom UI)                         |
+| `simple new agent <app> <name> "<Display name>"` | Create an agent and its persona                              |
+| `simple new task-type <app> <name> "<Plural name>" [--no-agent]` | Create a kind of work for an agent or people                 |
+| `simple new skill <app> <name> ["<Title>"] --task-type <task-type>` | Add a skill to a kind of work                                |
+| `simple new knowledge <app> <name> ["<Title>"] --task-type <task-type>` | Add reference knowledge to a kind of work                   |
+| `simple new tool <app> <name> ["<Display name>"] [--task-type <task-type>]` | Set up a tool and optionally link it to a kind of work       |
 | `simple build <app>/<action>`                  | Build a single action                                          |
 | `simple build <app>`                           | Build all actions and spaces in an app in parallel             |
 | `simple build --all`                           | Build all actions and spaces in all apps in parallel           |
@@ -79,7 +84,7 @@ Use these commands to build and deploy your work.
 >
 > - Schema/configuration: `data-modeling`, `data-seeding`, `configure-metadata`.
 > - Actions/Behaviors: `develop-logic`, `sdk-reference`, `testing`.
-> - Agents: `build-agents` and `.simple/context/13-agents.md`.
+> - Agents: `.agent/skills/build-agents/SKILL.md` and `.simple/context/13-agents.md`.
 > - Queries: `query-data`; expression details: `scl-expressions`.
 > - UI: `create-view`; custom Spaces: `build-spaces` + `space-frontend-design`;
 >   record composition: `record-space-builder`.
@@ -172,7 +177,8 @@ Consult these documents for detailed syntax and behavior.
 ### 🤖 Recipe: Create an Agent
 
 - **Ref:** `.agent/workflows/create-agent.md`
-- Create an agent, its kinds of work, tools, playbooks, and skills.
+- **Commands:** `simple new agent`, `simple new task-type` (or `--no-agent`), `simple new tool` (optional `--task-type`), `simple new skill`, and `simple new knowledge`.
+- Follow the workflow to complete the generated guidance and shape files.
 
 ### 🚀 Recipe: Deploy Application
 

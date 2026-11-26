@@ -13,9 +13,9 @@ Usage: `simple new agent <app> <name> "<Display name>" [--desc <description>] [-
 Creates an agent, its persona file, its knowledge record, and its agent record.
 
 - `<app>`: Existing app ID.
-- `<name>`: Lowercase letters, digits, or hyphens, starting with a letter.
-- `"<Display name>"`: Required, one line with no double quote, up to 100 characters.
-- `--desc <description>`: Optional, one line with no double quote, up to 1,000 characters.
+- `<name>`: Lowercase letters and digits in groups joined by single hyphens, starting with a letter.
+- `"<Display name>"`: Required, one line with no double quote or backslash, up to 100 characters.
+- `--desc <description>`: Optional, one line with no double quote or backslash, up to 1,000 characters.
 - `--json`: Use the root JSON output format.
 
 ### `simple new task-type`
@@ -25,13 +25,13 @@ Usage: `simple new task-type <app> <name> "<Plural name>" [--agent <agent-name>]
 Creates a kind of work, its shape file, and its states file if it cannot reuse one. By default, it also creates the playbook, knowledge record, default-agent link, carried links to the persona and playbook, and links to requested tools.
 
 - `<app>`: Existing app ID.
-- `<name>`: Lowercase letters, digits, hyphens, or underscores, starting with a letter. The record keeps the name as typed; hyphens and underscores count as the same name when looking it up.
-- `"<Plural name>"`: Required, one line with no double quote, up to 100 characters.
+- `<name>`: Lowercase letters and digits in groups joined by single hyphens or underscores, starting with a letter. The record keeps the name as typed; hyphens and underscores count as the same name when looking it up.
+- `"<Plural name>"`: Required, one line with no double quote or backslash, up to 100 characters.
 - `--agent <agent-name>`: Set the default agent. You may omit it only when the app has exactly one agent.
-- `--tools <a,b>`: Comma-separated platform tools or existing app actions. If a tool is unknown, add it with `simple new tool` first.
+- `--tools <a,b>`: Comma-separated platform tools or existing app actions. If a tool is unknown, create it with `simple new tool` without `--task-type`, then run this command again.
 - `--every <duration>`: Optional interval, such as `90s`, `30m`, or `1h`. It must be whole seconds and at least one second. Interval work needs a tool that reports changes since its last turn.
 - `--no-agent`: Create work that only people do. This writes the kind-of-work record, shape file, and states file. It does not create a playbook, agent link, or carried links. Do not combine it with `--agent`, `--tools`, or `--every`.
-- `--desc <description>`: Optional, one line with no double quote, up to 1,000 characters.
+- `--desc <description>`: Optional, one line with no double quote or backslash, up to 1,000 characters.
 - `--json`: Use the root JSON output format.
 
 If the kind of work already exists, the command refuses and points to `simple new skill` or `simple new tool` for additions.
@@ -43,10 +43,10 @@ Usage: `simple new skill <app> <name> ["<Title>"] --task-type <task-type-name> [
 Creates a skill and links it to a kind of work, or adds a missing link for an existing skill.
 
 - `<app>`: Existing app ID.
-- `<name>`: Lowercase letters, digits, or hyphens, starting with a letter.
-- `"<Title>"`: Required for a new skill; omit it to link an existing skill. One line with no double quote, up to 255 characters.
+- `<name>`: Lowercase letters and digits in groups joined by single hyphens, starting with a letter.
+- `"<Title>"`: Required for a new skill; omit it to link an existing skill. One line with no double quote or backslash, up to 255 characters.
 - `--task-type <task-type-name>`: Required kind of work to receive the skill.
-- `--desc <description>`: Optional, one line with no double quote, up to 1,000 characters. For a new skill, this becomes its Purpose paragraph.
+- `--desc <description>`: Optional, one line with no double quote or backslash, up to 1,000 characters. For a new skill, this becomes its Purpose paragraph.
 - `--json`: Use the root JSON output format.
 
 A new skill creates `knowledge/skill-<name>.md`, its knowledge record, and a link at the next position. If the skill exists, only a missing link is added. If both exist, the command succeeds and reports that there was nothing to add.
@@ -58,8 +58,8 @@ Usage: `simple new knowledge <app> <name> ["<Title>"] --task-type <task-type-nam
 Creates reference knowledge and links it to a kind of work, or adds a missing link for an existing body.
 
 - `<app>`: Existing app ID.
-- `<name>`: Lowercase letters, digits, or hyphens, starting with a letter. Do not start with `skill-`, `tool-`, or `playbook-`; those prefixes are for other file types.
-- `"<Title>"`: Required for a new body; omit it to link an existing body. One line with no double quote, up to 255 characters.
+- `<name>`: Lowercase letters and digits in groups joined by single hyphens, starting with a letter. Do not start with `skill-`, `tool-`, or `playbook-`; those prefixes are for other file types.
+- `"<Title>"`: Required for a new body; omit it to link an existing body. One line with no double quote or backslash, up to 255 characters.
 - `--task-type <task-type-name>`: Required kind of work to receive this material.
 - `--json`: Use the root JSON output format.
 
@@ -73,12 +73,12 @@ Sets up a tool and its lesson. The optional `--task-type` links it to a kind of 
 
 - `<app>`: Existing app ID.
 - `<name>`: Platform tool or app action name. An unknown name can be created as a new app action.
-- `"<Display name>"`: Optional for a known platform tool or existing action. Required to create a new action. One line with no double quote, up to 100 characters.
+- `"<Display name>"`: Optional for a known platform tool or existing action. Required to create a new action. One line with no double quote or backslash, up to 100 characters.
 - `--task-type <task-type-name>`: Optional kind of work to receive the tool. Required for a platform tool.
 - `--lang ts|rust`: Language for a new action. Defaults to TypeScript.
 - `--scope <org>`: TypeScript package scope; required for a new TypeScript action. Rust does not use a scope.
 - `--env <env>`: New action environment: `server`, `client`, or `both`. Defaults to `server`.
-- `--desc <description>`: Optional, one line with no double quote, up to 1,000 characters.
+- `--desc <description>`: Optional, one line with no double quote or backslash, up to 1,000 characters.
 - `--json`: Use the root JSON output format.
 
 A platform tool gets a lookup and a kind-of-work link. An existing app action gets a lesson if it has none, and a kind-of-work link when `--task-type` is set. A new action uses the regular action scaffold, is marked as a tool, and gets a lesson. If the name is neither a platform tool nor an app action and no display name was given, the command refuses and shows the command to create it. When there is nothing left to add, it succeeds and says so.
@@ -87,7 +87,7 @@ A platform tool gets a lookup and a kind-of-work link. An existing app action ge
 
 Text output gives a success line, files waiting for the developer's words, and a reminder to run `simple build <app>`. JSON output has `status`, `app_id`, `name`, `created`, `records`, and `fill_in`. Paths are relative to the repository root. The three lists are empty arrays when empty, never `null`.
 
-Names use lowercase naming rules. Display names, plural names, titles, and descriptions are one line with no double quote and must fit their limits. Record keys must be unique across the app because a key is looked up without its table name.
+Names use lowercase letters and digits in groups joined by single hyphens, starting with a letter; kind-of-work names may also use single underscores between groups. Display names, plural names, titles, and descriptions are one line with no double quote or backslash and must fit their limits. Record keys must be unique across the app because a key is looked up without its table name.
 
 ## Design the work for the person
 
