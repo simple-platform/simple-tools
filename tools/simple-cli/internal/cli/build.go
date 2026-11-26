@@ -22,14 +22,14 @@ import (
 )
 
 var (
-	buildAll           bool
-	concurrency        int
-	checkBuildAgents   = agents.Check
-	checkBuildAgentsAt = agents.CheckAt
-	loadAgentApp       = agents.Load
-	findBuildActions   = build.FindActions
-	findBuildSpaces    = build.FindSpaces
-	runAllBuildTargets = runBuildAll
+	buildAll                  bool
+	concurrency               int
+	checkBuildAgents          = agents.Check
+	checkBuildAgentsAt        = agents.CheckAt
+	hasBuildAgentDeclarations = agents.HasAgentDeclarations
+	findBuildActions          = build.FindActions
+	findBuildSpaces           = build.FindSpaces
+	runAllBuildTargets        = runBuildAll
 )
 
 type buildAgentTarget struct {
@@ -320,11 +320,11 @@ func appHasAgentDeclarations(fsys fsx.FileSystem, appID string) (bool, error) {
 	} else if err != nil {
 		return false, fmt.Errorf("failed to find records for app %q: %w", appID, err)
 	}
-	app, err := loadAgentApp(fsys, ".", appID)
+	declared, err := hasBuildAgentDeclarations(fsys, ".", appID)
 	if err != nil {
 		return false, fmt.Errorf("failed to read agent declarations for app %q: %w", appID, err)
 	}
-	return len(app.AgentRecords) > 0 || len(app.TaskTypes) > 0, nil
+	return declared, nil
 }
 
 func checkAppAgents(fsys fsx.FileSystem, appID string) ([]agents.Problem, error) {

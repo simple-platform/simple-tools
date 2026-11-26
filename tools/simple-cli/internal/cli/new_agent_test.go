@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -610,4 +612,81 @@ func resetNewFlags(cmd *cobra.Command) {
 		_ = cmd.Flags().Set("env", "server")
 	}
 	cmd.Flags().VisitAll(func(flag *pflag.Flag) { flag.Changed = false })
+}
+
+func TestNewTaskTypeWakeInterval(t *testing.T) {
+	tests := []struct {
+		name       string
+		args       []string
+		wantRecord string
+	}{
+		{
+			name: "without every",
+			args: []string{"new", "task-type", "com.acme.shop", "returns", "Returns"},
+			wantRecord: "set dev_simple_system.task_type, task_type_returns {\n" +
+				"  name \"returns\"\n" +
+				"  plural_name \"Returns\"\n" +
+				"  playbook_id `$app_record(\"playbook_returns\")`\n" +
+				"  schema `$file('records/task-types/returns.json') |> $json()`\n" +
+				"  states `$file('records/task-types/states.json') |> $json()`\n" +
+				"}",
+		},
+		{
+			name: "with every 30m",
+			args: []string{"new", "task-type", "com.acme.shop", "order-watch", "Order watches", "--every", "30m"},
+			wantRecord: "set dev_simple_system.task_type, task_type_order_watch {\n" +
+				"  name \"order-watch\"\n" +
+				"  plural_name \"Order watches\"\n" +
+				"  playbook_id `$app_record(\"playbook_order_watch\")`\n" +
+				"  schema `$file('records/task-types/order_watch.json') |> $json()`\n" +
+				"  states `$file('records/task-types/states.json') |> $json()`\n" +
+				"  wake_interval_seconds 1800\n" +
+				"}",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			oldWd, _ := os.Getwd()
+			_ = os.Chdir(tmpDir)
+			oldRoot, oldFS := agentCommandRoot, agentCommandFS
+			oldCreateTask := createTaskTypeWiring
+			t.Cleanup(func() {
+				_ = os.Chdir(oldWd)
+				agentCommandRoot, agentCommandFS = oldRoot, oldFS
+				createTaskTypeWiring = oldCreateTask
+				resetNewFlags(newTaskTypeCmd)
+			})
+			agentCommandRoot = os.Getwd
+			agentCommandFS = fsx.OSFileSystem{}
+			createTaskTypeWiring = scaffold.CreateTaskType
+			resetNewFlags(newTaskTypeCmd)
+
+			if err := scaffold.CreateAppStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, tmpDir, "com.acme.shop", "Shop", "Example app"); err != nil {
+				t.Fatalf("CreateAppStructure failed: %v", err)
+			}
+			if _, err := scaffold.CreateAgent(fsx.OSFileSystem{}, scaffold.TemplatesFS, tmpDir, scaffold.AgentConfig{
+				AppID: "com.acme.shop", Name: "support", DisplayName: "Support Agent",
+			}); err != nil {
+				t.Fatalf("CreateAgent failed: %v", err)
+			}
+
+			if _, _, err := invokeCmd(tt.args...); err != nil {
+				t.Fatalf("command %v failed: %v", tt.args, err)
+			}
+
+			recordsPath := filepath.Join(tmpDir, "apps", "com.acme.shop", "records", "71_agents.scl")
+			contentBytes, err := os.ReadFile(recordsPath)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", recordsPath, err)
+			}
+			content := string(contentBytes)
+			if !strings.Contains(content, tt.wantRecord) {
+				t.Fatalf("records file does not contain exact record text:\ngot:\n%s\nwant:\n%s", content, tt.wantRecord)
+			}
+			if strings.Contains(tt.name, "without every") && strings.Contains(content, "wake_interval_seconds") {
+				t.Fatalf("record unexpectedly contains wake_interval_seconds: %s", content)
+			}
+		})
+	}
 }

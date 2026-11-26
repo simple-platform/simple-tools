@@ -220,6 +220,38 @@ func TestRunDeployWithNoAgentProblemsKeepsOutput(t *testing.T) {
 	}
 }
 
+func TestDeployAllowsUnrelatedUnparseableRecordsWithoutAgentsAndKeepsMarkerCheck(t *testing.T) {
+	oldCheck := checkBuildAgents
+	defer func() { checkBuildAgents = oldCheck }()
+	checkBuildAgents = agents.Check
+	tests := []struct {
+		name    string
+		marker  bool
+		wantErr string
+	}{
+		{name: "unrelated malformed record deploys"},
+		{name: "action marker still blocks deploy", marker: true, wantErr: "1 agent problems"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeployFixture()
+				f.versioner.id = "com.acme.crm"
+				fsys := newAgentCheckFS(tt.marker)
+				opts := deployOptions{appPath: "apps/com.acme.crm", env: "dev", dryRun: true, mode: progressPlain, fsys: fsys}
+				var out bytes.Buffer
+				err := runDeployWith(context.Background(), &out, f.deps(), opts)
+				if (err != nil) != (tt.wantErr != "") || err != nil && !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("runDeployWith() error = %v, want containing %q", err, tt.wantErr)
+				}
+				if tt.marker && !strings.Contains(out.String(), "apps/com.acme.crm/actions/prepare/src/index.ts:1") {
+					t.Errorf("deploy output omitted the action marker location: %s", out.String())
+				}
+			})
+		})
+	}
+}
+
 func TestRunDeployChecksTheSuppliedAppFolder(t *testing.T) {
 	originalCanonical, originalAt := checkBuildAgents, checkBuildAgentsAt
 	defer func() { checkBuildAgents, checkBuildAgentsAt = originalCanonical, originalAt }()

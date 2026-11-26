@@ -110,7 +110,7 @@ func runNewTaskType(cmd *cobra.Command, args []string) error {
 	if noAgent && (cmd.Flags().Changed("agent") || cmd.Flags().Changed("tools") || cmd.Flags().Changed("every")) {
 		return fmt.Errorf("kind of work %q cannot use --no-agent with --agent, --tools, or --every; remove those flags", name)
 	}
-	wakeSeconds := int64(3600)
+	wakeSeconds := int64(0)
 	if cmd.Flags().Changed("every") {
 		parsedSeconds, parseErr := parseNewWakeInterval(every)
 		if parseErr != nil {

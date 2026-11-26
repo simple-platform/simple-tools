@@ -213,11 +213,15 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 	}
 	files = append(files, plannedFile{path: shapePath, content: shape})
 	files = append(files, plannedFile{path: statesPath, content: states})
+	wakeInterval := ""
+	if cfg.WakeIntervalSeconds > 0 {
+		wakeInterval = strconv.FormatInt(cfg.WakeIntervalSeconds, 10)
+	}
 	data := map[string]string{
 		"Key": taskKey, "Name": cfg.Name, "PluralName": cfg.PluralName, "Description": cfg.Description,
 		"PlaybookKey": playbookKey, "ShapePath": "records/task-types/" + nameKey + ".json",
 		"StatesPath":          filepath.ToSlash(strings.TrimPrefix(filepath.Clean(statesPath), filepath.Clean(appDir)+string(filepath.Separator))),
-		"WakeIntervalSeconds": strconv.FormatInt(defaultWakeInterval(cfg.WakeIntervalSeconds), 10),
+		"WakeIntervalSeconds": wakeInterval,
 	}
 	taskRecord, err := renderAgentTemplate(tplFS, "templates/ai-agent/task-type.scl", data)
 	if err != nil {
@@ -259,7 +263,16 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 		)
 	}
 	for _, tool := range validTools {
-		if !tool.OwnAction && !app.HasLookup(filepath.Join(appDir, "records", "72_agent_links.scl"), "platform_tool_"+agents.Snake(tool.Name)) {
+		if tool.OwnAction {
+			continue
+		}
+		lookupFile := filepath.Join(appDir, "records", "72_agent_links.scl")
+		lookupName := "platform_tool_" + agents.Snake(tool.Name)
+		lookup, found := findPlatformToolLookup(app, lookupFile, lookupName)
+		if err := checkPlatformToolLookup(tool.Name, lookupName, lookup, found); err != nil {
+			return WiringResult{}, err
+		}
+		if !found {
 			lookupText, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/platform_tool_lookup.scl", map[string]string{"Name": tool.Name, "VarName": agents.Snake(tool.Name)})
 			if renderErr != nil {
 				return WiringResult{}, renderErr
@@ -323,7 +336,7 @@ func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 		}
 	}
 	if !needsKnowledge && !needsLink {
-		return WiringResult{Created: []string{}, Records: []string{}, FillIn: []string{}, NothingToAdd: true}, nil
+		return resultWithReusedBodies(fsys, repoRoot, appDir, knowledge)
 	}
 	files := make([]plannedFile, 0, 1)
 	adds := make([]recordAddition, 0, 2)
@@ -404,7 +417,7 @@ func CreateKnowledge(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string,
 		}
 	}
 	if exists && !needsLink {
-		return WiringResult{Created: []string{}, Records: []string{}, FillIn: []string{}, NothingToAdd: true}, nil
+		return resultWithReusedBodies(fsys, repoRoot, appDir, knowledge)
 	}
 	files := make([]plannedFile, 0, 1)
 	adds := make([]recordAddition, 0, 2)
@@ -496,12 +509,10 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 	lookupFile := filepath.Join(appDir, "records", "72_agent_links.scl")
 	lookupName := "platform_tool_" + agents.Snake(cfg.Name)
 	lookup, hasLookup := findPlatformToolLookup(app, lookupFile, lookupName)
-	if platform && needsLink && hasLookup && (lookup.AppID != agents.PlatformAppID || lookup.Name != cfg.Name) {
-		target := "another tool"
-		if lookup.AppID != "" && lookup.Name != "" {
-			target = lookup.AppID + "/" + lookup.Name
+	if platform && needsLink {
+		if err := checkPlatformToolLookup(cfg.Name, lookupName, lookup, hasLookup); err != nil {
+			return WiringResult{}, err
 		}
-		return WiringResult{}, fmt.Errorf("tool %q cannot use variable %q because it already looks up %s at %s:%d; change that lookup or choose a different variable name", cfg.Name, lookupName, target, lookup.File, lookup.Line)
 	}
 	needsLookup := platform && needsLink && !hasLookup
 	if needsLink {
@@ -528,7 +539,7 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 		}
 	}
 	if !needsLink && !needsLesson && !needsLookup && !newAction {
-		return WiringResult{Created: []string{}, Records: []string{}, FillIn: []string{}, NothingToAdd: true}, nil
+		return resultWithReusedBodies(fsys, repoRoot, appDir, lesson)
 	}
 	files := make([]plannedFile, 0, 1)
 	adds := make([]recordAddition, 0, 4)
@@ -883,13 +894,6 @@ func findingError(file string, finding structure.Finding) error {
 	return fmt.Errorf("%s:%d: %s", file, finding.Line, finding.Rule)
 }
 
-func defaultWakeInterval(seconds int64) int64 {
-	if seconds == 0 {
-		return 3600
-	}
-	return seconds
-}
-
 func prepareRecords(fsys fsx.FileSystem, appDir string, additions []recordAddition) ([]plannedRecords, error) {
 	groups := make(map[string][]recordAddition)
 	order := make([]string, 0)
@@ -981,14 +985,24 @@ func executePlan(fsys fsx.FileSystem, repoRoot string, files []plannedFile, reco
 	}
 
 	written := make([]plannedWrite, 0, len(operations))
+	createdDirs := make(map[string]struct{})
 	for _, operation := range operations {
+		missingDirs, err := missingDirectories(fsys, filepath.Dir(operation.path))
+		if err != nil {
+			cause := fmt.Errorf("failed to inspect directory for %s: %w", operation.path, err)
+			return WiringResult{}, rollbackPlan(fsys, repoRoot, written, createdDirs, cause)
+		}
 		if err := fsys.MkdirAll(filepath.Dir(operation.path), fsx.DirPerm); err != nil {
 			cause := fmt.Errorf("failed to create directory for %s: %w", operation.path, err)
-			return WiringResult{}, rollbackPlan(fsys, written, cause)
+			trackCreatedDirectories(fsys, missingDirs, createdDirs)
+			return WiringResult{}, rollbackPlan(fsys, repoRoot, written, createdDirs, cause)
+		}
+		for _, dir := range missingDirs {
+			createdDirs[dir] = struct{}{}
 		}
 		if err := fsys.WriteFile(operation.path, operation.content, fsx.FilePerm); err != nil {
 			cause := fmt.Errorf("failed to write %s: %w", operation.path, err)
-			return WiringResult{}, rollbackPlan(fsys, append(written, operation), cause)
+			return WiringResult{}, rollbackPlan(fsys, repoRoot, append(written, operation), createdDirs, cause)
 		}
 		written = append(written, operation)
 	}
@@ -1025,8 +1039,9 @@ func readExistingFile(fsys fsx.FileSystem, path string) ([]byte, bool, error) {
 	return content, true, nil
 }
 
-func rollbackPlan(fsys fsx.FileSystem, written []plannedWrite, cause error) error {
-	var rollbackFailures []string
+func rollbackPlan(fsys fsx.FileSystem, repoRoot string, written []plannedWrite, createdDirs map[string]struct{}, cause error) error {
+	var restoreFailures []string
+	var cleanupFailures []string
 	for i := len(written) - 1; i >= 0; i-- {
 		operation := written[i]
 		var err error
@@ -1036,13 +1051,116 @@ func rollbackPlan(fsys fsx.FileSystem, written []plannedWrite, cause error) erro
 			err = fsys.Remove(operation.path)
 		}
 		if err != nil {
-			rollbackFailures = append(rollbackFailures, fmt.Sprintf("%s: %v", operation.path, err))
+			path := relativeToRoot(repoRoot, operation.path)
+			if operation.existed {
+				restoreFailures = append(restoreFailures, fmt.Sprintf("%s: %v", path, err))
+			} else {
+				cleanupFailures = append(cleanupFailures, fmt.Sprintf("%s: %v", path, err))
+			}
 		}
 	}
-	if len(rollbackFailures) > 0 {
-		return fmt.Errorf("%w; rollback also failed for %s", cause, strings.Join(rollbackFailures, ", "))
+	directories := make([]string, 0, len(createdDirs))
+	for dir := range createdDirs {
+		directories = append(directories, dir)
+	}
+	sort.Slice(directories, func(i, j int) bool {
+		depthI, depthJ := pathDepth(directories[i]), pathDepth(directories[j])
+		if depthI == depthJ {
+			return directories[i] < directories[j]
+		}
+		return depthI > depthJ
+	})
+	for _, dir := range directories {
+		if err := fsys.Remove(dir); err != nil {
+			cleanupFailures = append(cleanupFailures, fmt.Sprintf("directory %s: %v", relativeToRoot(repoRoot, dir), err))
+		}
+	}
+	if len(restoreFailures) > 0 {
+		paths := make([]string, 0, len(restoreFailures))
+		for _, failure := range restoreFailures {
+			paths = append(paths, strings.SplitN(failure, ": ", 2)[0])
+		}
+		sort.Strings(paths)
+		if len(cleanupFailures) > 0 {
+			return fmt.Errorf("%w; could not restore %s; restore them from version control with `git checkout -- %s`; rollback cleanup also failed for %s",
+				cause, strings.Join(restoreFailures, ", "), strings.Join(paths, " "), strings.Join(cleanupFailures, ", "))
+		}
+		return fmt.Errorf("%w; could not restore %s; restore them from version control with `git checkout -- %s`",
+			cause, strings.Join(restoreFailures, ", "), strings.Join(paths, " "))
+	}
+	if len(cleanupFailures) > 0 {
+		return fmt.Errorf("%w; rollback cleanup failed for %s", cause, strings.Join(cleanupFailures, ", "))
 	}
 	return cause
+}
+
+func missingDirectories(fsys fsx.FileSystem, target string) ([]string, error) {
+	var missing []string
+	for current := filepath.Clean(target); ; current = filepath.Dir(current) {
+		_, err := fsys.Stat(current)
+		if err == nil {
+			break
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	return missing, nil
+}
+
+func trackCreatedDirectories(fsys fsx.FileSystem, candidates []string, created map[string]struct{}) {
+	for _, dir := range candidates {
+		if _, err := fsys.Stat(dir); err == nil {
+			created[dir] = struct{}{}
+		}
+	}
+}
+
+func pathDepth(path string) int {
+	depth := 0
+	for current := filepath.Clean(path); current != filepath.Dir(current); current = filepath.Dir(current) {
+		depth++
+	}
+	return depth
+}
+
+func checkPlatformToolLookup(name, variable string, lookup agents.LookupInfo, exists bool) error {
+	if !exists || lookup.AppID == agents.PlatformAppID && lookup.Name == name {
+		return nil
+	}
+	target := "another tool"
+	if lookup.AppID != "" && lookup.Name != "" {
+		target = lookup.AppID + "/" + lookup.Name
+	}
+	return fmt.Errorf("tool %q cannot use variable %q because it already looks up %s at %s:%d; change that lookup or choose a different variable name", name, variable, target, lookup.File, lookup.Line)
+}
+
+func resultWithReusedBodies(fsys fsx.FileSystem, repoRoot, appDir string, bodies ...*agents.Knowledge) (WiringResult, error) {
+	fillIn := make(map[string]struct{})
+	for _, body := range bodies {
+		if body == nil || body.Body.Path == "" {
+			continue
+		}
+		path := filepath.Join(appDir, filepath.FromSlash(body.Body.Path))
+		content, exists, err := readExistingFile(fsys, path)
+		if err != nil {
+			return WiringResult{}, fmt.Errorf("failed to check reused body %s: %w", body.Body.Path, err)
+		}
+		if exists && bytes.Contains(content, []byte(agents.Marker)) {
+			fillIn[relativeToRoot(repoRoot, path)] = struct{}{}
+		}
+	}
+	paths := make([]string, 0, len(fillIn))
+	for path := range fillIn {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return WiringResult{Created: []string{}, Records: []string{}, FillIn: paths, NothingToAdd: true}, nil
 }
 
 func relativeToRoot(root, path string) string {

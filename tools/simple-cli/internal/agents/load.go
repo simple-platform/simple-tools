@@ -43,15 +43,17 @@ type parsedBlock struct {
 }
 
 var (
-	setLine        = regexp.MustCompile(`^\s*set\s+([^,\s]+)\s*,\s*([^\s{]+)`)
-	varLine        = regexp.MustCompile(`^\s*var\s+([^\s{]+)`)
-	appRecordExpr  = regexp.MustCompile(`^\s*\$app_record\(\s*["']([^"']+)["']\s*\)\s*$`)
-	varExpr        = regexp.MustCompile(`^\s*\$var\(\s*["']([^"']+)["']\s*\)\s*\|>\s*\$jq\(\s*["'](.*)["']\s*\)\s*$`)
-	fileExpr       = regexp.MustCompile(`^\s*\$file\(\s*["']([^"']+)["']\s*\)\s*$`)
-	jsonFileExpr   = regexp.MustCompile(`^\s*\$file\(\s*["']([^"']+)["']\s*\)\s*\|>\s*\$json\(\s*\)\s*$`)
-	appIDExpr      = regexp.MustCompile(`application_id\s*:\s*\{\s*_eq\s*:\s*["']([^"']+)["']`)
-	nameExpr       = regexp.MustCompile(`name\s*:\s*\{\s*_eq\s*:\s*["']([^"']+)["']`)
-	selectNameExpr = regexp.MustCompile(`select\s*\(\s*\.name\s*==\s*["']([^"']+)["']\s*\)`)
+	setLine         = regexp.MustCompile(`^\s*set\s+([^,\s]+)\s*,\s*([^\s{]+)`)
+	agentDeclLine   = regexp.MustCompile(`(?m)^\s*set\s+(?:"(?:dev_simple_system\.)?(?:agent|task_type)"|(?:dev_simple_system\.)?(?:agent|task_type))\s*,`)
+	agentRecordLine = regexp.MustCompile(`(?m)^\s*set\s+(?:"(?:dev_simple_system\.)?(?:agent|task_type|agent_task_type|task_type_skill|task_type_tool|logic_skill)"|(?:dev_simple_system\.)?(?:agent|task_type|agent_task_type|task_type_skill|task_type_tool|logic_skill))\s*,`)
+	varLine         = regexp.MustCompile(`^\s*var\s+([^\s{]+)`)
+	appRecordExpr   = regexp.MustCompile(`^\s*\$app_record\(\s*["']([^"']+)["']\s*\)\s*$`)
+	varExpr         = regexp.MustCompile(`^\s*\$var\(\s*["']([^"']+)["']\s*\)\s*\|>\s*\$jq\(\s*["'](.*)["']\s*\)\s*$`)
+	fileExpr        = regexp.MustCompile(`^\s*\$file\(\s*["']([^"']+)["']\s*\)\s*$`)
+	jsonFileExpr    = regexp.MustCompile(`^\s*\$file\(\s*["']([^"']+)["']\s*\)\s*\|>\s*\$json\(\s*\)\s*$`)
+	appIDExpr       = regexp.MustCompile(`application_id\s*:\s*\{\s*_eq\s*:\s*["']([^"']+)["']`)
+	nameExpr        = regexp.MustCompile(`name\s*:\s*\{\s*_eq\s*:\s*["']([^"']+)["']`)
+	selectNameExpr  = regexp.MustCompile(`select\s*\(\s*\.name\s*==\s*["']([^"']+)["']\s*\)`)
 )
 
 func Load(fsys fsx.FileSystem, repoRoot, appID string) (*App, error) {
@@ -73,6 +75,42 @@ func LoadAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, error) {
 		appDir = filepath.Join(repoRoot, filepath.FromSlash(appDir))
 	}
 	return loadFromDir(fsys, repoRoot, appID, filepath.Clean(appDir))
+}
+
+// HasAgentDeclarations finds agent and kind-of-work records without invoking
+// the parser, so unrelated record syntax cannot block an app with no agent work.
+func HasAgentDeclarations(fsys fsx.FileSystem, repoRoot, appID string) (bool, error) {
+	repoRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return false, fmt.Errorf("failed to resolve repository root: %w", err)
+	}
+	appDir := filepath.Join(repoRoot, "apps", filepath.FromSlash(appID))
+	return hasAgentDeclarationsAt(fsys, repoRoot, appID, appDir)
+}
+
+func hasAgentDeclarationsAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) (bool, error) {
+	return recordTextMatches(fsys, repoRoot, appID, appDir, agentDeclLine)
+}
+
+func hasAgentRelatedRecordsAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) (bool, error) {
+	return recordTextMatches(fsys, repoRoot, appID, appDir, agentRecordLine)
+}
+
+func recordTextMatches(fsys fsx.FileSystem, repoRoot, appID, appDir string, pattern *regexp.Regexp) (bool, error) {
+	files, err := sclFiles(fsys, filepath.Join(appDir, "records"))
+	if err != nil {
+		return false, fmt.Errorf("failed to list records for app %q: %w", appID, err)
+	}
+	for _, filePath := range files {
+		data, readErr := fsys.ReadFile(filePath)
+		if readErr != nil {
+			return false, fmt.Errorf("failed to read %s: %w", relative(repoRoot, filePath), readErr)
+		}
+		if pattern.Match(data) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func loadFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, error) {
@@ -146,20 +184,41 @@ func loadFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, err
 	return a, nil
 }
 
-// Check loads app declarations, then checks the model against build rules.
+// Check parses agent records when present and scans every app for unfinished markers.
 func Check(fsys fsx.FileSystem, repoRoot, appID string) ([]Problem, error) {
-	a, err := Load(fsys, repoRoot, appID)
+	repoRoot, err := filepath.Abs(repoRoot)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to resolve repository root: %w", err)
 	}
-	return a.check(fsys)
+	appDir := filepath.Join(repoRoot, "apps", filepath.FromSlash(appID))
+	return checkFromDir(fsys, repoRoot, appID, appDir)
 }
 
 // CheckAt checks an app from the supplied directory while preserving its app ID.
 func CheckAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) ([]Problem, error) {
-	a, err := LoadAt(fsys, repoRoot, appID, appDir)
+	repoRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve repository root: %w", err)
+	}
+	if !filepath.IsAbs(appDir) {
+		appDir = filepath.Join(repoRoot, filepath.FromSlash(appDir))
+	}
+	return checkFromDir(fsys, repoRoot, appID, filepath.Clean(appDir))
+}
+
+func checkFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) ([]Problem, error) {
+	declared, err := hasAgentRelatedRecordsAt(fsys, repoRoot, appID, appDir)
 	if err != nil {
 		return nil, err
+	}
+	var a *App
+	if declared {
+		a, err = loadFromDir(fsys, repoRoot, appID, appDir)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		a = &App{ID: appID, RepoRoot: repoRoot, Dir: appDir, records: map[string]record{}, lookups: map[string]map[string]lookup{}}
 	}
 	return a.check(fsys)
 }
@@ -289,6 +348,7 @@ func sclFiles(fsys fsx.FileSystem, root string) ([]string, error) {
 
 func baseTable(table string) string {
 	const platformPrefix = "dev_simple_system."
+	table = strings.Trim(table, `"`)
 	if strings.HasPrefix(table, platformPrefix) {
 		return strings.TrimPrefix(table, platformPrefix)
 	}

@@ -32,6 +32,88 @@ type failNthWriteFS struct {
 	err    error
 }
 
+type trackedWriteFS struct {
+	*fsx.MockFileSystem
+	dirs        map[string]struct{}
+	createdDirs []string
+	removedDirs []string
+	writes      int
+	writeErrors map[int]error
+}
+
+func newTrackedWriteFS(base *fsx.MockFileSystem) *trackedWriteFS {
+	tracked := &trackedWriteFS{MockFileSystem: base, dirs: make(map[string]struct{}), writeErrors: make(map[int]error)}
+	for path, content := range base.Files {
+		if content == nil {
+			tracked.dirs[filepath.Clean(path)] = struct{}{}
+		}
+		for parent := filepath.Dir(path); parent != filepath.Dir(parent); parent = filepath.Dir(parent) {
+			tracked.dirs[filepath.Clean(parent)] = struct{}{}
+		}
+	}
+	return tracked
+}
+
+func (f *trackedWriteFS) Stat(name string) (os.FileInfo, error) {
+	if _, exists := f.dirs[filepath.Clean(name)]; exists {
+		return nil, nil
+	}
+	return f.MockFileSystem.Stat(name)
+}
+
+func (f *trackedWriteFS) MkdirAll(name string, _ os.FileMode) error {
+	var missing []string
+	for current := filepath.Clean(name); ; current = filepath.Dir(current) {
+		if _, exists := f.dirs[current]; exists {
+			break
+		}
+		if _, exists := f.Files[current]; exists {
+			break
+		}
+		missing = append(missing, current)
+		parent := filepath.Dir(current)
+		if parent == current {
+			break
+		}
+	}
+	for i := len(missing) - 1; i >= 0; i-- {
+		f.dirs[missing[i]] = struct{}{}
+		f.createdDirs = append(f.createdDirs, missing[i])
+	}
+	return nil
+}
+
+func (f *trackedWriteFS) WriteFile(name string, data []byte, perm os.FileMode) error {
+	f.writes++
+	if err := f.writeErrors[f.writes]; err != nil {
+		return err
+	}
+	return f.MockFileSystem.WriteFile(name, data, perm)
+}
+
+func (f *trackedWriteFS) Remove(name string) error {
+	name = filepath.Clean(name)
+	if _, exists := f.Files[name]; exists {
+		return f.MockFileSystem.Remove(name)
+	}
+	if _, exists := f.dirs[name]; exists {
+		for path := range f.Files {
+			if strings.HasPrefix(path, name+string(filepath.Separator)) {
+				return fmt.Errorf("directory %s is not empty", name)
+			}
+		}
+		for path := range f.dirs {
+			if path != name && strings.HasPrefix(path, name+string(filepath.Separator)) {
+				return fmt.Errorf("directory %s is not empty", name)
+			}
+		}
+		delete(f.dirs, name)
+		f.removedDirs = append(f.removedDirs, name)
+		return nil
+	}
+	return nil
+}
+
 func (f *failNthWriteFS) WriteFile(name string, data []byte, perm os.FileMode) error {
 	f.writes++
 	if err := f.MockFileSystem.WriteFile(name, data, perm); err != nil {
@@ -89,6 +171,66 @@ func TestCreateToolWriteFailuresRemoveItsActionAndRecords(t *testing.T) {
 				t.Errorf("files after failure = %#v, want original files %#v", fsys.Files, before)
 			}
 		})
+	}
+}
+
+func TestCreateToolRollbackRemovesOnlyItsNewDirectoriesDeepestFirst(t *testing.T) {
+	writeErr := errors.New("later action file write failed")
+	fsys := newTrackedWriteFS(wiringFS())
+	fsys.writeErrors[2] = writeErr
+	withWiringApp(t, appWithTask())
+	actionDir := filepath.Join(wiringRoot, "apps", wiringAppID, "actions", "summary-tool")
+	_, err := CreateTool(fsys, TemplatesFS, wiringRoot, ToolConfig{
+		AppID: wiringAppID, Name: "summary-tool", DisplayName: "Summary Tool", TaskTypeName: "returns",
+		Language: LanguageTypeScript, Scope: "com.acme.shop",
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("CreateTool() error = %v, want the later write error", err)
+	}
+	actionsDir := filepath.Dir(actionDir)
+	for _, dir := range []string{actionsDir, actionDir, filepath.Join(actionDir, "src")} {
+		if _, exists := fsys.dirs[dir]; exists {
+			t.Errorf("rollback left created directory %s", dir)
+		}
+	}
+	if got := fsys.createdDirs; !reflect.DeepEqual(got, []string{actionsDir, actionDir, filepath.Join(actionDir, "src")}) {
+		t.Errorf("created directories = %#v, want all action folders", got)
+	}
+	if _, exists := fsys.dirs[filepath.Join(wiringRoot, "apps", wiringAppID)]; !exists {
+		t.Error("rollback removed the pre-existing app directory")
+	}
+	if got := fsys.removedDirs; !reflect.DeepEqual(got, []string{filepath.Join(actionDir, "src"), actionDir, actionsDir}) {
+		t.Errorf("removed directories = %#v, want deepest first", got)
+	}
+	if len(fsys.Files) != 1 {
+		t.Errorf("rollback left files behind: %#v", fsys.Files)
+	}
+}
+
+func TestAgentWiringReportsEveryFileThatCouldNotBeRestored(t *testing.T) {
+	writeErr := errors.New("record write failed")
+	restoreErr := errors.New("record restore failed")
+	base := wiringFS()
+	knowledgePath := filepath.Join(wiringRoot, "apps", wiringAppID, "records", "70_agent_knowledge.scl")
+	agentPath := filepath.Join(wiringRoot, "apps", wiringAppID, "records", "71_agents.scl")
+	base.Files[knowledgePath] = []byte("existing knowledge\n")
+	base.Files[agentPath] = []byte("existing agents\n")
+	fsys := newTrackedWriteFS(base)
+	fsys.writeErrors[3] = writeErr
+	fsys.writeErrors[4] = restoreErr
+	fsys.writeErrors[5] = restoreErr
+	withWiringApp(t, baseWiringApp())
+	_, err := CreateAgent(fsys, TemplatesFS, wiringRoot, AgentConfig{AppID: wiringAppID, Name: "billing", DisplayName: "Billing Agent"})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("CreateAgent() error = %v, want original write error", err)
+	}
+	for _, path := range []string{"apps/com.acme.shop/records/70_agent_knowledge.scl", "apps/com.acme.shop/records/71_agents.scl"} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("error %q does not name failed restore %s", err, path)
+		}
+	}
+	if !strings.Contains(err.Error(), "git checkout -- apps/com.acme.shop/records/70_agent_knowledge.scl apps/com.acme.shop/records/71_agents.scl") {
+		t.Errorf("error %q does not give the restore command", err)
 	}
 }
 
@@ -175,6 +317,20 @@ func TestCreateTaskTypeUsesTheExistingPlaybookForSizeChecks(t *testing.T) {
 }
 
 func TestCreateToolReusesOnlyMatchingPlatformLookups(t *testing.T) {
+	t.Run("task type refuses a lookup for another tool", func(t *testing.T) {
+		original := findPlatformToolLookup
+		findPlatformToolLookup = func(*agents.App, string, string) (agents.LookupInfo, bool) {
+			return agents.LookupInfo{AppID: "com.acme.shop", Name: "different-tool", File: "apps/com.acme.shop/records/custom.scl", Line: 23}, true
+		}
+		t.Cleanup(func() { findPlatformToolLookup = original })
+		withWiringApp(t, baseWiringApp())
+		_, err := CreateTaskType(wiringFS(), TemplatesFS, wiringRoot, TaskTypeConfig{
+			AppID: wiringAppID, Name: "returns", PluralName: "Returns", Tools: []string{"process-data"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "apps/com.acme.shop/records/custom.scl:23") || !strings.Contains(err.Error(), "platform_tool_process_data") {
+			t.Fatalf("CreateTaskType() error = %v, want the conflicting variable and its location", err)
+		}
+	})
 	t.Run("existing link needs no extra lookup", func(t *testing.T) {
 		app := appWithTask()
 		app.TaskTypeToolLinks = append(app.TaskTypeToolLinks, &agents.TaskTypeToolLink{
@@ -230,6 +386,56 @@ func TestCreateSkillListsReusedBodyMarkers(t *testing.T) {
 	}
 	if len(result.Created) != 1 || len(result.FillIn) != 1 || result.FillIn[0] != "apps/com.acme.shop/knowledge/skill-refund-policy.md" {
 		t.Fatalf("CreateSkill() result = %#v, want reused body in fill-in list", result)
+	}
+}
+
+func TestNoOpAgentCommandsStillListReusedBodyMarkers(t *testing.T) {
+	tests := []struct {
+		name   string
+		app    *agents.App
+		path   string
+		create func(*fsx.MockFileSystem) (WiringResult, error)
+	}{
+		{
+			name: "skill",
+			app:  appWithSkill(true),
+			path: "knowledge/skill-refund-policy.md",
+			create: func(fsys *fsx.MockFileSystem) (WiringResult, error) {
+				return CreateSkill(fsys, TemplatesFS, wiringRoot, SkillConfig{AppID: wiringAppID, Name: "refund-policy", TaskTypeName: "returns"})
+			},
+		},
+		{
+			name: "knowledge",
+			app:  appWithReferenceKnowledge(true),
+			path: "knowledge/return-terms.md",
+			create: func(fsys *fsx.MockFileSystem) (WiringResult, error) {
+				return CreateKnowledge(fsys, TemplatesFS, wiringRoot, KnowledgeConfig{AppID: wiringAppID, Name: "return-terms", TaskTypeName: "returns"})
+			},
+		},
+		{
+			name: "tool lesson",
+			app:  appWithAction(true, true),
+			path: "knowledge/tool-find-order.md",
+			create: func(fsys *fsx.MockFileSystem) (WiringResult, error) {
+				return CreateTool(fsys, TemplatesFS, wiringRoot, ToolConfig{AppID: wiringAppID, Name: "find-order", TaskTypeName: "returns"})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			withWiringApp(t, tt.app)
+			fsys := wiringFS()
+			path := filepath.Join(wiringRoot, "apps", wiringAppID, filepath.FromSlash(tt.path))
+			fsys.Files[path] = []byte("TODO(simple): finish this body\n")
+			got, err := tt.create(fsys)
+			if err != nil {
+				t.Fatalf("repeat command error = %v", err)
+			}
+			want := "apps/com.acme.shop/" + tt.path
+			if !got.NothingToAdd || len(got.FillIn) != 1 || got.FillIn[0] != want {
+				t.Fatalf("repeat command result = %#v, want no-op and fill-in %q", got, want)
+			}
+		})
 	}
 }
 
@@ -483,12 +689,14 @@ func TestAgentValidationAndFilesystemFailures(t *testing.T) {
 
 func TestCreateTaskType(t *testing.T) {
 	tests := []struct {
-		name    string
-		app     *agents.App
-		cfg     TaskTypeConfig
-		wantErr string
+		name             string
+		app              *agents.App
+		cfg              TaskTypeConfig
+		wantWakeInterval string
+		wantErr          string
 	}{
 		{name: "creates complete task type with platform lookup", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support", Tools: []string{"process-data"}}},
+		{name: "writes requested wake interval", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", WakeIntervalSeconds: 90}, wantWakeInterval: "90"},
 		{name: "one agent may be inferred", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns"}},
 		{name: "work for people needs no agent wiring", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "manual-review", PluralName: "Manual Reviews", NoAgent: true}},
 		{name: "no-agent refuses agent flag", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "manual-review", PluralName: "Manual Reviews", NoAgent: true, AgentFlagSet: true}, wantErr: "cannot use --no-agent"},
@@ -526,6 +734,21 @@ func TestCreateTaskType(t *testing.T) {
 			}
 			if len(got.FillIn) != wantFillIn {
 				t.Fatalf("unexpected marker paths: %#v", got.FillIn)
+			}
+			taskRecord, exists := fsys.Files[filepath.Join(wiringRoot, "apps", wiringAppID, "records", "71_agents.scl")]
+			if !exists || strings.Contains(string(taskRecord), "wake_interval_seconds") != (tt.wantWakeInterval != "") || tt.wantWakeInterval != "" && !strings.Contains(string(taskRecord), "wake_interval_seconds "+tt.wantWakeInterval) {
+				t.Errorf("task type wake interval = %q, want %q", taskRecord, tt.wantWakeInterval)
+			}
+			if tt.wantWakeInterval != "" {
+				wantExact := "  states `$file('records/task-types/states.json') |> $json()`\n  wake_interval_seconds " + tt.wantWakeInterval + "\n}"
+				if !strings.Contains(string(taskRecord), wantExact) {
+					t.Errorf("task type record missing exact interval block:\n%s\nwant:\n%s", taskRecord, wantExact)
+				}
+			} else if !tt.cfg.NoAgent && tt.wantErr == "" {
+				wantExact := "  states `$file('records/task-types/states.json') |> $json()`\n}"
+				if !strings.Contains(string(taskRecord), wantExact) {
+					t.Errorf("task type record missing exact no-interval block:\n%s\nwant:\n%s", taskRecord, wantExact)
+				}
 			}
 			if tt.cfg.NoAgent {
 				appDir := filepath.Join(wiringRoot, "apps", wiringAppID)
@@ -1042,9 +1265,6 @@ func TestCreateToolTemplateAndValidationRefusals(t *testing.T) {
 }
 
 func TestAgentWiringSmallHelpers(t *testing.T) {
-	if got := defaultWakeInterval(90); got != 90 {
-		t.Fatalf("defaultWakeInterval(90) = %d", got)
-	}
 	if got := relativeToRoot("/repo", "relative/path"); got != "relative/path" {
 		t.Fatalf("relativeToRoot() fallback = %q", got)
 	}

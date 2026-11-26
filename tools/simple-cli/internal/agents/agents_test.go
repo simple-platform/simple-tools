@@ -199,7 +199,7 @@ func TestLoadRecognizesOnlyPlatformTables(t *testing.T) {
 		Name     []string `json:"name"`
 		Children []any    `json:"children"`
 	}
-	tables := []string{"agent", "dev_simple_system.agent", "tenant.agent", "agent.agent", "task_type", "dev_simple_system.task_type", "tenant.task_type"}
+	tables := []string{"agent", "dev_simple_system.agent", `"agent"`, `"dev_simple_system.agent"`, "tenant.agent", "agent.agent", "task_type", "dev_simple_system.task_type", `"task_type"`, `"dev_simple_system.task_type"`, "tenant.task_type"}
 	blocks := make([]parsedRecord, 0, len(tables))
 	var source strings.Builder
 	for i, table := range tables {
@@ -221,11 +221,11 @@ func TestLoadRecognizesOnlyPlatformTables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(app.AgentRecords); got != 2 {
-		t.Errorf("agent table count = %d, want bare and platform-prefixed tables only", got)
+	if got := len(app.AgentRecords); got != 4 {
+		t.Errorf("agent table count = %d, want bare and platform-prefixed quoted and unquoted tables only", got)
 	}
-	if got := len(app.TaskTypes); got != 2 {
-		t.Errorf("kind-of-work table count = %d, want bare and platform-prefixed tables only", got)
+	if got := len(app.TaskTypes); got != 4 {
+		t.Errorf("kind-of-work table count = %d, want bare and platform-prefixed quoted and unquoted tables only", got)
 	}
 }
 
@@ -258,6 +258,129 @@ func TestCheckAtScansActionMarkersWithoutRecords(t *testing.T) {
 	}
 	if !problemAt(problems, "apps/deployed-copy/actions/prepare/src/index.ts", 1, "still holds a line") {
 		t.Fatalf("CheckAt() problems = %#v, want marker from the supplied app directory", problems)
+	}
+}
+
+func TestCheckSkipsMalformedRecordsWithoutAgentDeclarationsAndKeepsMarkerScan(t *testing.T) {
+	tests := []struct {
+		name          string
+		record        string
+		parseErr      string
+		actionMarker  bool
+		wantParseCall int
+		wantProblem   bool
+		wantErr       string
+	}{
+		{name: "unrelated record is ignored", record: "not valid SCL", wantParseCall: 0},
+		{name: "unrelated record still gets marker scan", record: "not valid SCL", actionMarker: true, wantParseCall: 0, wantProblem: true},
+		{name: "knowledge record alone does not declare agent work", record: "set dev_simple_system.knowledge, terms {\n", wantParseCall: 0},
+		{name: "agent record parse error is reported", record: "set dev_simple_system.agent, agent_support {\n", parseErr: "line 1: parser rejected the record", wantParseCall: 1, wantErr: "other.scl: line 1"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newMemoryFS()
+			f.put("records/other.scl", []byte(test.record))
+			if test.actionMarker {
+				f.put("actions/prepare/src/main.ts", []byte("// TODO(simple): finish this action\n"))
+			}
+			parseCalls := 0
+			oldParser := parseSCL
+			parseSCL = func(string) ([]byte, error) {
+				parseCalls++
+				message := test.parseErr
+				if message == "" {
+					message = "parser rejected the record"
+				}
+				return nil, errors.New(message)
+			}
+			t.Cleanup(func() { parseSCL = oldParser })
+
+			problems, err := Check(f, fixtureRepoRoot, fixtureAppID)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("Check() error = %v, want %q", err, test.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if parseCalls != test.wantParseCall {
+				t.Errorf("parser calls = %d, want %d", parseCalls, test.wantParseCall)
+			}
+			gotProblem := problemAt(problems, "apps/com.acme.shop/actions/prepare/src/main.ts", 1, "still holds a line")
+			if gotProblem != test.wantProblem {
+				t.Errorf("action marker finding = %v, want %v; findings: %#v", gotProblem, test.wantProblem, problems)
+			}
+		})
+	}
+}
+
+func TestHasAgentDeclarationsFindsAgentAndTaskTypeRecords(t *testing.T) {
+	tests := []struct {
+		name   string
+		record string
+		want   bool
+	}{
+		{name: "prefixed agent", record: "set dev_simple_system.agent, agent_support {\n", want: true},
+		{name: "quoted prefixed agent", record: "set \"dev_simple_system.agent\", agent_support {\n", want: true},
+		{name: "quoted bare agent", record: "set \"agent\", agent_support {\n", want: true},
+		{name: "bare kind of work", record: "set task_type, task_type_returns {\n", want: true},
+		{name: "quoted kind of work", record: "set \"task_type\", task_type_returns {\n", want: true},
+		{name: "link alone is not a declaration", record: "set agent_task_type, support_returns {\n"},
+		{name: "unrelated record", record: "set customer, customer_one {\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newMemoryFS()
+			f.put("records/other.scl", []byte(test.record))
+			got, err := HasAgentDeclarations(f, fixtureRepoRoot, fixtureAppID)
+			if err != nil {
+				t.Fatalf("HasAgentDeclarations() error = %v", err)
+			}
+			if got != test.want {
+				t.Errorf("HasAgentDeclarations() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadAtAndDeclarationScanFailures(t *testing.T) {
+	t.Run("load supplied directory", func(t *testing.T) {
+		oldParser := parseSCL
+		parseSCL = func(string) ([]byte, error) { return parserFixture(t), nil }
+		t.Cleanup(func() { parseSCL = oldParser })
+		app, err := LoadAt(fixtureFS(t), fixtureRepoRoot, fixtureAppID, "apps/com.acme.shop")
+		if err != nil {
+			t.Fatalf("LoadAt() error = %v", err)
+		}
+		if !app.DeclaresAgents() {
+			t.Fatal("LoadAt() did not load agent declarations from the supplied directory")
+		}
+	})
+
+	tests := []struct {
+		name    string
+		fsys    *memoryFS
+		wantErr string
+	}{
+		{name: "records listing failure", fsys: func() *memoryFS {
+			f := newMemoryFS()
+			f.readDirErr[filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "records")] = errors.New("directory unavailable")
+			return f
+		}(), wantErr: "failed to list records"},
+		{name: "record read failure", fsys: func() *memoryFS {
+			f := newMemoryFS()
+			f.put("records/unrelated.scl", []byte("set customer, one {\n"))
+			f.readErr[filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "records", "unrelated.scl")] = errors.New("read denied")
+			return f
+		}(), wantErr: "failed to read apps/com.acme.shop/records/unrelated.scl"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := HasAgentDeclarations(test.fsys, fixtureRepoRoot, fixtureAppID)
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("HasAgentDeclarations() error = %v, want %q", err, test.wantErr)
+			}
+		})
 	}
 }
 

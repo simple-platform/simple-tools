@@ -12,6 +12,7 @@ import (
 	"simple-cli/internal/agents"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -32,11 +33,11 @@ func TestProgressInputIsTerminalRejectsPipe(t *testing.T) {
 func TestBuildEmptyAppTargetAgentChecks(t *testing.T) {
 	originalJSON := jsonOutput
 	originalCheck := checkBuildAgents
-	originalLoad := loadAgentApp
+	originalHasDeclarations := hasBuildAgentDeclarations
 	defer func() {
 		jsonOutput = originalJSON
 		checkBuildAgents = originalCheck
-		loadAgentApp = originalLoad
+		hasBuildAgentDeclarations = originalHasDeclarations
 	}()
 
 	problem := agents.Problem{File: "apps/com.acme.shop/records/71_agents.scl", Line: 8, Rule: "replace the remaining guidance."}
@@ -65,12 +66,8 @@ func TestBuildEmptyAppTargetAgentChecks(t *testing.T) {
 				checkCalls++
 				return tt.problems, nil
 			}
-			loadAgentApp = func(_ fsx.FileSystem, _, _ string) (*agents.App, error) {
-				app := &agents.App{}
-				if tt.hasAgents {
-					app.AgentRecords = []*agents.Agent{{Key: "agent_support"}}
-				}
-				return app, nil
+			hasBuildAgentDeclarations = func(_ fsx.FileSystem, _, _ string) (bool, error) {
+				return tt.hasAgents, nil
 			}
 			files := map[string][]byte{}
 			if tt.withRecords {
@@ -143,11 +140,162 @@ func (d buildTestDirEntry) Info() (fs.FileInfo, error) {
 	return nil, errors.New("directory entry info is not used")
 }
 
+type agentCheckFS struct {
+	*fsx.MockFileSystem
+}
+
+func (f *agentCheckFS) relative(name string) string {
+	name = filepath.Clean(name)
+	if !filepath.IsAbs(name) {
+		return name
+	}
+	root, err := filepath.Abs(".")
+	if err != nil {
+		return name
+	}
+	relative, err := filepath.Rel(root, name)
+	if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return relative
+	}
+	return name
+}
+
+func (f *agentCheckFS) Stat(name string) (fs.FileInfo, error) {
+	name = f.relative(name)
+	if _, ok := f.Files[name]; ok {
+		return f.MockFileSystem.Stat(name)
+	}
+	for path := range f.Files {
+		if strings.HasPrefix(path, name+string(filepath.Separator)) {
+			return nil, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+
+func (f *agentCheckFS) ReadFile(name string) ([]byte, error) {
+	return f.MockFileSystem.ReadFile(f.relative(name))
+}
+
+func (f *agentCheckFS) ReadDir(name string) ([]os.DirEntry, error) {
+	name = f.relative(name)
+	children := map[string]bool{}
+	for path := range f.Files {
+		if !strings.HasPrefix(path, name+string(filepath.Separator)) {
+			continue
+		}
+		rest := strings.TrimPrefix(path, name+string(filepath.Separator))
+		part := strings.SplitN(rest, string(filepath.Separator), 2)
+		children[part[0]] = len(part) > 1
+	}
+	if len(children) == 0 {
+		return nil, os.ErrNotExist
+	}
+	names := make([]string, 0, len(children))
+	for child := range children {
+		names = append(names, child)
+	}
+	sort.Strings(names)
+	entries := make([]os.DirEntry, 0, len(names))
+	for _, child := range names {
+		entries = append(entries, buildTestDirEntry{name: child, dir: children[child]})
+	}
+	return entries, nil
+}
+
+func newAgentCheckFS(actionMarker bool) *agentCheckFS {
+	files := map[string][]byte{
+		"apps/com.acme.crm/records/unrelated.scl": []byte("not valid SCL\n"),
+	}
+	if actionMarker {
+		files["apps/com.acme.crm/actions/prepare/src/index.ts"] = []byte("// TODO(simple): finish this action\n")
+	}
+	return &agentCheckFS{MockFileSystem: &fsx.MockFileSystem{Files: files}}
+}
+
+func TestBuildAllowsUnrelatedUnparseableRecordsWithoutAgentsAndKeepsMarkerCheck(t *testing.T) {
+	oldJSON, oldCheck := jsonOutput, checkBuildAgents
+	defer func() { jsonOutput, checkBuildAgents = oldJSON, oldCheck }()
+	jsonOutput = true
+	checkBuildAgents = agents.Check
+	tests := []struct {
+		name    string
+		marker  bool
+		wantErr string
+	}{
+		{name: "unrelated malformed record builds"},
+		{name: "action marker still blocks build", marker: true, wantErr: "1 agent problems"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := newAgentCheckFS(tt.marker)
+			declared, declarationErr := appHasAgentDeclarations(fsys, "com.acme.crm")
+			if declarationErr != nil || declared {
+				t.Fatalf("appHasAgentDeclarations() = %v, %v; want no declarations", declared, declarationErr)
+			}
+			var runErr error
+			stdout := captureStdout(t, func() {
+				runErr = runBuildAll(build.NewBuildManager(build.BuildOptions{Concurrency: 1}), nil, nil,
+					buildAgentTarget{appID: "com.acme.crm", fsys: fsys})
+			})
+			if (runErr != nil) != (tt.wantErr != "") || runErr != nil && !strings.Contains(runErr.Error(), tt.wantErr) {
+				t.Fatalf("runBuildAll() error = %v, want containing %q", runErr, tt.wantErr)
+			}
+			if !strings.Contains(stdout, `"agent_problems"`) {
+				t.Errorf("build JSON omitted the always-present agent_problems field: %s", stdout)
+			}
+		})
+	}
+}
+
+func TestAppHasAgentDeclarationsHandlesMissingRecordsAndScannerResults(t *testing.T) {
+	oldDeclarations := hasBuildAgentDeclarations
+	defer func() { hasBuildAgentDeclarations = oldDeclarations }()
+	tests := []struct {
+		name    string
+		fsys    fsx.FileSystem
+		check   func()
+		want    bool
+		wantErr string
+	}{
+		{name: "missing records directory", fsys: &fsx.MockFileSystem{}},
+		{name: "unrelated malformed records", fsys: newAgentCheckFS(false)},
+		{name: "kind of work declaration", fsys: func() fsx.FileSystem {
+			f := newAgentCheckFS(false)
+			f.Files["apps/com.acme.crm/records/work.scl"] = []byte("set task_type, task_type_returns {\n")
+			return f
+		}(), want: true},
+		{name: "record stat error", fsys: &fsx.MockFileSystem{StatErr: errors.New("stat denied")}, wantErr: "failed to find records"},
+		{name: "declaration scan error", fsys: &fsx.MockFileSystem{Files: map[string][]byte{"apps/com.acme.crm/records": nil}},
+			check: func() {
+				hasBuildAgentDeclarations = func(fsx.FileSystem, string, string) (bool, error) { return false, errors.New("scan denied") }
+			}, wantErr: "failed to read agent declarations"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			hasBuildAgentDeclarations = oldDeclarations
+			if tt.check != nil {
+				tt.check()
+			}
+			got, err := appHasAgentDeclarations(tt.fsys, "com.acme.crm")
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("appHasAgentDeclarations() error = %v, want %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil || got != tt.want {
+				t.Fatalf("appHasAgentDeclarations() = %v, %v; want %v, nil", got, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildAllAppsAgentChecks(t *testing.T) {
-	oldJSON, oldCheck, oldLoad := jsonOutput, checkBuildAgents, loadAgentApp
+	oldJSON, oldCheck, oldDeclarations := jsonOutput, checkBuildAgents, hasBuildAgentDeclarations
 	oldFindActions, oldFindSpaces, oldRunAll := findBuildActions, findBuildSpaces, runAllBuildTargets
 	defer func() {
-		jsonOutput, checkBuildAgents, loadAgentApp = oldJSON, oldCheck, oldLoad
+		jsonOutput, checkBuildAgents, hasBuildAgentDeclarations = oldJSON, oldCheck, oldDeclarations
 		findBuildActions, findBuildSpaces, runAllBuildTargets = oldFindActions, oldFindSpaces, oldRunAll
 	}()
 	problem := agents.Problem{File: "apps/demo/actions/send/src/index.ts", Line: 2, Rule: "replace this line"}
@@ -195,12 +343,8 @@ func TestBuildAllAppsAgentChecks(t *testing.T) {
 				checkCalls++
 				return tt.problems, nil
 			}
-			loadAgentApp = func(_ fsx.FileSystem, _, _ string) (*agents.App, error) {
-				app := &agents.App{}
-				if tt.hasAgents {
-					app.TaskTypes = []*agents.TaskType{{Key: "task_type_demo"}}
-				}
-				return app, nil
+			hasBuildAgentDeclarations = func(_ fsx.FileSystem, _, _ string) (bool, error) {
+				return tt.hasAgents, nil
 			}
 			findBuildActions = func(appDir string) ([]string, error) { return tt.actions[filepath.Clean(appDir)], nil }
 			findBuildSpaces = func(appDir string) ([]string, error) { return tt.spaces[filepath.Clean(appDir)], nil }
