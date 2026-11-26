@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"simple-cli/internal/agents"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"strings"
@@ -24,6 +25,146 @@ func TestProgressInputIsTerminalRejectsPipe(t *testing.T) {
 	if progressInputIsTerminal(input) {
 		t.Fatal("pipe input was detected as an interactive terminal")
 	}
+}
+
+func TestBuildEmptyAppTargetAgentChecks(t *testing.T) {
+	originalJSON := jsonOutput
+	originalCheck := checkBuildAgents
+	originalLoad := loadAgentApp
+	defer func() {
+		jsonOutput = originalJSON
+		checkBuildAgents = originalCheck
+		loadAgentApp = originalLoad
+	}()
+
+	problem := agents.Problem{File: "apps/com.acme.shop/records/71_agents.scl", Line: 8, Rule: "replace the remaining guidance."}
+	tests := []struct {
+		name         string
+		withRecords  bool
+		hasAgents    bool
+		problems     []agents.Problem
+		json         bool
+		wantErr      string
+		wantStatus   string
+		wantProblemN int
+		wantText     string
+	}{
+		{name: "agents only is a valid target", withRecords: true, hasAgents: true, json: true, wantStatus: "complete"},
+		{name: "agent problems fail text build", withRecords: true, hasAgents: true, problems: []agents.Problem{problem}, wantErr: "1 agent problems", wantText: "com.acme.shop: 1 things left:\napps/com.acme.shop/records/71_agents.scl:8: replace the remaining guidance.\nBuild failed because of these agent problems.\n"},
+		{name: "agent problems fail JSON build", withRecords: true, hasAgents: true, problems: []agents.Problem{problem}, json: true, wantErr: "1 agent problems", wantStatus: "failed", wantProblemN: 1},
+		{name: "empty app remains an invalid target", wantErr: "no actions or spaces found", wantStatus: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			jsonOutput = tt.json
+			checkCalls := 0
+			checkBuildAgents = func(_ fsx.FileSystem, _, _ string) ([]agents.Problem, error) {
+				checkCalls++
+				return tt.problems, nil
+			}
+			loadAgentApp = func(_ fsx.FileSystem, _, _ string) (*agents.App, error) {
+				app := &agents.App{}
+				if tt.hasAgents {
+					app.AgentRecords = []*agents.Agent{{Key: "agent_support"}}
+				}
+				return app, nil
+			}
+			files := map[string][]byte{}
+			if tt.withRecords {
+				files["apps/com.acme.shop/records"] = nil
+			}
+			fsys := &fsx.MockFileSystem{Files: files}
+			var stdout, stderr string
+			var runErr error
+			if tt.json {
+				stdout = captureStdout(t, func() {
+					runErr = buildEmptyAppTarget(build.NewBuildManager(build.BuildOptions{Concurrency: 1}), fsys, "com.acme.shop", "com.acme.shop")
+				})
+			} else {
+				stderr = captureStderr(t, func() {
+					runErr = buildEmptyAppTarget(build.NewBuildManager(build.BuildOptions{Concurrency: 1}), fsys, "com.acme.shop", "com.acme.shop")
+				})
+			}
+			if (runErr != nil) != (tt.wantErr != "") || (runErr != nil && !strings.Contains(runErr.Error(), tt.wantErr)) {
+				t.Fatalf("buildEmptyAppTarget() error = %v, want containing %q", runErr, tt.wantErr)
+			}
+			if checkCalls != btoi(tt.withRecords) {
+				t.Errorf("agent checker calls = %d, want %d", checkCalls, btoi(tt.withRecords))
+			}
+			if tt.wantText != "" && stderr != tt.wantText {
+				t.Errorf("text = %q, want %q", stderr, tt.wantText)
+			}
+			if tt.json && tt.wantStatus != "" {
+				var result struct {
+					Status        string             `json:"status"`
+					AgentProblems []agentProblemJSON `json:"agent_problems"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+					t.Fatalf("decode build JSON: %v\n%s", err, stdout)
+				}
+				if result.Status != tt.wantStatus || len(result.AgentProblems) != tt.wantProblemN {
+					t.Errorf("JSON status/problems = %q/%d, want %q/%d", result.Status, len(result.AgentProblems), tt.wantStatus, tt.wantProblemN)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildSingleActionTargetSkipsAgentCheck(t *testing.T) {
+	originalJSON := jsonOutput
+	originalCheck := checkBuildAgents
+	originalDetect := build.DetectActionLanguageFunc
+	defer func() {
+		jsonOutput = originalJSON
+		checkBuildAgents = originalCheck
+		build.DetectActionLanguageFunc = originalDetect
+	}()
+	jsonOutput = true
+	checkCalls := 0
+	checkBuildAgents = func(_ fsx.FileSystem, _, _ string) ([]agents.Problem, error) {
+		checkCalls++
+		return nil, nil
+	}
+	build.DetectActionLanguageFunc = func(string) (build.ActionLanguage, error) {
+		return "", errors.New("stop before reading action files")
+	}
+	var err error
+	_ = captureStdout(t, func() {
+		err = buildSingleActionTarget(build.NewBuildManager(build.BuildOptions{Concurrency: 1}), "virtual/action")
+	})
+	if err == nil || !strings.Contains(err.Error(), "1 action(s) failed to build") {
+		t.Errorf("buildSingleActionTarget() error = %v, want mocked build failure", err)
+	}
+	if checkCalls != 0 {
+		t.Errorf("agent checker calls = %d, want 0 for a single action", checkCalls)
+	}
+}
+
+func btoi(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func captureStderr(t *testing.T, run func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to open a pipe: %v", err)
+	}
+	original := os.Stderr
+	os.Stderr = writer
+	captured := make(chan string)
+	go func() {
+		data, _ := io.ReadAll(reader)
+		captured <- string(data)
+	}()
+	run()
+	_ = writer.Close()
+	os.Stderr = original
+	return <-captured
 }
 
 // TestRunBuild verifies the `simple build` command logic.

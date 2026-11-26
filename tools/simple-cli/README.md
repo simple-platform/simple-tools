@@ -546,6 +546,23 @@ becomes one when its doc comment says so, with the `@tool`, `@shortdesc` and
 tool that only reads as safe to run beside the other parallel-safe calls next to
 it in a batch — see [the action exposure vocabulary](docs/action-exposure-vocabulary.md).
 
+The agent commands are `simple new agent`, `simple new task-type`,
+`simple new skill`, and `simple new tool`; see [Agents](#agents) for examples.
+
+### Agents
+
+Create an agent, its kind of work, guidance, and tool links with these commands:
+
+```bash
+simple new agent com.acme.shop support "Support Agent"
+simple new task-type com.acme.shop returns "Returns" --agent support
+simple new skill com.acme.shop order-policy "Order Policy" --task-type returns
+simple new tool com.acme.shop process-data --task-type returns
+```
+
+The generated persona, playbook, and shape files leave `TODO(simple):` lines to
+replace with your app's details. Run `simple build <app>` to see what is left.
+
 ---
 
 ### `simple new behavior`

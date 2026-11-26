@@ -19,6 +19,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"simple-cli/internal/agents"
 	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
@@ -127,6 +128,95 @@ func TestRunDeploy(t *testing.T) {
 				t.Errorf("runDeploy() unexpected error = %v", err)
 			}
 		})
+	}
+}
+
+func TestRunDeployWithAgentProblemsStopsBeforeCollecting(t *testing.T) {
+	originalCheck := checkBuildAgents
+	defer func() { checkBuildAgents = originalCheck }()
+	problem := agents.Problem{File: "apps/com.acme.shop/records/71_agents.scl", Line: 8, Rule: "replace the remaining guidance."}
+	tests := []struct {
+		name   string
+		dryRun bool
+	}{
+		{name: "deploy", dryRun: false},
+		{name: "dry run", dryRun: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				checkCalls := 0
+				checkBuildAgents = func(_ fsx.FileSystem, _, appID string) ([]agents.Problem, error) {
+					checkCalls++
+					if appID != "com.acme.shop" {
+						t.Errorf("checked app = %q, want com.acme.shop", appID)
+					}
+					return []agents.Problem{problem}, nil
+				}
+				f := newDeployFixture()
+				f.versioner.id = "com.acme.shop"
+				collected := false
+				f.collect = func(func(int, int)) (map[string]deploy.FileInfo, error) {
+					collected = true
+					return smallApp, nil
+				}
+				fsys := &fsx.MockFileSystem{Files: map[string][]byte{"apps/com.acme.shop/records": nil}}
+				opts := deployOptions{appPath: "apps/com.acme.shop", env: "dev", dryRun: tt.dryRun, mode: progressPlain, fsys: fsys}
+				var out bytes.Buffer
+				err := runDeployWith(context.Background(), &out, f.deps(), opts)
+				if err == nil || !strings.Contains(err.Error(), "1 agent problems") {
+					t.Fatalf("runDeployWith() error = %v, want agent check failure", err)
+				}
+				if checkCalls != 1 {
+					t.Errorf("agent checker calls = %d, want 1", checkCalls)
+				}
+				if collected || f.versioner.bumped() != 0 {
+					t.Errorf("collected = %v, version bumps = %d; want neither", collected, f.versioner.bumped())
+				}
+				for _, want := range []string{
+					"com.acme.shop: 1 things left:",
+					"apps/com.acme.shop/records/71_agents.scl:8: replace the remaining guidance.",
+					"Nothing was uploaded.",
+				} {
+					if !strings.Contains(out.String(), want) {
+						t.Errorf("output missing %q:\n%s", want, out.String())
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestRunDeployWithNoAgentProblemsKeepsOutput(t *testing.T) {
+	originalCheck := checkBuildAgents
+	defer func() { checkBuildAgents = originalCheck }()
+	checkCalls := 0
+	checkBuildAgents = func(_ fsx.FileSystem, _, _ string) ([]agents.Problem, error) {
+		checkCalls++
+		return nil, nil
+	}
+	var outputs [2]string
+	for i, withCheck := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			f := newDeployFixture()
+			f.versioner.id = "com.acme.shop"
+			f.files = smallApp
+			opts := deployOptions{appPath: "apps/com.acme.shop", env: "dev", dryRun: true, mode: progressPlain}
+			if withCheck {
+				opts.fsys = &fsx.MockFileSystem{Files: map[string][]byte{"apps/com.acme.shop/records": nil}}
+			}
+			var out bytes.Buffer
+			if err := runDeployWith(context.Background(), &out, f.deps(), opts); err != nil {
+				t.Fatal(err)
+			}
+			outputs[i] = out.String()
+		})
+	}
+	if checkCalls != 1 {
+		t.Errorf("agent checker calls = %d, want 1", checkCalls)
+	}
+	if outputs[0] != outputs[1] {
+		t.Errorf("deploy output changed with an empty agent check:\n%s\nwant:\n%s", outputs[1], outputs[0])
 	}
 }
 
