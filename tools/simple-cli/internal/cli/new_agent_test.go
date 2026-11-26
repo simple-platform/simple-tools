@@ -27,8 +27,11 @@ func TestNewAgentCommandsOutput(t *testing.T) {
 	}{
 		{name: "agent", cmd: newAgentCmd, args: []string{"com.acme.shop", "support", "Support Agent"}, run: runNewAgent, kind: "agent"},
 		{name: "task type", cmd: newTaskTypeCmd, args: []string{"com.acme.shop", "returns", "Returns"}, setup: func(_ *testing.T, cmd *cobra.Command) { _ = cmd.Flags().Set("every", "90s") }, run: runNewTaskType, kind: "task-type"},
+		{name: "task type without agent", cmd: newTaskTypeCmd, args: []string{"com.acme.shop", "manual-review", "Manual Reviews"}, setup: func(_ *testing.T, cmd *cobra.Command) { _ = cmd.Flags().Set("no-agent", "true") }, run: runNewTaskType, kind: "task-type"},
 		{name: "skill", cmd: newSkillCmd, args: []string{"com.acme.shop", "refund-policy", "Refund Policy"}, setup: func(_ *testing.T, cmd *cobra.Command) { _ = cmd.Flags().Set("task-type", "returns") }, run: runNewSkill, kind: "skill"},
+		{name: "knowledge", cmd: newKnowledgeCmd, args: []string{"com.acme.shop", "return-terms", "Return Terms"}, setup: func(_ *testing.T, cmd *cobra.Command) { _ = cmd.Flags().Set("task-type", "returns") }, run: runNewKnowledge, kind: "knowledge"},
 		{name: "tool", cmd: newToolCmd, args: []string{"com.acme.shop", "process-data"}, setup: func(_ *testing.T, cmd *cobra.Command) { _ = cmd.Flags().Set("task-type", "returns") }, run: runNewTool, kind: "tool"},
+		{name: "tool without task type", cmd: newToolCmd, args: []string{"com.acme.shop", "background-tool"}, run: runNewTool, kind: "tool"},
 	}
 	for _, tt := range tests {
 		for _, jsonMode := range []bool{false, true} {
@@ -39,10 +42,10 @@ func TestNewAgentCommandsOutput(t *testing.T) {
 			t.Run(tt.name+"/"+label, func(t *testing.T) {
 				oldRoot, oldFS := agentCommandRoot, agentCommandFS
 				oldJSON := jsonOutput
-				oldAgent, oldTask, oldSkill, oldTool := createAgentWiring, createTaskTypeWiring, createSkillWiring, createToolWiring
+				oldAgent, oldTask, oldSkill, oldKnowledge, oldTool := createAgentWiring, createTaskTypeWiring, createSkillWiring, createKnowledgeWiring, createToolWiring
 				t.Cleanup(func() {
 					agentCommandRoot, agentCommandFS, jsonOutput = oldRoot, oldFS, oldJSON
-					createAgentWiring, createTaskTypeWiring, createSkillWiring, createToolWiring = oldAgent, oldTask, oldSkill, oldTool
+					createAgentWiring, createTaskTypeWiring, createSkillWiring, createKnowledgeWiring, createToolWiring = oldAgent, oldTask, oldSkill, oldKnowledge, oldTool
 					resetNewFlags(tt.cmd)
 				})
 				agentCommandRoot = func() (string, error) { return "/repo", nil }
@@ -56,6 +59,9 @@ func TestNewAgentCommandsOutput(t *testing.T) {
 					return result, nil
 				}
 				createSkillWiring = func(fsx.FileSystem, fsx.TemplateFS, string, scaffold.SkillConfig) (scaffold.WiringResult, error) {
+					return result, nil
+				}
+				createKnowledgeWiring = func(fsx.FileSystem, fsx.TemplateFS, string, scaffold.KnowledgeConfig) (scaffold.WiringResult, error) {
 					return result, nil
 				}
 				createToolWiring = func(fsx.FileSystem, fsx.TemplateFS, string, scaffold.ToolConfig) (scaffold.WiringResult, error) {
@@ -108,7 +114,15 @@ func TestNewCommandArgumentValidation(t *testing.T) {
 		{name: "agent name", call: func() error {
 			resetNewFlags(newAgentCmd)
 			return runNewAgent(newAgentCmd, []string{"com.acme.shop", "Bad_Name", "Support"})
-		}, want: "invalid action name"},
+		}, want: `agent "Bad_Name" has an invalid name`},
+		{name: "agent repeated separator", call: func() error {
+			resetNewFlags(newAgentCmd)
+			return runNewAgent(newAgentCmd, []string{"com.acme.shop", "refund--policy", "Support"})
+		}, want: `agent "refund--policy" has an invalid name`},
+		{name: "agent trailing separator", call: func() error {
+			resetNewFlags(newAgentCmd)
+			return runNewAgent(newAgentCmd, []string{"com.acme.shop", "refund-", "Support"})
+		}, want: `agent "refund-" has an invalid name`},
 		{name: "agent display length", call: func() error {
 			resetNewFlags(newAgentCmd)
 			return runNewAgent(newAgentCmd, []string{"com.acme.shop", "support", strings.Repeat("x", 101)})
@@ -120,27 +134,47 @@ func TestNewCommandArgumentValidation(t *testing.T) {
 		{name: "task type bad underscore prefix", call: func() error {
 			resetNewFlags(newTaskTypeCmd)
 			return runNewTaskType(newTaskTypeCmd, []string{"com.acme.shop", "_price", "Price Checks"})
-		}, want: "invalid task-type name"},
+		}, want: `kind of work "_price" has an invalid name`},
+		{name: "task type repeated separator", call: func() error {
+			resetNewFlags(newTaskTypeCmd)
+			return runNewTaskType(newTaskTypeCmd, []string{"com.acme.shop", "refund--review", "Refund Reviews"})
+		}, want: `kind of work "refund--review" has an invalid name`},
+		{name: "task type trailing underscore", call: func() error {
+			resetNewFlags(newTaskTypeCmd)
+			return runNewTaskType(newTaskTypeCmd, []string{"com.acme.shop", "refund_", "Refunds"})
+		}, want: `kind of work "refund_" has an invalid name`},
+		{name: "skill repeated separator", call: func() error {
+			resetNewFlags(newSkillCmd)
+			return runNewSkill(newSkillCmd, []string{"com.acme.shop", "refund--policy", "Refund Policy"})
+		}, want: `skill "refund--policy" has an invalid name`},
+		{name: "knowledge trailing separator", call: func() error {
+			resetNewFlags(newKnowledgeCmd)
+			return runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "refund-", "Refund Terms"})
+		}, want: `reference knowledge "refund-" has an invalid name`},
+		{name: "tool repeated separator", call: func() error {
+			resetNewFlags(newToolCmd)
+			return runNewTool(newToolCmd, []string{"com.acme.shop", "refund--lookup"})
+		}, want: `tool "refund--lookup" has an invalid name`},
 		{name: "skill requires task type", call: func() error {
 			resetNewFlags(newSkillCmd)
 			return runNewSkill(newSkillCmd, []string{"com.acme.shop", "refund-policy", "Refund Policy"})
-		}, want: "--task-type is required"},
-		{name: "tool requires task type", call: func() error {
-			resetNewFlags(newToolCmd)
-			return runNewTool(newToolCmd, []string{"com.acme.shop", "process-data"})
-		}, want: "--task-type is required"},
+		}, want: "needs --task-type"},
+		{name: "knowledge requires task type", call: func() error {
+			resetNewFlags(newKnowledgeCmd)
+			return runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "return-terms", "Return Terms"})
+		}, want: "needs --task-type"},
 		{name: "bad tool language", call: func() error {
 			resetNewFlags(newToolCmd)
 			_ = newToolCmd.Flags().Set("task-type", "returns")
 			_ = newToolCmd.Flags().Set("lang", "go")
 			return runNewTool(newToolCmd, []string{"com.acme.shop", "process-data"})
-		}, want: "unsupported language"},
+		}, want: `tool "process-data" has unsupported language`},
 		{name: "bad tool environment", call: func() error {
 			resetNewFlags(newToolCmd)
 			_ = newToolCmd.Flags().Set("task-type", "returns")
 			_ = newToolCmd.Flags().Set("env", "edge")
 			return runNewTool(newToolCmd, []string{"com.acme.shop", "process-data"})
-		}, want: "invalid execution environment"},
+		}, want: `tool "process-data" has unsupported environment`},
 		{name: "bad every", call: func() error {
 			resetNewFlags(newTaskTypeCmd)
 			_ = newTaskTypeCmd.Flags().Set("every", "500ms")
@@ -150,6 +184,10 @@ func TestNewCommandArgumentValidation(t *testing.T) {
 			resetNewFlags(newAgentCmd)
 			return runNewAgent(newAgentCmd, []string{"com.acme.shop", "support", `Support "Team"`})
 		}, want: "double quote"},
+		{name: "backslash in display name refused", call: func() error {
+			resetNewFlags(newAgentCmd)
+			return runNewAgent(newAgentCmd, []string{"com.acme.shop", "support", `Support\`})
+		}, want: "must not contain a backslash; remove it"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -158,6 +196,47 @@ func TestNewCommandArgumentValidation(t *testing.T) {
 			err := tt.call()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewCommandRefusalMessagesAreConsistent(t *testing.T) {
+	const (
+		toolNameMessage = `tool "refund--policy" in --tools has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter`
+		languageMessage = `tool "process-data" has unsupported language "go"; choose ts or rust`
+		envMessage      = `tool "process-data" has unsupported environment "edge"; choose server, client, or both`
+		everyMessage    = `--every must be a whole-second duration of at least one second, such as 90s, 30m, or 1h`
+	)
+	tests := []struct {
+		name string
+		call func() error
+		want string
+	}{
+		{name: "invalid --tools name", call: func() error {
+			_, err := parseToolNames("returns", "refund--policy")
+			return err
+		}, want: toolNameMessage},
+		{name: "unsupported language", call: func() error {
+			resetNewFlags(newToolCmd)
+			_ = newToolCmd.Flags().Set("lang", "go")
+			return runNewTool(newToolCmd, []string{"com.acme.shop", "process-data"})
+		}, want: languageMessage},
+		{name: "unsupported environment", call: func() error {
+			resetNewFlags(newToolCmd)
+			_ = newToolCmd.Flags().Set("env", "edge")
+			return runNewTool(newToolCmd, []string{"com.acme.shop", "process-data"})
+		}, want: envMessage},
+		{name: "invalid every", call: func() error {
+			_, err := parseNewWakeInterval("500ms")
+			return err
+		}, want: everyMessage},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.call()
+			if err == nil || err.Error() != tt.want {
+				t.Fatalf("error = %v, want exactly %q", err, tt.want)
 			}
 		})
 	}
@@ -207,7 +286,7 @@ func TestNewCommandPreflightRefusals(t *testing.T) {
 			resetNewFlags(newSkillCmd)
 			_ = newSkillCmd.Flags().Set("task-type", "Bad_Type")
 			return runNewSkill(newSkillCmd, []string{"com.acme.shop", "skill-one"})
-		}, want: "invalid task-type name"},
+		}, want: `kind of work "Bad_Type" has an invalid name`},
 		{name: "tool display quote", run: func() error {
 			resetNewFlags(newToolCmd)
 			_ = newToolCmd.Flags().Set("task-type", "returns")
@@ -228,12 +307,50 @@ func TestNewCommandPreflightRefusals(t *testing.T) {
 			resetNewFlags(newToolCmd)
 			_ = newToolCmd.Flags().Set("task-type", "Bad_Type")
 			return runNewTool(newToolCmd, []string{"com.acme.shop", "process-data"})
-		}, want: "invalid task-type name"},
+		}, want: `kind of work "Bad_Type" has an invalid name`},
+		{name: "knowledge title quote", run: func() error {
+			resetNewFlags(newKnowledgeCmd)
+			_ = newKnowledgeCmd.Flags().Set("task-type", "returns")
+			return runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "return-terms", `Return "Terms"`})
+		}, want: "double quote"},
+		{name: "knowledge title length", run: func() error {
+			resetNewFlags(newKnowledgeCmd)
+			_ = newKnowledgeCmd.Flags().Set("task-type", "returns")
+			return runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "return-terms", strings.Repeat("x", 256)})
+		}, want: "255 characters"},
+		{name: "knowledge task type syntax", run: func() error {
+			resetNewFlags(newKnowledgeCmd)
+			_ = newKnowledgeCmd.Flags().Set("task-type", "Bad_Type")
+			return runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "return-terms"})
+		}, want: `kind of work "Bad_Type" has an invalid name`},
 		{name: "task tools empty entry", run: func() error {
 			resetNewFlags(newTaskTypeCmd)
 			_ = newTaskTypeCmd.Flags().Set("tools", "process-data,")
 			return runNewTaskType(newTaskTypeCmd, []string{"com.acme.shop", "returns", "Returns"})
-		}, want: "empty name"},
+		}, want: `kind of work "returns" --tools value "process-data," has an empty tool name`},
+		{name: "no-agent cannot combine with agent", run: func() error {
+			resetNewFlags(newTaskTypeCmd)
+			_ = newTaskTypeCmd.Flags().Set("no-agent", "true")
+			_ = newTaskTypeCmd.Flags().Set("agent", "support")
+			return runNewTaskType(newTaskTypeCmd, []string{"com.acme.shop", "manual-review", "Manual Reviews"})
+		}, want: "cannot use --no-agent"},
+		{name: "no-agent cannot combine with tools", run: func() error {
+			resetNewFlags(newTaskTypeCmd)
+			_ = newTaskTypeCmd.Flags().Set("no-agent", "true")
+			_ = newTaskTypeCmd.Flags().Set("tools", "")
+			return runNewTaskType(newTaskTypeCmd, []string{"com.acme.shop", "manual-review", "Manual Reviews"})
+		}, want: "cannot use --no-agent"},
+		{name: "no-agent cannot combine with every", run: func() error {
+			resetNewFlags(newTaskTypeCmd)
+			_ = newTaskTypeCmd.Flags().Set("no-agent", "true")
+			_ = newTaskTypeCmd.Flags().Set("every", "1s")
+			return runNewTaskType(newTaskTypeCmd, []string{"com.acme.shop", "manual-review", "Manual Reviews"})
+		}, want: "cannot use --no-agent"},
+		{name: "knowledge reserved name prefix", run: func() error {
+			resetNewFlags(newKnowledgeCmd)
+			_ = newKnowledgeCmd.Flags().Set("task-type", "returns")
+			return runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "tool-terms", "Tool Terms"})
+		}, want: "reserved"},
 		{name: "task explicitly empty duration", run: func() error {
 			resetNewFlags(newTaskTypeCmd)
 			_ = newTaskTypeCmd.Flags().Set("every", "")
@@ -256,10 +373,10 @@ func TestNewCommandPreflightRefusals(t *testing.T) {
 
 func TestNewCommandRootAndWiringErrors(t *testing.T) {
 	oldRoot, oldFS := agentCommandRoot, agentCommandFS
-	oldAgent, oldTask, oldSkill, oldTool := createAgentWiring, createTaskTypeWiring, createSkillWiring, createToolWiring
+	oldAgent, oldTask, oldSkill, oldKnowledge, oldTool := createAgentWiring, createTaskTypeWiring, createSkillWiring, createKnowledgeWiring, createToolWiring
 	t.Cleanup(func() {
 		agentCommandRoot, agentCommandFS = oldRoot, oldFS
-		createAgentWiring, createTaskTypeWiring, createSkillWiring, createToolWiring = oldAgent, oldTask, oldSkill, oldTool
+		createAgentWiring, createTaskTypeWiring, createSkillWiring, createKnowledgeWiring, createToolWiring = oldAgent, oldTask, oldSkill, oldKnowledge, oldTool
 	})
 	agentCommandFS = &fsx.MockFileSystem{}
 	t.Run("root lookup error", func(t *testing.T) {
@@ -278,6 +395,7 @@ func TestNewCommandRootAndWiringErrors(t *testing.T) {
 	}{
 		{name: "task type root error", cmd: newTaskTypeCmd, args: []string{"com.acme.shop", "returns", "Returns"}, run: runNewTaskType},
 		{name: "skill root error", cmd: newSkillCmd, args: []string{"com.acme.shop", "skill-one"}, run: runNewSkill, set: func(cmd *cobra.Command) { _ = cmd.Flags().Set("task-type", "returns") }},
+		{name: "knowledge root error", cmd: newKnowledgeCmd, args: []string{"com.acme.shop", "return-terms", "Return Terms"}, run: runNewKnowledge, set: func(cmd *cobra.Command) { _ = cmd.Flags().Set("task-type", "returns") }},
 		{name: "tool root error", cmd: newToolCmd, args: []string{"com.acme.shop", "process-data"}, run: runNewTool, set: func(cmd *cobra.Command) { _ = cmd.Flags().Set("task-type", "returns") }},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -322,6 +440,17 @@ func TestNewCommandRootAndWiringErrors(t *testing.T) {
 			t.Fatalf("error = %v", err)
 		}
 	})
+	t.Run("knowledge wiring error", func(t *testing.T) {
+		resetNewFlags(newKnowledgeCmd)
+		_ = newKnowledgeCmd.Flags().Set("task-type", "returns")
+		agentCommandRoot = func() (string, error) { return "/repo", nil }
+		createKnowledgeWiring = func(fsx.FileSystem, fsx.TemplateFS, string, scaffold.KnowledgeConfig) (scaffold.WiringResult, error) {
+			return scaffold.WiringResult{}, errors.New("knowledge write refused")
+		}
+		if err := runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "return-terms", "Return Terms"}); err == nil || !strings.Contains(err.Error(), "knowledge write refused") {
+			t.Fatalf("error = %v", err)
+		}
+	})
 	t.Run("tool wiring error", func(t *testing.T) {
 		resetNewFlags(newToolCmd)
 		_ = newToolCmd.Flags().Set("task-type", "returns")
@@ -330,6 +459,17 @@ func TestNewCommandRootAndWiringErrors(t *testing.T) {
 			return scaffold.WiringResult{}, errors.New("tool write refused")
 		}
 		if err := runNewTool(newToolCmd, []string{"com.acme.shop", "process-data"}); err == nil || !strings.Contains(err.Error(), "tool write refused") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("knowledge wiring error", func(t *testing.T) {
+		resetNewFlags(newKnowledgeCmd)
+		_ = newKnowledgeCmd.Flags().Set("task-type", "returns")
+		agentCommandRoot = func() (string, error) { return "/repo", nil }
+		createKnowledgeWiring = func(fsx.FileSystem, fsx.TemplateFS, string, scaffold.KnowledgeConfig) (scaffold.WiringResult, error) {
+			return scaffold.WiringResult{}, errors.New("knowledge write refused")
+		}
+		if err := runNewKnowledge(newKnowledgeCmd, []string{"com.acme.shop", "return-terms", "Return Terms"}); err == nil || !strings.Contains(err.Error(), "knowledge write refused") {
 			t.Fatalf("error = %v", err)
 		}
 	})
@@ -346,10 +486,22 @@ func TestPrintNewResultEmptyAndWriteErrors(t *testing.T) {
 		if err := printNewResult(newSkillCmd, "com.acme.shop", "refund-policy", "skill", result); err != nil {
 			t.Fatal(err)
 		}
-		for _, want := range []string{"Nothing to add", "Nothing to fill in.", "Run `simple build com.acme.shop`"} {
+		for _, want := range []string{"Nothing to add", "Nothing to fill in for skill refund-policy", "Run `simple build com.acme.shop`"} {
 			if !strings.Contains(output.String(), want) {
 				t.Fatalf("output %q does not contain %q", output.String(), want)
 			}
+		}
+	})
+	t.Run("text success without fill-in", func(t *testing.T) {
+		jsonOutput = false
+		var output bytes.Buffer
+		newKnowledgeCmd.SetOut(&output)
+		result := scaffold.WiringResult{Created: []string{"apps/com.acme.shop/records/72_agent_links.scl"}, Records: []string{"knowledge_link"}, FillIn: []string{}}
+		if err := printNewResult(newKnowledgeCmd, "com.acme.shop", "return-terms", "knowledge", result); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(output.String(), "Nothing to fill in for knowledge return-terms in com.acme.shop.") {
+			t.Fatalf("output = %q", output.String())
 		}
 	})
 	t.Run("json uses empty lists", func(t *testing.T) {
@@ -425,7 +577,7 @@ func TestParseToolNames(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.value, func(t *testing.T) {
-			got, err := parseToolNames(tt.value)
+			got, err := parseToolNames("returns", tt.value)
 			if tt.bad {
 				if err == nil {
 					t.Fatalf("parseToolNames(%q) = %#v, nil", tt.value, got)
@@ -446,7 +598,10 @@ func resetNewFlags(cmd *cobra.Command) {
 		_ = cmd.Flags().Set("agent", "")
 		_ = cmd.Flags().Set("tools", "")
 		_ = cmd.Flags().Set("every", "")
+		_ = cmd.Flags().Set("no-agent", "false")
 	case newSkillCmd:
+		_ = cmd.Flags().Set("task-type", "")
+	case newKnowledgeCmd:
 		_ = cmd.Flags().Set("task-type", "")
 	case newToolCmd:
 		_ = cmd.Flags().Set("task-type", "")

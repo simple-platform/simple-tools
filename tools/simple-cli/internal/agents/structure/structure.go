@@ -306,24 +306,61 @@ func CheckSkill(body string) []Finding {
 	}
 	if contains(sectionTexts, "Related Tools") {
 		tools := 0
-		for _, line := range skillSection(lines, "Related Tools") {
+		relatedTools := skillSection(lines, "Related Tools")
+		for _, line := range relatedTools {
 			if skillToolRE.MatchString(line.text) {
 				tools++
 			}
 		}
-		if tools == 0 {
+		if len(relatedTools) > 0 && tools == 0 {
 			findings = append(findings, Finding{Line: sectionLine(headingLines, "Related Tools", len(lines)), Rule: "add at least one tool identifier as a dash bullet with the identifier in backticks"})
 		}
 	}
 	return finalize(findings)
 }
 
+// HasSlugLine reports whether a body contains a Slug line outside a code fence.
+func HasSlugLine(body string) bool {
+	for _, line := range skillUnfenced(strings.Split(body, "\n")) {
+		if strings.HasPrefix(line.text, "Slug:") {
+			return true
+		}
+	}
+	return false
+}
+
+// SkillFileNameFinding reports when a skill or lesson file does not match its slug.
+func SkillFileNameFinding(body, filePath string) *Finding {
+	if filePath == "" {
+		return nil
+	}
+	slug := findCanonicalSlug(skillUnfenced(strings.Split(body, "\n")))
+	if slug == "" {
+		return nil
+	}
+	want := slug + ".md"
+	actual := filePath
+	if index := strings.LastIndex(actual, "/"); index >= 0 {
+		actual = actual[index+1:]
+	}
+	if actual == want {
+		return nil
+	}
+	return &Finding{Line: slugLine(body), Rule: "rename " + actual + " to " + want + " so the file name matches its Slug line"}
+}
+
+func slugLine(body string) int {
+	for _, line := range skillUnfenced(strings.Split(body, "\n")) {
+		if strings.HasPrefix(line.text, "Slug:") {
+			return line.number
+		}
+	}
+	return 1
+}
+
 func finalize(findings []Finding) []Finding {
 	for i := range findings {
-		findings[i].Rule = strings.TrimSpace(findings[i].Rule)
-		if !strings.HasSuffix(findings[i].Rule, ".") {
-			findings[i].Rule += "."
-		}
+		findings[i].Rule = strings.TrimSuffix(strings.TrimSpace(findings[i].Rule), ".")
 	}
 	return findings
 }
@@ -564,6 +601,7 @@ var skillOptionalSections = []string{"Domain Terms", "Related Tools", "Evidence 
 type skillLine struct {
 	text   string
 	number int
+	fenced bool
 }
 
 type skillHeading struct {
@@ -644,17 +682,14 @@ func skillSection(lines []string, name string) []skillLine {
 	inside := false
 	for i, line := range lines {
 		isFence := strings.HasPrefix(line, "```")
-		fenced[i] = skillLine{text: line, number: i + 1}
+		fenced[i] = skillLine{text: line, number: i + 1, fenced: inside || isFence}
 		if isFence {
 			inside = !inside
-			fenced[i].text = "\x00fence"
-		} else if inside {
-			fenced[i].text = "\x00fence"
 		}
 	}
 	start := -1
 	for i, line := range fenced {
-		if line.text == "## "+name {
+		if !line.fenced && line.text == "## "+name {
 			start = i + 1
 			break
 		}
@@ -664,7 +699,7 @@ func skillSection(lines []string, name string) []skillLine {
 	}
 	end := start
 	for end < len(fenced) {
-		if fenced[end].text != "\x00fence" && strings.HasPrefix(fenced[end].text, "## ") {
+		if !fenced[end].fenced && strings.HasPrefix(fenced[end].text, "## ") {
 			break
 		}
 		end++

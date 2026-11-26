@@ -19,6 +19,7 @@ var agentCommandRoot = os.Getwd
 var createAgentWiring = scaffold.CreateAgent
 var createTaskTypeWiring = scaffold.CreateTaskType
 var createSkillWiring = scaffold.CreateSkill
+var createKnowledgeWiring = scaffold.CreateKnowledge
 var createToolWiring = scaffold.CreateTool
 
 var newAgentCmd = &cobra.Command{
@@ -30,7 +31,7 @@ var newAgentCmd = &cobra.Command{
 
 var newTaskTypeCmd = &cobra.Command{
 	Use:   "task-type <app> <name> <plural-name>",
-	Short: "Create a kind of work for an agent",
+	Short: "Create a kind of work for an agent or people",
 	Args:  cobra.ExactArgs(3),
 	RunE:  runNewTaskType,
 }
@@ -42,9 +43,16 @@ var newSkillCmd = &cobra.Command{
 	RunE:  runNewSkill,
 }
 
+var newKnowledgeCmd = &cobra.Command{
+	Use:   "knowledge <app> <name> [title]",
+	Short: "Create reference knowledge or link an existing body",
+	Args:  cobra.RangeArgs(2, 3),
+	RunE:  runNewKnowledge,
+}
+
 var newToolCmd = &cobra.Command{
 	Use:   "tool <app> <name> [display-name]",
-	Short: "Link or create a tool for a kind of work",
+	Short: "Set up a tool and optionally link it to a kind of work",
 	Args:  cobra.RangeArgs(2, 3),
 	RunE:  runNewTool,
 }
@@ -52,16 +60,16 @@ var newToolCmd = &cobra.Command{
 func runNewAgent(cmd *cobra.Command, args []string) error {
 	appID, name, displayName := args[0], args[1], args[2]
 	desc, _ := cmd.Flags().GetString("desc")
-	if err := validateActionName(name); err != nil {
-		return fmt.Errorf("invalid agent name: %w", err)
-	}
-	if utf8.RuneCountInString(displayName) > 100 {
-		return fmt.Errorf("agent display name is longer than 100 characters")
-	}
-	if err := validateNewText("display name", displayName, 100); err != nil {
+	if err := validateNamedCommandName("agent", name); err != nil {
 		return err
 	}
-	if err := validateNewText("description", desc, 1000); err != nil {
+	if utf8.RuneCountInString(displayName) > 100 {
+		return fmt.Errorf("agent %q display name is too long; use 100 characters or fewer", name)
+	}
+	if err := validateNewText("agent", name, "display name", displayName, 100); err != nil {
+		return err
+	}
+	if err := validateNewText("agent", name, "description", desc, 1000); err != nil {
 		return err
 	}
 	root, err := agentCommandRoot()
@@ -83,30 +91,34 @@ func runNewTaskType(cmd *cobra.Command, args []string) error {
 	agentName, _ := cmd.Flags().GetString("agent")
 	toolsText, _ := cmd.Flags().GetString("tools")
 	every, _ := cmd.Flags().GetString("every")
+	noAgent, _ := cmd.Flags().GetBool("no-agent")
 	if err := validateTaskTypeName(name); err != nil {
 		return err
 	}
 	if len(name) > 100 {
-		return fmt.Errorf("task-type name is longer than 100 characters")
+		return fmt.Errorf("kind of work %q name is too long; use 100 characters or fewer", name)
 	}
 	if utf8.RuneCountInString(pluralName) > 100 {
-		return fmt.Errorf("plural name is longer than 100 characters")
+		return fmt.Errorf("kind of work %q plural name is too long; use 100 characters or fewer", name)
 	}
-	if err := validateNewText("plural name", pluralName, 100); err != nil {
+	if err := validateNewText("kind of work", name, "plural name", pluralName, 100); err != nil {
 		return err
 	}
-	if err := validateNewText("description", desc, 1000); err != nil {
+	if err := validateNewText("kind of work", name, "description", desc, 1000); err != nil {
 		return err
+	}
+	if noAgent && (cmd.Flags().Changed("agent") || cmd.Flags().Changed("tools") || cmd.Flags().Changed("every")) {
+		return fmt.Errorf("kind of work %q cannot use --no-agent with --agent, --tools, or --every; remove those flags", name)
 	}
 	wakeSeconds := int64(3600)
 	if cmd.Flags().Changed("every") {
 		parsedSeconds, parseErr := parseNewWakeInterval(every)
 		if parseErr != nil {
-			return parseErr
+			return fmt.Errorf("kind of work %q: %w", name, parseErr)
 		}
 		wakeSeconds = parsedSeconds
 	}
-	tools, err := parseToolNames(toolsText)
+	tools, err := parseToolNames(name, toolsText)
 	if err != nil {
 		return err
 	}
@@ -116,7 +128,8 @@ func runNewTaskType(cmd *cobra.Command, args []string) error {
 	}
 	result, err := createTaskTypeWiring(agentCommandFS, scaffold.TemplatesFS, root, scaffold.TaskTypeConfig{
 		AppID: appID, Name: name, PluralName: pluralName, Description: desc, AgentName: agentName,
-		Tools: tools, WakeIntervalSeconds: wakeSeconds,
+		Tools: tools, WakeIntervalSeconds: wakeSeconds, NoAgent: noAgent,
+		AgentFlagSet: cmd.Flags().Changed("agent"), ToolsFlagSet: cmd.Flags().Changed("tools"), EveryFlagSet: cmd.Flags().Changed("every"),
 	})
 	if err != nil {
 		return err
@@ -132,25 +145,25 @@ func runNewSkill(cmd *cobra.Command, args []string) error {
 	}
 	desc, _ := cmd.Flags().GetString("desc")
 	taskType, _ := cmd.Flags().GetString("task-type")
-	if err := validateActionName(name); err != nil {
-		return fmt.Errorf("invalid skill name: %w", err)
+	if err := validateNamedCommandName("skill", name); err != nil {
+		return err
 	}
 	if utf8.RuneCountInString(title) > 255 {
-		return fmt.Errorf("knowledge title is longer than 255 characters")
+		return fmt.Errorf("skill %q title is too long; use 255 characters or fewer", name)
 	}
 	if title != "" {
-		if err := validateNewText("title", title, 255); err != nil {
+		if err := validateNewText("skill", name, "title", title, 255); err != nil {
 			return err
 		}
 	}
-	if err := validateNewText("description", desc, 1000); err != nil {
+	if err := validateNewText("skill", name, "description", desc, 1000); err != nil {
 		return err
 	}
 	if taskType == "" {
-		return fmt.Errorf("--task-type is required")
+		return fmt.Errorf("skill %q needs --task-type; name the kind of work to receive it", name)
 	}
 	if err := validateTaskTypeName(taskType); err != nil {
-		return fmt.Errorf("invalid task-type name: %w", err)
+		return err
 	}
 	root, err := agentCommandRoot()
 	if err != nil {
@@ -165,6 +178,48 @@ func runNewSkill(cmd *cobra.Command, args []string) error {
 	return printNewResult(cmd, appID, name, "skill", result)
 }
 
+func runNewKnowledge(cmd *cobra.Command, args []string) error {
+	appID, name := args[0], args[1]
+	title := ""
+	if len(args) == 3 {
+		title = args[2]
+	}
+	taskType, _ := cmd.Flags().GetString("task-type")
+	if err := validateNamedCommandName("reference knowledge", name); err != nil {
+		return err
+	}
+	for _, prefix := range []string{"skill-", "tool-", "playbook-"} {
+		if strings.HasPrefix(name, prefix) {
+			return fmt.Errorf("reference knowledge %q cannot use the reserved %q prefix; choose a name without it", name, prefix)
+		}
+	}
+	if utf8.RuneCountInString(title) > 255 {
+		return fmt.Errorf("reference knowledge %q title is too long; use 255 characters or fewer", name)
+	}
+	if title != "" {
+		if err := validateNewText("reference knowledge", name, "title", title, 255); err != nil {
+			return err
+		}
+	}
+	if taskType == "" {
+		return fmt.Errorf("reference knowledge %q needs --task-type; name the kind of work to receive it", name)
+	}
+	if err := validateTaskTypeName(taskType); err != nil {
+		return err
+	}
+	root, err := agentCommandRoot()
+	if err != nil {
+		return fmt.Errorf("failed to get current working directory: %w", err)
+	}
+	result, err := createKnowledgeWiring(agentCommandFS, scaffold.TemplatesFS, root, scaffold.KnowledgeConfig{
+		AppID: appID, Name: name, Title: title, TaskTypeName: taskType,
+	})
+	if err != nil {
+		return err
+	}
+	return printNewResult(cmd, appID, name, "knowledge", result)
+}
+
 func runNewTool(cmd *cobra.Command, args []string) error {
 	appID, name := args[0], args[1]
 	displayName := ""
@@ -176,29 +231,28 @@ func runNewTool(cmd *cobra.Command, args []string) error {
 	lang, _ := cmd.Flags().GetString("lang")
 	scope, _ := cmd.Flags().GetString("scope")
 	env, _ := cmd.Flags().GetString("env")
-	if err := validateActionName(name); err != nil {
-		return fmt.Errorf("invalid tool name: %w", err)
+	if err := validateNamedCommandName("tool", name); err != nil {
+		return err
 	}
 	if utf8.RuneCountInString(displayName) > 100 {
-		return fmt.Errorf("display name is longer than 100 characters")
+		return fmt.Errorf("tool %q display name is too long; use 100 characters or fewer", name)
 	}
 	if displayName != "" {
-		if err := validateNewText("display name", displayName, 100); err != nil {
+		if err := validateNewText("tool", name, "display name", displayName, 100); err != nil {
 			return err
 		}
 	}
-	if err := validateNewText("description", desc, 1000); err != nil {
+	if err := validateNewText("tool", name, "description", desc, 1000); err != nil {
 		return err
 	}
-	if taskType == "" {
-		return fmt.Errorf("--task-type is required")
-	}
-	if err := validateTaskTypeName(taskType); err != nil {
-		return fmt.Errorf("invalid task-type name: %w", err)
+	if taskType != "" {
+		if err := validateTaskTypeName(taskType); err != nil {
+			return err
+		}
 	}
 	language, known := actionLanguages[lang]
 	if !known {
-		return fmt.Errorf("unsupported language: %s. Supported: 'ts' (TypeScript), 'rust' (Rust)", lang)
+		return fmt.Errorf("tool %q has unsupported language %q; choose ts or rust", name, lang)
 	}
 	scope = strings.TrimPrefix(scope, "@")
 	validEnv := false
@@ -209,7 +263,7 @@ func runNewTool(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if !validEnv {
-		return fmt.Errorf("invalid execution environment: %s. Valid values: server, client, both", env)
+		return fmt.Errorf("tool %q has unsupported environment %q; choose server, client, or both", name, env)
 	}
 	root, err := agentCommandRoot()
 	if err != nil {
@@ -251,7 +305,7 @@ func printNewResult(cmd *cobra.Command, appID, name, kind string, result scaffol
 		return fmt.Errorf("failed to write command output: %w", err)
 	}
 	if len(fillIn) == 0 {
-		if _, err := fmt.Fprintln(cmd.OutOrStdout(), "Nothing to fill in."); err != nil {
+		if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Nothing to fill in for %s %s in %s.\n", kind, name, appID); err != nil {
 			return fmt.Errorf("failed to write command output: %w", err)
 		}
 	} else {
@@ -270,19 +324,32 @@ func printNewResult(cmd *cobra.Command, appID, name, kind string, result scaffol
 	return nil
 }
 
-func validateTaskTypeName(name string) error {
-	if !taskTypeNamePattern.MatchString(name) {
-		return fmt.Errorf("invalid task-type name %q: use lowercase letters, digits, hyphens, or underscores, starting with a letter", name)
+func validateNamedCommandName(kind, name string) error {
+	if !agentCommandNameRegex.MatchString(name) {
+		return fmt.Errorf("%s %q has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter", kind, name)
 	}
 	return nil
 }
 
-func validateNewText(field, value string, limit int) error {
-	if err := validateActionText(field, value); err != nil {
-		return err
+func validateTaskTypeName(name string) error {
+	if !taskTypeNamePattern.MatchString(name) {
+		return fmt.Errorf("kind of work %q has an invalid name; use lowercase letters and digits in groups joined by single hyphens or underscores, starting with a letter", name)
+	}
+	return nil
+}
+
+func validateNewText(kind, name, field, value string, limit int) error {
+	if strings.ContainsAny(value, "\n\r") {
+		return fmt.Errorf("%s %q %s must be a single line; remove line breaks", kind, name, field)
+	}
+	if strings.Contains(value, `"`) {
+		return fmt.Errorf("%s %q %s must not contain a double quote; remove the quote", kind, name, field)
+	}
+	if strings.Contains(value, `\`) {
+		return fmt.Errorf("%s %q %s must not contain a backslash; remove it", kind, name, field)
 	}
 	if utf8.RuneCountInString(value) > limit {
-		return fmt.Errorf("%s is longer than %d characters", field, limit)
+		return fmt.Errorf("%s %q %s is longer than %d characters; shorten it", kind, name, field, limit)
 	}
 	return nil
 }
@@ -295,9 +362,10 @@ func parseNewWakeInterval(value string) (int64, error) {
 	return int64(duration / time.Second), nil
 }
 
-var taskTypeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+var agentCommandNameRegex = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+var taskTypeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`)
 
-func parseToolNames(value string) ([]string, error) {
+func parseToolNames(taskTypeName, value string) ([]string, error) {
 	if value == "" {
 		return []string{}, nil
 	}
@@ -306,10 +374,10 @@ func parseToolNames(value string) ([]string, error) {
 	for _, part := range strings.Split(value, ",") {
 		name := strings.TrimSpace(part)
 		if name == "" {
-			return nil, fmt.Errorf("--tools contains an empty name; give each tool as a comma-separated name")
+			return nil, fmt.Errorf("kind of work %q --tools value %q has an empty tool name; remove empty entries", taskTypeName, value)
 		}
-		if err := validateActionName(name); err != nil {
-			return nil, fmt.Errorf("invalid tool name in --tools: %w", err)
+		if !agentCommandNameRegex.MatchString(name) {
+			return nil, fmt.Errorf("tool %q in --tools has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter", name)
 		}
 		if !seen[name] {
 			seen[name] = true
@@ -326,12 +394,12 @@ func init() {
 	newTaskTypeCmd.Flags().String("agent", "", "Default agent name")
 	newTaskTypeCmd.Flags().String("tools", "", "Comma-separated platform tools or app actions")
 	newTaskTypeCmd.Flags().String("every", "", "Wake interval in whole seconds, such as 90s, 30m, or 1h")
+	newTaskTypeCmd.Flags().Bool("no-agent", false, "Create work for people without an agent")
 	newSkillCmd.Flags().String("task-type", "", "Kind of work to receive this skill")
-	newToolCmd.Flags().String("task-type", "", "Kind of work to receive this tool")
+	newKnowledgeCmd.Flags().String("task-type", "", "Kind of work to receive this reference knowledge")
+	newToolCmd.Flags().String("task-type", "", "Optional kind of work to receive this tool")
 	newToolCmd.Flags().StringP("lang", "l", "ts", "Action language: ts or rust")
 	newToolCmd.Flags().StringP("scope", "s", "", "NPM package scope without @; TypeScript actions only")
 	newToolCmd.Flags().StringP("env", "e", "server", "Execution environment: server, client, or both")
-	_ = newSkillCmd.MarkFlagRequired("task-type")
-	_ = newToolCmd.MarkFlagRequired("task-type")
-	newCmd.AddCommand(newAgentCmd, newTaskTypeCmd, newSkillCmd, newToolCmd)
+	newCmd.AddCommand(newAgentCmd, newTaskTypeCmd, newSkillCmd, newKnowledgeCmd, newToolCmd)
 }

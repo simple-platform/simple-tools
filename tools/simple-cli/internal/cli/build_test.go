@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
+	"path/filepath"
 	"simple-cli/internal/agents"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
@@ -89,8 +91,8 @@ func TestBuildEmptyAppTargetAgentChecks(t *testing.T) {
 			if (runErr != nil) != (tt.wantErr != "") || (runErr != nil && !strings.Contains(runErr.Error(), tt.wantErr)) {
 				t.Fatalf("buildEmptyAppTarget() error = %v, want containing %q", runErr, tt.wantErr)
 			}
-			if checkCalls != btoi(tt.withRecords) {
-				t.Errorf("agent checker calls = %d, want %d", checkCalls, btoi(tt.withRecords))
+			if checkCalls != 1 {
+				t.Errorf("agent checker calls = %d, want 1 for every app target", checkCalls)
 			}
 			if tt.wantText != "" && stderr != tt.wantText {
 				t.Errorf("text = %q, want %q", stderr, tt.wantText)
@@ -106,6 +108,124 @@ func TestBuildEmptyAppTargetAgentChecks(t *testing.T) {
 				if result.Status != tt.wantStatus || len(result.AgentProblems) != tt.wantProblemN {
 					t.Errorf("JSON status/problems = %q/%d, want %q/%d", result.Status, len(result.AgentProblems), tt.wantStatus, tt.wantProblemN)
 				}
+			}
+		})
+	}
+}
+
+type buildAppsFS struct {
+	*fsx.MockFileSystem
+	entries []os.DirEntry
+	readErr error
+}
+
+func (f *buildAppsFS) ReadDir(name string) ([]os.DirEntry, error) {
+	if filepath.Clean(name) == "apps" {
+		return f.entries, f.readErr
+	}
+	return nil, nil
+}
+
+type buildTestDirEntry struct {
+	name string
+	dir  bool
+}
+
+func (d buildTestDirEntry) Name() string { return d.name }
+func (d buildTestDirEntry) IsDir() bool  { return d.dir }
+func (d buildTestDirEntry) Type() fs.FileMode {
+	if d.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (d buildTestDirEntry) Info() (fs.FileInfo, error) {
+	return nil, errors.New("directory entry info is not used")
+}
+
+func TestBuildAllAppsAgentChecks(t *testing.T) {
+	oldJSON, oldCheck, oldLoad := jsonOutput, checkBuildAgents, loadAgentApp
+	oldFindActions, oldFindSpaces, oldRunAll := findBuildActions, findBuildSpaces, runAllBuildTargets
+	defer func() {
+		jsonOutput, checkBuildAgents, loadAgentApp = oldJSON, oldCheck, oldLoad
+		findBuildActions, findBuildSpaces, runAllBuildTargets = oldFindActions, oldFindSpaces, oldRunAll
+	}()
+	problem := agents.Problem{File: "apps/demo/actions/send/src/index.ts", Line: 2, Rule: "replace this line"}
+	tests := []struct {
+		name          string
+		apps          []string
+		records       []string
+		problems      []agents.Problem
+		hasAgents     bool
+		actions       map[string][]string
+		spaces        map[string][]string
+		readErr       error
+		wantErr       string
+		wantRun       bool
+		wantChecks    int
+		wantTargets   int
+		wantProblems  int
+		wantActions   int
+		wantSpaceDirs int
+	}{
+		{name: "apps path missing", wantErr: "apps directory not found"},
+		{name: "apps directory read fails", apps: []string{"demo"}, readErr: errors.New("read denied"), wantErr: "failed to read apps directory"},
+		{name: "empty apps return JSON success"},
+		{name: "marker check runs without records", apps: []string{"demo"}, problems: []agents.Problem{problem}, wantRun: true, wantChecks: 1, wantTargets: 1, wantProblems: 1},
+		{name: "agent records make empty app buildable", apps: []string{"demo"}, records: []string{"demo"}, hasAgents: true, wantRun: true, wantChecks: 1, wantTargets: 1},
+		{name: "actions and spaces share the same targets", apps: []string{"demo", "other"}, actions: map[string][]string{"apps/demo": {"apps/demo/actions/send"}}, spaces: map[string][]string{"apps/other": {"apps/other/spaces/admin"}}, wantRun: true, wantChecks: 0, wantTargets: 2, wantActions: 1, wantSpaceDirs: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			jsonOutput = true
+			files := map[string][]byte{}
+			if tt.name != "apps path missing" {
+				files["apps"] = nil
+			}
+			for _, appID := range tt.records {
+				files[filepath.Join("apps", appID, "records")] = nil
+			}
+			entries := make([]os.DirEntry, 0, len(tt.apps))
+			for _, appID := range tt.apps {
+				entries = append(entries, buildTestDirEntry{name: appID, dir: true})
+			}
+			fsys := &buildAppsFS{MockFileSystem: &fsx.MockFileSystem{Files: files}, entries: entries, readErr: tt.readErr}
+			checkCalls := 0
+			checkBuildAgents = func(_ fsx.FileSystem, _, _ string) ([]agents.Problem, error) {
+				checkCalls++
+				return tt.problems, nil
+			}
+			loadAgentApp = func(_ fsx.FileSystem, _, _ string) (*agents.App, error) {
+				app := &agents.App{}
+				if tt.hasAgents {
+					app.TaskTypes = []*agents.TaskType{{Key: "task_type_demo"}}
+				}
+				return app, nil
+			}
+			findBuildActions = func(appDir string) ([]string, error) { return tt.actions[filepath.Clean(appDir)], nil }
+			findBuildSpaces = func(appDir string) ([]string, error) { return tt.spaces[filepath.Clean(appDir)], nil }
+			runCalls := 0
+			runAllBuildTargets = func(_ *build.BuildManager, actions, spaces []string, targets ...buildAgentTarget) error {
+				runCalls++
+				if len(targets) != tt.wantTargets {
+					t.Errorf("agent targets = %d, want %d", len(targets), tt.wantTargets)
+				}
+				if tt.wantProblems > 0 && (!targets[0].checked || len(targets[0].problems) != tt.wantProblems) {
+					t.Errorf("checked target = %#v, want %d cached problems", targets[0], tt.wantProblems)
+				}
+				if len(actions) != tt.wantActions || len(spaces) != tt.wantSpaceDirs {
+					t.Errorf("build paths = %d actions and %d spaces, want %d and %d", len(actions), len(spaces), tt.wantActions, tt.wantSpaceDirs)
+				}
+				return nil
+			}
+			manager := build.NewBuildManager(build.BuildOptions{Concurrency: 1})
+			var runErr error
+			_ = captureStdout(t, func() { runErr = buildAllApps(manager, fsys) })
+			if (runErr != nil) != (tt.wantErr != "") || (runErr != nil && !strings.Contains(runErr.Error(), tt.wantErr)) {
+				t.Fatalf("buildAllApps() error = %v, want containing %q", runErr, tt.wantErr)
+			}
+			if checkCalls != tt.wantChecks || runCalls != btoi(tt.wantRun) {
+				t.Errorf("checks/build calls = %d/%d, want %d/%d", checkCalls, runCalls, tt.wantChecks, btoi(tt.wantRun))
 			}
 		})
 	}
@@ -138,6 +258,45 @@ func TestBuildSingleActionTargetSkipsAgentCheck(t *testing.T) {
 	}
 	if checkCalls != 0 {
 		t.Errorf("agent checker calls = %d, want 0 for a single action", checkCalls)
+	}
+}
+
+func TestCheckAppAgentsAtUsesSuppliedDirectory(t *testing.T) {
+	originalCheck, originalCheckAt := checkBuildAgents, checkBuildAgentsAt
+	defer func() { checkBuildAgents, checkBuildAgentsAt = originalCheck, originalCheckAt }()
+	tests := []struct {
+		name    string
+		appID   string
+		appDir  string
+		checkAt bool
+	}{
+		{name: "canonical app directory", appID: "com.acme.shop", appDir: filepath.Join("apps", "com.acme.shop")},
+		{name: "custom app directory", appID: "com.acme.shop", appDir: filepath.Join("fixtures", "shop"), checkAt: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calledCanonical, calledAt := false, false
+			checkBuildAgents = func(_ fsx.FileSystem, repoRoot, appID string) ([]agents.Problem, error) {
+				calledCanonical = true
+				if repoRoot != "." || appID != tt.appID {
+					t.Errorf("Check() arguments = %q, %q; want %q, %q", repoRoot, appID, ".", tt.appID)
+				}
+				return nil, nil
+			}
+			checkBuildAgentsAt = func(_ fsx.FileSystem, repoRoot, appID, appDir string) ([]agents.Problem, error) {
+				calledAt = true
+				if repoRoot != "." || appID != tt.appID || appDir != tt.appDir {
+					t.Errorf("CheckAt arguments = %q, %q, %q; want %q, %q, %q", repoRoot, appID, appDir, ".", tt.appID, tt.appDir)
+				}
+				return nil, nil
+			}
+			if _, err := checkAppAgentsAt(nil, tt.appID, tt.appDir); err != nil {
+				t.Fatalf("checkAppAgentsAt() error = %v", err)
+			}
+			if calledCanonical == tt.checkAt || calledAt != tt.checkAt {
+				t.Fatalf("canonical/at checker calls = %v/%v, want %v/%v", calledCanonical, calledAt, !tt.checkAt, tt.checkAt)
+			}
+		})
 	}
 }
 

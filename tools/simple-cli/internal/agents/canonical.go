@@ -39,7 +39,7 @@ func (a *App) Canonical() string {
 		if task == nil || knowledge == nil {
 			continue
 		}
-		appendLine("skill-link", task.Name, bodyMeaning(knowledge), strconv.Itoa(link.Position))
+		appendLine("knowledge-link", task.Name, bodyMeaning(knowledge), strconv.Itoa(link.Position))
 	}
 	for _, link := range a.TaskTypeToolLinks {
 		task := a.taskTypeByKey(link.TaskTypeRef.Key)

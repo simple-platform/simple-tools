@@ -22,10 +22,14 @@ import (
 )
 
 var (
-	buildAll         bool
-	concurrency      int
-	checkBuildAgents = agents.Check
-	loadAgentApp     = agents.Load
+	buildAll           bool
+	concurrency        int
+	checkBuildAgents   = agents.Check
+	checkBuildAgentsAt = agents.CheckAt
+	loadAgentApp       = agents.Load
+	findBuildActions   = build.FindActions
+	findBuildSpaces    = build.FindSpaces
+	runAllBuildTargets = runBuildAll
 )
 
 type buildAgentTarget struct {
@@ -158,7 +162,7 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			appDir := filepath.Join(appsDir, entry.Name())
-			actionDirs, err := build.FindActions(appDir)
+			actionDirs, err := findBuildActions(appDir)
 			if err == nil {
 				for _, actionDir := range actionDirs {
 					absDir, err := filepath.Abs(actionDir)
@@ -168,7 +172,7 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 				}
 			}
 			// Find spaces
-			spaceDirs, err := build.FindSpaces(appDir)
+			spaceDirs, err := findBuildSpaces(appDir)
 			if err == nil {
 				for _, spaceDir := range spaceDirs {
 					absDir, err := filepath.Abs(spaceDir)
@@ -179,14 +183,14 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 			}
 		}
 	}
+	targets := make([]buildAgentTarget, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			targets = append(targets, buildAgentTarget{appID: entry.Name(), fsys: fsys})
+		}
+	}
 
 	if len(allActionDirs) == 0 && len(allSpaceDirs) == 0 {
-		targets := make([]buildAgentTarget, 0, len(entries))
-		for _, entry := range entries {
-			if entry.IsDir() {
-				targets = append(targets, buildAgentTarget{appID: entry.Name(), fsys: fsys})
-			}
-		}
 		findings, err := collectAgentProblems(fsys, targets)
 		if err != nil {
 			return err
@@ -203,11 +207,8 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 			targets[i].checked = true
 			targets[i].problems = findings[i].problems
 		}
-		if len(agentProblems(findings)) > 0 {
-			return runBuildAll(manager, nil, nil, targets...)
-		}
-		if hasAgents {
-			return runBuildAll(manager, nil, nil, targets...)
+		if len(agentProblems(findings)) > 0 || hasAgents {
+			return runAllBuildTargets(manager, nil, nil, targets...)
 		}
 		if jsonOutput {
 			return printJSON(map[string]interface{}{"status": "success", "actions": []string{}, "spaces": []string{}, "agent_problems": []agentProblemJSON{}})
@@ -216,13 +217,7 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 		return nil
 	}
 
-	targets := make([]buildAgentTarget, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() {
-			targets = append(targets, buildAgentTarget{appID: entry.Name(), fsys: fsys})
-		}
-	}
-	return runBuildAll(manager, allActionDirs, allSpaceDirs, targets...)
+	return runAllBuildTargets(manager, allActionDirs, allSpaceDirs, targets...)
 }
 
 // buildTarget resolves a single target (app, action, or shorthand) and builds it.
@@ -333,12 +328,15 @@ func appHasAgentDeclarations(fsys fsx.FileSystem, appID string) (bool, error) {
 }
 
 func checkAppAgents(fsys fsx.FileSystem, appID string) ([]agents.Problem, error) {
-	if _, err := fsys.Stat(filepath.Join("apps", filepath.FromSlash(appID), "records")); errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to find records for app %q: %w", appID, err)
-	}
 	return checkBuildAgents(fsys, ".", appID)
+}
+
+func checkAppAgentsAt(fsys fsx.FileSystem, appID, appDir string) ([]agents.Problem, error) {
+	canonicalDir := filepath.Clean(filepath.Join("apps", filepath.FromSlash(appID)))
+	if filepath.Clean(appDir) == canonicalDir {
+		return checkAppAgents(fsys, appID)
+	}
+	return checkBuildAgentsAt(fsys, ".", appID, appDir)
 }
 
 func collectAgentProblems(fsys fsx.FileSystem, targets []buildAgentTarget) ([]appAgentProblems, error) {

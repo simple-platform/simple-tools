@@ -119,6 +119,14 @@ type record struct {
 type lookup struct {
 	name, appID string
 	query       string
+	file        string
+	line        int
+}
+
+// LookupInfo describes the tool a record variable looks up.
+type LookupInfo struct {
+	AppID, Name, File string
+	Line              int
 }
 
 // App is the semantic model of one app's declarations.
@@ -169,6 +177,17 @@ func (a *App) Skill(name string) (*Knowledge, bool) {
 	wantKey, wantPath := Snake(name), "knowledge/skill-"+Kebab(name)+".md"
 	for _, item := range a.Knowledge {
 		if item.Key == "skill_"+wantKey || item.Key == wantKey || filepath.ToSlash(item.Body.Path) == wantPath {
+			return item, true
+		}
+	}
+	return nil, false
+}
+
+// ReferenceKnowledge finds a knowledge record by its command name.
+func (a *App) ReferenceKnowledge(name string) (*Knowledge, bool) {
+	wantKey, wantPath := Snake(name), "knowledge/"+Kebab(name)+".md"
+	for _, item := range a.Knowledge {
+		if item.Key == "knowledge_"+wantKey || item.Key == wantKey || filepath.ToSlash(item.Body.Path) == wantPath {
 			return item, true
 		}
 	}
@@ -242,15 +261,19 @@ func (a *App) NextSkillPosition(taskTypeKey string) int {
 }
 
 func (a *App) HasLookup(recordsFile, varName string) bool {
+	_, ok := a.Lookup(recordsFile, varName)
+	return ok
+}
+
+func (a *App) Lookup(recordsFile, varName string) (LookupInfo, bool) {
 	for file, values := range a.lookups {
 		if sameFile(file, recordsFile, a.Dir, a.RepoRoot) {
-			_, ok := values[varName]
-			if ok {
-				return true
+			if item, ok := values[varName]; ok {
+				return LookupInfo{AppID: item.appID, Name: item.name, File: item.file, Line: item.line}, true
 			}
 		}
 	}
-	return false
+	return LookupInfo{}, false
 }
 
 func (a *App) StatesFile() (string, bool) {

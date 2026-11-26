@@ -44,6 +44,7 @@ type parsedBlock struct {
 
 var (
 	setLine        = regexp.MustCompile(`^\s*set\s+([^,\s]+)\s*,\s*([^\s{]+)`)
+	varLine        = regexp.MustCompile(`^\s*var\s+([^\s{]+)`)
 	appRecordExpr  = regexp.MustCompile(`^\s*\$app_record\(\s*["']([^"']+)["']\s*\)\s*$`)
 	varExpr        = regexp.MustCompile(`^\s*\$var\(\s*["']([^"']+)["']\s*\)\s*\|>\s*\$jq\(\s*["'](.*)["']\s*\)\s*$`)
 	fileExpr       = regexp.MustCompile(`^\s*\$file\(\s*["']([^"']+)["']\s*\)\s*$`)
@@ -59,6 +60,22 @@ func Load(fsys fsx.FileSystem, repoRoot, appID string) (*App, error) {
 		return nil, fmt.Errorf("failed to resolve repository root: %w", err)
 	}
 	appDir := filepath.Join(repoRoot, "apps", filepath.FromSlash(appID))
+	return loadFromDir(fsys, repoRoot, appID, appDir)
+}
+
+// LoadAt reads an app from the supplied directory while preserving its app ID.
+func LoadAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, error) {
+	repoRoot, err := filepath.Abs(repoRoot)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve repository root: %w", err)
+	}
+	if !filepath.IsAbs(appDir) {
+		appDir = filepath.Join(repoRoot, filepath.FromSlash(appDir))
+	}
+	return loadFromDir(fsys, repoRoot, appID, filepath.Clean(appDir))
+}
+
+func loadFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, error) {
 	recordsDir := filepath.Join(appDir, "records")
 	files, err := sclFiles(fsys, recordsDir)
 	if err != nil {
@@ -109,7 +126,8 @@ func Load(fsys fsx.FileSystem, repoRoot, appID string) (*App, error) {
 						break
 					}
 				}
-				entry := lookup{name: queryField(nameExpr, query), appID: queryField(appIDExpr, query), query: query}
+				entry := lookup{name: queryField(nameExpr, query), appID: queryField(appIDExpr, query), query: query,
+					file: relFile, line: findVarLine(data, name)}
 				if a.lookups[relFile] == nil {
 					a.lookups[relFile] = make(map[string]lookup)
 				}
@@ -131,6 +149,15 @@ func Load(fsys fsx.FileSystem, repoRoot, appID string) (*App, error) {
 // Check loads app declarations, then checks the model against build rules.
 func Check(fsys fsx.FileSystem, repoRoot, appID string) ([]Problem, error) {
 	a, err := Load(fsys, repoRoot, appID)
+	if err != nil {
+		return nil, err
+	}
+	return a.check(fsys)
+}
+
+// CheckAt checks an app from the supplied directory while preserving its app ID.
+func CheckAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) ([]Problem, error) {
+	a, err := LoadAt(fsys, repoRoot, appID, appDir)
 	if err != nil {
 		return nil, err
 	}
@@ -261,10 +288,21 @@ func sclFiles(fsys fsx.FileSystem, root string) ([]string, error) {
 }
 
 func baseTable(table string) string {
-	if index := strings.LastIndex(table, "."); index >= 0 {
-		return table[index+1:]
+	const platformPrefix = "dev_simple_system."
+	if strings.HasPrefix(table, platformPrefix) {
+		return strings.TrimPrefix(table, platformPrefix)
 	}
 	return table
+}
+
+func findVarLine(data []byte, name string) int {
+	for index, line := range strings.Split(string(data), "\n") {
+		match := varLine.FindStringSubmatch(line)
+		if len(match) == 2 && match[1] == name {
+			return index + 1
+		}
+	}
+	return 0
 }
 func relative(root, path string) string {
 	result, err := filepath.Rel(root, path)

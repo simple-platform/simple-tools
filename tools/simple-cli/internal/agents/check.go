@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"simple-cli/internal/agents/structure"
 	"simple-cli/internal/fsx"
@@ -24,7 +25,7 @@ var requiredStates = []string{"queued", "working", "waiting_for_user", "waiting_
 func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 	var problems []Problem
 	add := func(file string, line int, rule string) {
-		problems = append(problems, Problem{File: filepath.ToSlash(file), Line: line, Rule: ensureSentence(rule)})
+		problems = append(problems, Problem{File: filepath.ToSlash(file), Line: line, Rule: strings.TrimSuffix(strings.TrimSpace(rule), ".")})
 	}
 	if err := a.checkMarkers(fsys, add); err != nil {
 		return nil, err
@@ -36,11 +37,11 @@ func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 	for _, agent := range a.AgentRecords {
 		persona, ok := a.knowledgeForRef(agent.Instructions)
 		if !agent.Instructions.Readable {
-			add(agent.File, agent.Line, fmt.Sprintf("agent %q has an unreadable persona reference: set instructions_id to `$app_record(\"knowledge_key\")`.", agent.DisplayName))
+			add(agent.File, agent.Line, fmt.Sprintf("agent %q has an unreadable persona reference: set its persona to `$app_record(\"knowledge_key\")`.", agent.DisplayName))
 			continue
 		}
 		if !ok || persona.Body.Path == "" && !persona.Body.Readable {
-			add(agent.File, agent.Line, fmt.Sprintf("agent %q has no persona body: set instructions_id to a knowledge record with a body.", agent.DisplayName))
+			add(agent.File, agent.Line, fmt.Sprintf("agent %q has no persona body: choose app knowledge with a body for its persona.", agent.DisplayName))
 			continue
 		}
 		if _, file, _, bodyOK := readBody(fsys, a, persona.Body); !bodyOK {
@@ -51,45 +52,53 @@ func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 	}
 
 	for _, taskType := range a.TaskTypes {
+		display := workName(taskType)
+		hasAgentLink := a.hasAgentTaskLink(taskType)
 		taskType.DefaultAgent = nil
 		taskType.DefaultAgentRef = Reference{}
-		display := workName(taskType)
 		defaults := []*AgentTaskTypeLink{}
-		for _, link := range a.AgentTaskTypeLinks {
-			if link.TaskTypeRef.Key == taskType.Key && link.Role == "executor" && link.IsDefault {
-				defaults = append(defaults, link)
+		if hasAgentLink {
+			for _, link := range a.AgentTaskTypeLinks {
+				if link.TaskTypeRef.Key == taskType.Key && link.Role == "executor" && link.IsDefault {
+					defaults = append(defaults, link)
+				}
 			}
-		}
-		if len(defaults) == 0 {
-			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has no default agent: run 'simple new task-type', or add an agent_task_type record with role executor and is_default true.", display))
-		} else if len(defaults) > 1 {
-			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has more than one default agent: keep one agent_task_type record with role executor and is_default true.", display))
-		} else {
-			link := defaults[0]
-			if !link.AgentRef.Readable {
-				add(link.File, link.Line, fmt.Sprintf("kind of work %q has an unreadable default agent: set agent_id to `$app_record(\"agent_key\")`.", display))
-			} else if agent := a.resolveAgent(link.AgentRef); agent == nil {
-				add(link.File, link.Line, fmt.Sprintf("kind of work %q names a default that is not an agent of this app: set agent_id to an app agent record.", display))
+			if len(defaults) == 0 {
+				add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has no default agent: add one executor link and mark it as the default", display))
+			} else if len(defaults) > 1 {
+				add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has more than one default agent: keep one executor link and mark it as the default", display))
 			} else {
-				taskType.DefaultAgent, taskType.DefaultAgentRef = agent, link.AgentRef
-				if agent.Persona != nil && !a.HasSkillLink(taskType.Key, agent.Persona.Key) {
-					add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q does not carry its default agent's persona: add a task_type_skill record for %s.", display, agent.DisplayName))
+				link := defaults[0]
+				if !link.AgentRef.Readable {
+					add(link.File, link.Line, fmt.Sprintf("kind of work %q has an unreadable default agent: set it to `$app_record(\"agent_key\")` for an app agent", display))
+				} else if agent := a.resolveAgent(link.AgentRef); agent == nil {
+					add(link.File, link.Line, fmt.Sprintf("kind of work %q names a record that is not an app agent: point the default-agent link to that agent's `$app_record` reference", display))
+				} else {
+					taskType.DefaultAgent, taskType.DefaultAgentRef = agent, link.AgentRef
+					if agent.Persona != nil && !a.HasSkillLink(taskType.Key, agent.Persona.Key) {
+						add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q does not carry agent %q's persona: add a knowledge link to that persona", display, agent.DisplayName))
+					}
 				}
 			}
 		}
 
-		playbook, ok := a.knowledgeForRef(taskType.PlaybookRef)
-		if !taskType.PlaybookRef.Readable {
-			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has an unreadable playbook reference: set playbook_id to `$app_record(\"knowledge_key\")`.", display))
-		} else if !ok || !hasBody(playbook) {
-			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has no playbook body: set playbook_id to a knowledge record with a body.", display))
-		} else if _, _, _, bodyOK := readBody(fsys, a, playbook.Body); !bodyOK {
-			add(playbook.File, playbook.Line, fmt.Sprintf("kind of work %q playbook body cannot be read: add the referenced file or use inline text.", display))
+		playbook, playbookExists := a.knowledgeForRef(taskType.PlaybookRef)
+		hasPlaybookReference := strings.TrimSpace(taskType.PlaybookRef.Raw) != ""
+		if hasAgentLink && !hasPlaybookReference {
+			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has no playbook body: choose app knowledge with a body for its playbook", display))
+		} else if hasPlaybookReference && !taskType.PlaybookRef.Readable {
+			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has an unreadable playbook reference: set it to `$app_record(\"knowledge_key\")` for app knowledge", display))
+		} else if hasPlaybookReference && (!playbookExists || !hasBody(playbook)) {
+			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q names a playbook without a body: choose app knowledge with a body for its playbook", display))
+		} else if hasPlaybookReference {
+			if _, _, _, bodyOK := readBody(fsys, a, playbook.Body); !bodyOK {
+				add(playbook.File, playbook.Line, fmt.Sprintf("kind of work %q playbook file cannot be read: add the file or point the playbook to readable knowledge", display))
+			}
 		}
-		if taskType.Playbook != nil && !a.HasSkillLink(taskType.Key, taskType.Playbook.Key) {
-			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q does not carry its playbook: add a task_type_skill record for %s.", display, taskType.Playbook.Title))
+		if hasAgentLink && taskType.Playbook != nil && !a.HasSkillLink(taskType.Key, taskType.Playbook.Key) {
+			add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q does not carry playbook %q: add a knowledge link to that playbook", display, knowledgeName(taskType.Playbook)))
 		}
-		if taskType.Playbook != nil && taskType.DefaultAgent != nil && taskType.DefaultAgent.Persona != nil {
+		if hasAgentLink && taskType.Playbook != nil && taskType.DefaultAgent != nil && taskType.DefaultAgent.Persona != nil {
 			personaText, personaFile, personaOffset, personaOK := readBody(fsys, a, taskType.DefaultAgent.Persona.Body)
 			playbookText, playbookFile, playbookOffset, playbookOK := readBody(fsys, a, taskType.Playbook.Body)
 			if personaOK && playbookOK {
@@ -134,66 +143,91 @@ func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 		if marked {
 			lesson, ok := a.Lesson(action.Key)
 			if !ok || !hasBody(lesson) {
-				add(action.File, action.Line, fmt.Sprintf("tool %q has no lesson body: add a logic_skill record linked to knowledge with a body.", action.Name))
-			} else if text, file, offset, bodyOK := readBody(fsys, a, lesson.Body); !bodyOK {
-				add(lesson.File, lesson.Line, fmt.Sprintf("tool lesson for %q cannot be read: add the referenced file or use inline text.", action.Name))
-			} else {
-				for _, finding := range checkSkill(text) {
-					findingFile, line := findingLocation(lesson, file, offset, finding.Line)
-					add(findingFile, line, fmt.Sprintf("tool lesson for %q: %s", action.Name, finding.Rule))
-				}
+				add(action.File, action.Line, fmt.Sprintf("tool %q has no lesson body: link a knowledge body to this tool as its lesson.", action.Name))
 			}
 		}
 	}
 	return uniqueProblems(problems), nil
 }
 
+func (a *App) hasAgentTaskLink(task *TaskType) bool {
+	for _, link := range a.AgentTaskTypeLinks {
+		if link.TaskTypeRef.Key == task.Key {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) checkAgentTaskLink(link *AgentTaskTypeLink, add func(string, int, string)) {
 	task, taskOK := a.resolveTaskType(link.TaskTypeRef)
 	agent := a.resolveAgent(link.AgentRef)
 	if !link.AgentRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable agent link: set agent_id to `$app_record(\"agent_key\")`.", taskLabel(a, task, taskOK, link.TaskTypeRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable agent link: set the agent reference to `$app_record(\"agent_key\")`.", taskLabel(a, task, taskOK, link.TaskTypeRef)))
 	} else if agent == nil {
-		add(link.File, link.Line, fmt.Sprintf("%s names a record that is not an agent of this app: set agent_id to `$app_record(\"agent_key\")` for an app agent.", taskLabel(a, task, taskOK, link.TaskTypeRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s names a record that is not an agent of this app: set the agent reference to `$app_record(\"agent_key\")` for an app agent.", taskLabel(a, task, taskOK, link.TaskTypeRef)))
 	}
 	if !link.TaskTypeRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable kind of work link: set task_type_id to `$app_record(\"task_type_key\")`.", agentLabel(a, agent, link.AgentRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable kind of work link: set the kind-of-work reference to `$app_record(\"task_type_key\")`.", agentLabel(a, agent, link.AgentRef)))
 	} else if !taskOK {
-		add(link.File, link.Line, fmt.Sprintf("%s is linked to a kind of work that does not exist in this app: set task_type_id to `$app_record(\"task_type_key\")` for an app kind of work.", agentLabel(a, agent, link.AgentRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s is linked to a kind of work that does not exist in this app: set the kind-of-work reference to `$app_record(\"task_type_key\")` for an app kind of work.", agentLabel(a, agent, link.AgentRef)))
 	}
 }
 
 func (a *App) checkTaskSkillLink(fsys fsx.FileSystem, link *TaskTypeSkillLink, add func(string, int, string)) {
 	var task *TaskType
 	if !link.TaskTypeRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable skill link: set task_type_id to `$app_record(\"task_type_key\")`.", taskLabel(a, nil, false, link.TaskTypeRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable knowledge link: set its kind-of-work reference to `$app_record(\"task_type_key\")`.", taskLabel(a, nil, false, link.TaskTypeRef)))
 	} else if found, ok := a.resolveTaskType(link.TaskTypeRef); !ok {
-		add(link.File, link.Line, fmt.Sprintf("%s has a skill link to a kind of work that does not exist in this app: set task_type_id to `$app_record(\"task_type_key\")` for an app kind of work.", taskLabel(a, nil, false, link.TaskTypeRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s has a knowledge link to a kind of work that does not exist in this app: set its kind-of-work reference to `$app_record(\"task_type_key\")` for an app kind of work.", taskLabel(a, nil, false, link.TaskTypeRef)))
 	} else {
 		task = found
 	}
 	knowledge, ok := a.knowledgeForRef(link.KnowledgeRef)
 	if !link.KnowledgeRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable skill reference: set knowledge_id to `$app_record(\"knowledge_key\")`.", taskLabel(a, task, task != nil, link.TaskTypeRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable knowledge reference: set it to `$app_record(\"knowledge_key\")` for app knowledge.", taskLabel(a, task, task != nil, link.TaskTypeRef)))
 		return
 	}
 	if !ok {
-		add(link.File, link.Line, fmt.Sprintf("%s has a skill reference to a knowledge record that does not exist in this app: set knowledge_id to `$app_record(\"knowledge_key\")` for app knowledge.", taskLabel(a, task, task != nil, link.TaskTypeRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s has a knowledge reference to a record that does not exist in this app: set the reference to `$app_record(\"knowledge_key\")` for app knowledge.", taskLabel(a, task, task != nil, link.TaskTypeRef)))
 		return
 	}
 	if task == nil || !isCoreKnowledge(task, knowledge) {
 		if !hasBody(knowledge) {
-			add(link.File, link.Line, fmt.Sprintf("skill %q has no body: set body to `$file('knowledge/skill-%s.md')` or inline text.", knowledge.Title, Kebab(knowledge.Title)))
+			add(link.File, link.Line, fmt.Sprintf("knowledge %q has no body: add a file or inline text", knowledgeName(knowledge)))
 			return
 		}
 		text, file, offset, bodyOK := readBody(fsys, a, knowledge.Body)
 		if !bodyOK {
-			add(knowledge.File, knowledge.Line, fmt.Sprintf("skill %q body cannot be read: add the referenced file or use inline text.", knowledge.Title))
+			add(knowledge.File, knowledge.Line, fmt.Sprintf("knowledge %q body cannot be read: add the file or use inline text", knowledgeName(knowledge)))
 			return
 		}
-		for _, finding := range checkSkill(text) {
-			findingFile, line := findingLocation(knowledge, file, offset, finding.Line)
-			add(findingFile, line, fmt.Sprintf("skill %q: %s", knowledge.Title, finding.Rule))
+		if !utf8.ValidString(text) {
+			add(knowledge.File, knowledge.Line, fmt.Sprintf("knowledge %q must use valid UTF-8 text: replace invalid text", knowledgeName(knowledge)))
+			return
+		}
+		if strings.TrimSpace(text) == "" {
+			add(knowledge.File, knowledge.Line, fmt.Sprintf("knowledge %q must contain text: add the reference material", knowledgeName(knowledge)))
+			return
+		}
+		if structure.HasSlugLine(text) || strings.HasPrefix(filepath.Base(knowledge.Body.Path), "skill-") {
+			findings := checkSkill(text)
+			if strings.HasPrefix(filepath.Base(knowledge.Body.Path), "skill-") && !structure.HasSlugLine(text) {
+				filtered := findings[:0]
+				for _, finding := range findings {
+					if !strings.Contains(finding.Rule, "write a slug line") {
+						filtered = append(filtered, finding)
+					}
+				}
+				findings = append(filtered, structure.Finding{Line: 1, Rule: "put the Slug: line back in " + filepath.Base(knowledge.Body.Path)})
+			}
+			if mismatch := structure.SkillFileNameFinding(text, knowledge.Body.Path); mismatch != nil {
+				findings = append(findings, *mismatch)
+			}
+			for _, finding := range findings {
+				findingFile, line := findingLocation(knowledge, file, offset, finding.Line)
+				add(findingFile, line, fmt.Sprintf("knowledge %q: %s", knowledgeName(knowledge), finding.Rule))
+			}
 		}
 	}
 }
@@ -205,18 +239,18 @@ func (a *App) checkTaskToolLink(fsys fsx.FileSystem, link *TaskTypeToolLink, add
 		toolName = actionName(a, a.actionByKey(link.Tool.ActionKey), link.LogicRef)
 	}
 	if !link.TaskTypeRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("tool %q has an unreadable kind of work link: set task_type_id to `$app_record(\"task_type_key\")`.", toolName))
+		add(link.File, link.Line, fmt.Sprintf("tool %q has an unreadable kind of work link: set it to `$app_record(\"task_type_key\")` for an app kind of work.", toolName))
 	} else if !taskOK {
-		add(link.File, link.Line, fmt.Sprintf("tool %q is linked to a kind of work that does not exist in this app: set task_type_id to `$app_record(\"task_type_key\")` for an app kind of work.", toolName))
+		add(link.File, link.Line, fmt.Sprintf("tool %q is linked to a kind of work that does not exist in this app: set its kind-of-work reference to `$app_record(\"task_type_key\")` for app work.", toolName))
 	}
 	if !link.LogicRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable tool reference: use `$app_record(\"action_key\")` or a platform-tool lookup.", taskLabel(a, task, taskOK, link.TaskTypeRef)))
+		add(link.File, link.Line, fmt.Sprintf("%s has an unreadable tool reference: use `$app_record(\"action_key\")` for an app tool or a platform-tool lookup.", taskLabel(a, task, taskOK, link.TaskTypeRef)))
 		return nil
 	}
 	if link.Tool.OwnAction {
 		action := a.actionByKey(link.Tool.ActionKey)
 		if action == nil {
-			add(link.File, link.Line, fmt.Sprintf("%q is linked as a tool but is not an action of this app: run 'simple new tool' to add it.", link.Tool.Name))
+			add(link.File, link.Line, fmt.Sprintf("tool %q is linked here but is not an action of this app: create it with 'simple new tool %s %s \"<Display name>\"'", link.Tool.Name, a.ID, link.Tool.Name))
 			return nil
 		}
 		marked, err := a.actionMarkedTool(fsys, action)
@@ -227,17 +261,17 @@ func (a *App) checkTaskToolLink(fsys fsx.FileSystem, link *TaskTypeToolLink, add
 			jsonFile := actionJSONPath(a, action)
 			_, readErr := fsys.ReadFile(jsonFile)
 			if errors.Is(readErr, fs.ErrNotExist) || errors.Is(readErr, os.ErrNotExist) {
-				add(link.File, link.Line, fmt.Sprintf("%q has not been built yet, so the build cannot tell whether it is a tool: run 'simple build %s' and check again.", action.Name, a.ID))
+				add(link.File, link.Line, fmt.Sprintf("tool %q has not been built, so its tool setting is unknown: run 'simple build %s' and check again", action.Name, a.ID))
 			} else if readErr != nil {
 				return fmt.Errorf("failed to read %s: %w", relative(a.RepoRoot, jsonFile), readErr)
 			} else {
-				add(link.File, link.Line, fmt.Sprintf("%q is linked as a tool but its source is not marked as one: add the tool tag and a short description, then build again.", action.Name))
+				add(link.File, link.Line, fmt.Sprintf("tool %q is not marked as a tool in its action source: mark it as a tool and build again", action.Name))
 			}
 		}
 		return nil
 	}
 	if link.Tool.AppID != PlatformAppID || !contains(PlatformTools, link.Tool.Name) {
-		add(link.File, link.Line, fmt.Sprintf("%q is not a platform tool this version of the CLI knows; known tools are %s. Run 'simple version update'.", link.Tool.Name, strings.Join(PlatformTools, ", ")))
+		add(link.File, link.Line, fmt.Sprintf("tool %q is unknown to this CLI; use one of these platform tools: %s, or update the CLI with 'simple version update'", link.Tool.Name, strings.Join(PlatformTools, ", ")))
 		return nil
 	}
 	return nil
@@ -247,26 +281,26 @@ func (a *App) checkLogicSkillLink(fsys fsx.FileSystem, link *LogicSkillLink, add
 	action := a.actionByKey(link.LogicRef.Key)
 	name := actionName(a, action, link.LogicRef)
 	if !link.LogicRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q has an unreadable action reference: set logic_id to `$app_record(\"action_key\")`.", name))
+		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q has an unreadable action reference: set its tool to `$app_record(\"action_key\")` for an app action.", name))
 	} else if action == nil {
-		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q refers to an action that does not exist in this app: set logic_id to `$app_record(\"action_key\")` for an app action.", name))
+		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q refers to an action that does not exist in this app: set its tool to `$app_record(\"action_key\")` for an app action.", name))
 	}
 	knowledge, ok := a.knowledgeForRef(link.KnowledgeRef)
 	if !link.KnowledgeRef.Readable {
-		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q has an unreadable knowledge reference: set knowledge_id to `$app_record(\"knowledge_key\")`.", name))
+		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q has an unreadable knowledge reference: set it to `$app_record(\"knowledge_key\")` for app knowledge.", name))
 		return
 	}
 	if !ok {
-		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q refers to a knowledge record that does not exist in this app: set knowledge_id to `$app_record(\"knowledge_key\")` for app knowledge.", name))
+		add(link.File, link.Line, fmt.Sprintf("tool lesson for %q refers to a record that does not exist in this app: set it to `$app_record(\"knowledge_key\")` for app knowledge.", name))
 		return
 	}
 	if !hasBody(knowledge) {
-		add(link.File, link.Line, fmt.Sprintf("tool lesson %q has no body: set body to a file or inline text.", knowledge.Title))
+		add(link.File, link.Line, fmt.Sprintf("tool lesson %q has no body: add a file or inline text.", knowledgeName(knowledge)))
 		return
 	}
 	text, file, offset, bodyOK := readBody(fsys, a, knowledge.Body)
 	if !bodyOK {
-		add(knowledge.File, knowledge.Line, fmt.Sprintf("tool lesson %q body cannot be read: add the referenced file or use inline text.", knowledge.Title))
+		add(knowledge.File, knowledge.Line, fmt.Sprintf("tool lesson %q body cannot be read: add the referenced file or use inline text.", knowledgeName(knowledge)))
 		return
 	}
 	for _, finding := range checkSkill(text) {
@@ -280,7 +314,7 @@ func (a *App) checkShape(fsys fsx.FileSystem, item *TaskType, add func(string, i
 	raw, exists := record.fields["schema"]
 	path, readable := parseFilePath(raw)
 	if !exists || !readable || path == "" {
-		add(item.File, item.Line, fmt.Sprintf("kind of work %q has no readable shape file: set schema to `$file('records/task-types/%s.json') |> $json()`.", workName(item), Kebab(item.Name)))
+		add(item.File, item.Line, fmt.Sprintf("kind of work %q has no readable shape file: point it to `$file('records/task-types/%s.json') |> $json()`.", workName(item), Kebab(item.Name)))
 		return nil
 	}
 	file := filepath.Join(a.Dir, filepath.FromSlash(path))
@@ -303,7 +337,6 @@ func (a *App) checkShape(fsys fsx.FileSystem, item *TaskType, add func(string, i
 	}
 	output, exists := value["output"]
 	if !exists {
-		add(item.File, item.Line, fmt.Sprintf("kind of work %q shape must have an output object or null.", workName(item)))
 		return nil
 	}
 	trimmed := strings.TrimSpace(string(output))
@@ -324,7 +357,7 @@ func (a *App) checkStates(fsys fsx.FileSystem, item *TaskType, add func(string, 
 	}
 	path, readable := parseFilePath(raw)
 	if !readable || path == "" {
-		add(item.File, item.Line, fmt.Sprintf("kind of work %q has an unreadable states file reference: set states to `$file('records/task-types/states.json') |> $json()`.", workName(item)))
+		add(item.File, item.Line, fmt.Sprintf("kind of work %q has an unreadable states file reference: point its state list to `$file('records/task-types/states.json') |> $json()`.", workName(item)))
 		return nil
 	}
 	file := filepath.Join(a.Dir, filepath.FromSlash(path))
@@ -336,14 +369,13 @@ func (a *App) checkStates(fsys fsx.FileSystem, item *TaskType, add func(string, 
 		}
 		return fmt.Errorf("failed to read %s: %w", relative(a.RepoRoot, file), err)
 	}
-	var value any
-	if json.Unmarshal(data, &value) != nil {
+	var value map[string]json.RawMessage
+	if json.Unmarshal(data, &value) != nil || value == nil {
 		add(item.File, item.Line, fmt.Sprintf("kind of work %q states file must be valid JSON and name all seven states.", workName(item)))
 		return nil
 	}
-	text, _ := json.Marshal(value)
 	for _, state := range requiredStates {
-		if !strings.Contains(string(text), `"`+state+`"`) {
+		if _, declared := value[state]; !declared {
 			add(item.File, item.Line, fmt.Sprintf("kind of work %q states file does not name %s: include all seven standard states.", workName(item), state))
 		}
 	}
@@ -511,7 +543,7 @@ func (a *App) markerName(path string, line int) string {
 		case "knowledge":
 			for _, knowledge := range a.Knowledge {
 				if knowledge.Key == selected.key {
-					return first(knowledge.Title, knowledge.Key)
+					return knowledgeName(knowledge)
 				}
 			}
 		}
@@ -530,6 +562,28 @@ func (a *App) knowledgeForRef(ref Reference) (*Knowledge, bool) {
 	}
 	knowledge := a.knowledgeByKey(ref.Key)
 	return knowledge, knowledge != nil
+}
+
+func knowledgeName(knowledge *Knowledge) string {
+	if knowledge.Title != "" {
+		return knowledge.Title
+	}
+	name := strings.TrimSuffix(filepath.Base(knowledge.Body.Path), filepath.Ext(knowledge.Body.Path))
+	for _, prefix := range []string{"skill-", "tool-", "playbook-"} {
+		name = strings.TrimPrefix(name, prefix)
+	}
+	if name != "" && name != "." {
+		return name
+	}
+	key := knowledge.Key
+	for _, prefix := range []string{"knowledge_", "skill_", "tool_", "playbook_"} {
+		key = strings.TrimPrefix(key, prefix)
+	}
+	key = Kebab(key)
+	if key != "" {
+		return key
+	}
+	return "knowledge"
 }
 func (a *App) resolveTaskType(ref Reference) (*TaskType, bool) {
 	if !ref.Readable {
@@ -638,12 +692,5 @@ func uniqueProblems(problems []Problem) []Problem {
 }
 
 func ensureSentence(rule string) string {
-	rule = strings.TrimSpace(rule)
-	if rule == "" {
-		return rule
-	}
-	if !strings.HasSuffix(rule, ".") && !strings.HasSuffix(rule, "!") && !strings.HasSuffix(rule, "?") {
-		rule += "."
-	}
-	return rule
+	return strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(rule), "."))
 }

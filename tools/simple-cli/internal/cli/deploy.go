@@ -221,7 +221,7 @@ func (d *deployRun) loadConfig(steps ui.StepReporter) (string, error) {
 	d.target, d.versioner, d.app = target, versioner, app
 	d.facts.set(func(s *deployFactsSnapshot) { s.appID = app.ID })
 	if d.opts.fsys != nil {
-		problems, err := checkAppAgents(d.opts.fsys, app.ID)
+		problems, err := checkAppAgentsAt(d.opts.fsys, app.ID, d.opts.appPath)
 		if err != nil {
 			return "", fmt.Errorf("failed to check agents for app %q: %w", app.ID, err)
 		}
@@ -380,8 +380,17 @@ func (d *deployRun) install(ctx context.Context, steps ui.StepReporter, client d
 func (d *deployRun) reportFailure(out io.Writer, result stepRunResult) error {
 	facts := d.facts.snapshot()
 	if len(d.agentProblems) > 0 {
-		writeAgentProblems(out, facts.appID, d.agentProblems)
-		_, _ = fmt.Fprintln(out, "Nothing was uploaded.")
+		if d.opts.json {
+			if err := printJSONTo(out, map[string]interface{}{
+				"status": "failed", "app_id": facts.appID,
+				"agent_problems": agentProblemsJSON(d.agentProblems),
+			}); err != nil {
+				return err
+			}
+		} else {
+			writeAgentProblems(out, facts.appID, d.agentProblems)
+			_, _ = fmt.Fprintln(out, "Nothing was uploaded.")
+		}
 	}
 	if d.opts.json {
 		// A deploy that published but failed to install keeps its JSON

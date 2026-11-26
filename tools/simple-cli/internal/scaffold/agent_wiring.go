@@ -3,6 +3,7 @@ package scaffold
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -17,6 +18,9 @@ import (
 )
 
 var loadAgentApp = agents.Load
+var findPlatformToolLookup = func(app *agents.App, file, name string) (agents.LookupInfo, bool) {
+	return app.Lookup(file, name)
+}
 
 type AgentConfig struct {
 	AppID, Name, DisplayName, Description string
@@ -26,10 +30,16 @@ type TaskTypeConfig struct {
 	AppID, Name, PluralName, Description, AgentName string
 	Tools                                           []string
 	WakeIntervalSeconds                             int64
+	NoAgent                                         bool
+	AgentFlagSet, ToolsFlagSet, EveryFlagSet        bool
 }
 
 type SkillConfig struct {
 	AppID, Name, Title, Description, TaskTypeName string
+}
+
+type KnowledgeConfig struct {
+	AppID, Name, Title, TaskTypeName string
 }
 
 type ToolConfig struct {
@@ -45,8 +55,9 @@ type WiringResult struct {
 }
 
 type plannedFile struct {
-	path    string
-	content []byte
+	path      string
+	content   []byte
+	reuseOnly bool
 }
 
 type plannedRecords struct {
@@ -56,8 +67,8 @@ type plannedRecords struct {
 	existed bool
 }
 
-var kebabName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
-var taskTypeName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+var kebabName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+var taskTypeName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`)
 
 func CreateAgent(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg AgentConfig) (WiringResult, error) {
 	app, appDir, err := loadAgentAppFor(fsys, repoRoot, cfg.AppID)
@@ -65,13 +76,13 @@ func CreateAgent(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 		return WiringResult{}, err
 	}
 	if _, exists := app.Agent(cfg.Name); exists {
-		return WiringResult{}, fmt.Errorf("agent %q already exists in %s", cfg.Name, cfg.AppID)
+		return WiringResult{}, fmt.Errorf("agent %q already exists in %s; choose a different name", cfg.Name, cfg.AppID)
 	}
 	if err := validateAgentConfig(cfg); err != nil {
 		return WiringResult{}, err
 	}
 	personaKey, agentKey := "persona_"+agents.Snake(cfg.Name), "agent_"+agents.Snake(cfg.Name)
-	if err := ensureKeysFree(app, personaKey, agentKey); err != nil {
+	if err := ensureKeysFree(app, "agent", cfg.Name, personaKey, agentKey); err != nil {
 		return WiringResult{}, err
 	}
 	personaPath := filepath.Join(appDir, "knowledge", agents.Kebab(cfg.Name)+"-persona.md")
@@ -91,7 +102,7 @@ func CreateAgent(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 	if err != nil {
 		return WiringResult{}, err
 	}
-	files := []plannedFile{{personaPath, []byte(persona)}}
+	files := []plannedFile{{path: personaPath, content: []byte(persona)}}
 	records, err := prepareRecords(fsys, appDir, []recordAddition{
 		{file: "records/70_agent_knowledge.scl", header: knowledgeHeader, key: personaKey, text: knowledge},
 		{file: "records/71_agents.scl", header: agentsHeader, key: agentKey, text: agentRecord},
@@ -108,14 +119,20 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 		return WiringResult{}, err
 	}
 	if _, exists := app.TaskType(cfg.Name); exists {
-		return WiringResult{}, fmt.Errorf("kind of work %q already exists in %s: use 'simple new skill' or 'simple new tool' to add to it", cfg.Name, cfg.AppID)
+		return WiringResult{}, fmt.Errorf("kind of work %q already exists in %s; add to it with 'simple new skill' or 'simple new tool'", cfg.Name, cfg.AppID)
 	}
 	if err := validateTaskTypeConfig(cfg); err != nil {
 		return WiringResult{}, err
 	}
-	agent, err := selectAgent(app, cfg.AppID, cfg.AgentName)
-	if err != nil {
-		return WiringResult{}, err
+	if cfg.NoAgent && (cfg.AgentFlagSet || cfg.ToolsFlagSet || cfg.EveryFlagSet || cfg.AgentName != "" || len(cfg.Tools) != 0) {
+		return WiringResult{}, fmt.Errorf("kind of work %q cannot use --no-agent with --agent, --tools, or --every; remove those flags", cfg.Name)
+	}
+	var agent *agents.Agent
+	if !cfg.NoAgent {
+		agent, err = selectAgent(app, cfg.AppID, cfg.AgentName, cfg.Name)
+		if err != nil {
+			return WiringResult{}, err
+		}
 	}
 	validTools := make([]agents.ToolRef, 0, len(cfg.Tools))
 	seenTools := make(map[string]bool, len(cfg.Tools))
@@ -132,44 +149,58 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 			validTools = append(validTools, agents.ToolRef{ActionKey: action.Key, Name: action.Name, OwnAction: true})
 			continue
 		}
-		return WiringResult{}, fmt.Errorf("tool %q does not exist in %s: create it with 'simple new tool %s %s \"%s\" --task-type %s --scope <org>'", name, cfg.AppID, cfg.AppID, name, name, cfg.Name)
+		return WiringResult{}, fmt.Errorf("tool %q does not exist in %s; create it first with 'simple new tool %s %s \"<Display name>\" --lang ts --scope <org>' without --task-type, then run this command again", name, cfg.AppID, cfg.AppID, name)
 	}
 	nameKey := agents.Snake(cfg.Name)
 	taskKey := "task_type_" + nameKey
-	playbookKey := "playbook_" + nameKey
-	defaultKey := taskKey + "_default_agent"
-	personaLinkKey := taskKey + "_carries_persona"
-	playbookLinkKey := taskKey + "_carries_playbook"
-	keys := []string{playbookKey, taskKey, defaultKey, personaLinkKey, playbookLinkKey}
+	playbookKey := ""
+	keys := []string{taskKey}
+	if !cfg.NoAgent {
+		playbookKey = "playbook_" + nameKey
+		keys = append(keys, playbookKey, taskKey+"_default_agent", taskKey+"_carries_persona", taskKey+"_carries_playbook")
+	}
 	toolKeys := make([]string, len(validTools))
 	for i, tool := range validTools {
 		toolKeys[i] = taskKey + "_may_call_" + agents.Snake(tool.Name)
 		keys = append(keys, toolKeys[i])
 	}
-	if err := ensureKeysFree(app, keys...); err != nil {
+	if err := ensureKeysFree(app, "kind of work", cfg.Name, keys...); err != nil {
 		return WiringResult{}, err
 	}
-	if agent.Persona == nil {
-		return WiringResult{}, fmt.Errorf("agent %q in %s has no readable persona: add its persona with 'simple new agent'", cfg.AgentName, cfg.AppID)
+	if agent != nil && agent.Persona == nil {
+		return WiringResult{}, fmt.Errorf("agent %q in %s has no readable persona; point it to knowledge with a readable body before adding kind of work %q", agent.DisplayName, cfg.AppID, cfg.Name)
 	}
-	playbookPath := filepath.Join(appDir, "knowledge", agents.Kebab(cfg.Name)+"-playbook.md")
 	shapePath := filepath.Join(appDir, "records", "task-types", nameKey+".json")
 	statesPath := filepath.Join(appDir, "records", "task-types", "states.json")
 	statesRepoPath, hasStates := app.StatesFile()
 	if hasStates {
 		statesPath = filepath.Join(repoRoot, filepath.FromSlash(statesRepoPath))
 	}
-	playbook, err := renderAgentTemplate(tplFS, "templates/ai-agent/playbook.md", nil)
-	if err != nil {
-		return WiringResult{}, err
-	}
-	if persona, readErr := readKnowledgeBody(fsys, appDir, agent.Persona); readErr == nil {
-		personaProblems, playbookProblems := structure.CheckInstructions(agent.DisplayName, persona, playbook)
-		if len(personaProblems) != 0 {
-			return WiringResult{}, findingError(agent.Persona.Body.Path, personaProblems[0])
+	files := make([]plannedFile, 0, 3)
+	if !cfg.NoAgent {
+		playbookPath := filepath.Join(appDir, "knowledge", "playbook-"+agents.Kebab(cfg.Name)+".md")
+		playbook, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/playbook.md", nil)
+		if renderErr != nil {
+			return WiringResult{}, renderErr
 		}
-		if len(playbookProblems) != 0 {
-			return WiringResult{}, findingError("knowledge/"+agents.Kebab(cfg.Name)+"-playbook.md", playbookProblems[0])
+		if PathExists(fsys, playbookPath) {
+			existing, readErr := fsys.ReadFile(playbookPath)
+			if readErr != nil {
+				return WiringResult{}, fmt.Errorf("failed to read existing playbook %s: %w", playbookPath, readErr)
+			}
+			playbook = string(existing)
+			files = append(files, plannedFile{path: playbookPath, reuseOnly: true})
+		} else {
+			files = append(files, plannedFile{path: playbookPath, content: []byte(playbook)})
+		}
+		if persona, readErr := readKnowledgeBody(fsys, appDir, agent.Persona); readErr == nil {
+			personaProblems, playbookProblems := structure.CheckInstructions(agent.DisplayName, persona, playbook)
+			if len(personaProblems) != 0 {
+				return WiringResult{}, findingError(agent.Persona.Body.Path, personaProblems[0])
+			}
+			if len(playbookProblems) != 0 {
+				return WiringResult{}, findingError("knowledge/playbook-"+agents.Kebab(cfg.Name)+".md", playbookProblems[0])
+			}
 		}
 	}
 	shape, err := tplFS.ReadFile("templates/ai-agent/task-type.json")
@@ -180,25 +211,8 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 	if err != nil {
 		return WiringResult{}, fmt.Errorf("failed to read template templates/ai-agent/states.json: %w", err)
 	}
-	files := []plannedFile{{playbookPath, []byte(playbook)}, {shapePath, shape}}
-	if !PathExists(fsys, statesPath) {
-		files = append(files, plannedFile{statesPath, states})
-	}
-	if PathExists(fsys, playbookPath) {
-		files = removePlannedFile(files, playbookPath)
-	}
-	if PathExists(fsys, shapePath) {
-		files = removePlannedFile(files, shapePath)
-	}
-	if PathExists(fsys, statesPath) {
-		files = removePlannedFile(files, statesPath)
-	}
-	playbookRecord, err := renderAgentTemplate(tplFS, "templates/ai-agent/knowledge.scl", map[string]string{
-		"Key": playbookKey, "Title": cfg.PluralName + " playbook", "BodyPath": "knowledge/" + agents.Kebab(cfg.Name) + "-playbook.md",
-	})
-	if err != nil {
-		return WiringResult{}, err
-	}
+	files = append(files, plannedFile{path: shapePath, content: shape})
+	files = append(files, plannedFile{path: statesPath, content: states})
 	data := map[string]string{
 		"Key": taskKey, "Name": cfg.Name, "PluralName": cfg.PluralName, "Description": cfg.Description,
 		"PlaybookKey": playbookKey, "ShapePath": "records/task-types/" + nameKey + ".json",
@@ -209,30 +223,40 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 	if err != nil {
 		return WiringResult{}, err
 	}
-	defaultRecord, err := renderAgentTemplate(tplFS, "templates/ai-agent/agent_task_type.scl", map[string]string{
-		"Key": defaultKey, "AgentKey": agent.Key, "TaskTypeKey": taskKey,
-	})
-	if err != nil {
-		return WiringResult{}, err
-	}
-	personaLink, err := renderAgentTemplate(tplFS, "templates/ai-agent/task_type_skill.scl", map[string]string{
-		"Key": personaLinkKey, "TaskTypeKey": taskKey, "KnowledgeKey": agent.Persona.Key, "Position": "10",
-	})
-	if err != nil {
-		return WiringResult{}, err
-	}
-	playbookLink, err := renderAgentTemplate(tplFS, "templates/ai-agent/task_type_skill.scl", map[string]string{
-		"Key": playbookLinkKey, "TaskTypeKey": taskKey, "KnowledgeKey": playbookKey, "Position": "20",
-	})
-	if err != nil {
-		return WiringResult{}, err
-	}
-	adds := []recordAddition{
-		{file: "records/70_agent_knowledge.scl", header: knowledgeHeader, key: playbookKey, text: playbookRecord},
-		{file: "records/71_agents.scl", header: agentsHeader, key: taskKey, text: taskRecord},
-		{file: "records/71_agents.scl", header: agentsHeader, key: defaultKey, text: defaultRecord},
-		{file: "records/72_agent_links.scl", header: linksHeader, key: personaLinkKey, text: personaLink},
-		{file: "records/72_agent_links.scl", header: linksHeader, key: playbookLinkKey, text: playbookLink},
+	adds := []recordAddition{{file: "records/71_agents.scl", header: agentsHeader, key: taskKey, text: taskRecord}}
+	if !cfg.NoAgent {
+		playbookPath := "knowledge/playbook-" + agents.Kebab(cfg.Name) + ".md"
+		playbookRecord, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/knowledge.scl", map[string]string{
+			"Key": playbookKey, "Title": cfg.PluralName + " playbook", "BodyPath": playbookPath,
+		})
+		if renderErr != nil {
+			return WiringResult{}, renderErr
+		}
+		defaultKey := taskKey + "_default_agent"
+		defaultRecord, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/agent_task_type.scl", map[string]string{
+			"Key": defaultKey, "AgentKey": agent.Key, "TaskTypeKey": taskKey,
+		})
+		if renderErr != nil {
+			return WiringResult{}, renderErr
+		}
+		personaLink, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/task_type_skill.scl", map[string]string{
+			"Key": taskKey + "_carries_persona", "TaskTypeKey": taskKey, "KnowledgeKey": agent.Persona.Key, "Position": "10",
+		})
+		if renderErr != nil {
+			return WiringResult{}, renderErr
+		}
+		playbookLink, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/task_type_skill.scl", map[string]string{
+			"Key": taskKey + "_carries_playbook", "TaskTypeKey": taskKey, "KnowledgeKey": playbookKey, "Position": "20",
+		})
+		if renderErr != nil {
+			return WiringResult{}, renderErr
+		}
+		adds = append(adds,
+			recordAddition{file: "records/70_agent_knowledge.scl", header: knowledgeHeader, key: playbookKey, text: playbookRecord},
+			recordAddition{file: "records/71_agents.scl", header: agentsHeader, key: defaultKey, text: defaultRecord},
+			recordAddition{file: "records/72_agent_links.scl", header: linksHeader, key: taskKey + "_carries_persona", text: personaLink},
+			recordAddition{file: "records/72_agent_links.scl", header: linksHeader, key: taskKey + "_carries_playbook", text: playbookLink},
+		)
 	}
 	for _, tool := range validTools {
 		if !tool.OwnAction && !app.HasLookup(filepath.Join(appDir, "records", "72_agent_links.scl"), "platform_tool_"+agents.Snake(tool.Name)) {
@@ -286,7 +310,7 @@ func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 		if cfg.Title == "" {
 			return WiringResult{}, fmt.Errorf("a title is required for new skill %q: add \"<Title>\" to 'simple new skill'", cfg.Name)
 		}
-		if err := ensureKeysFree(app, knowledgeKey); err != nil {
+		if err := ensureKeysFree(app, "skill", cfg.Name, knowledgeKey); err != nil {
 			return WiringResult{}, err
 		}
 	} else {
@@ -294,7 +318,7 @@ func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 	}
 	needsLink := !app.HasSkillLink(task.Key, knowledgeKey)
 	if needsLink {
-		if err := ensureKeysFree(app, linkKey); err != nil {
+		if err := ensureKeysFree(app, "skill", cfg.Name, linkKey); err != nil {
 			return WiringResult{}, err
 		}
 	}
@@ -318,9 +342,7 @@ func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 		if len(findings) != 0 {
 			return WiringResult{}, findingError("knowledge/skill-"+agents.Kebab(cfg.Name)+".md", findings[0])
 		}
-		if !PathExists(fsys, filePath) {
-			files = append(files, plannedFile{filePath, []byte(content)})
-		}
+		files = append(files, plannedFile{path: filePath, content: []byte(content)})
 		if _, _, taken := app.KeyTaken(knowledgeKey); !taken {
 			text, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/knowledge.scl", map[string]string{
 				"Key": knowledgeKey, "Title": cfg.Title, "BodyPath": "knowledge/skill-" + agents.Kebab(cfg.Name) + ".md",
@@ -330,6 +352,8 @@ func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 			}
 			adds = append(adds, recordAddition{file: "records/70_agent_knowledge.scl", header: knowledgeHeader, key: knowledgeKey, text: text})
 		}
+	} else if needsLink && knowledge.Body.Path != "" {
+		files = append(files, plannedFile{path: filepath.Join(appDir, filepath.FromSlash(knowledge.Body.Path)), reuseOnly: true})
 	}
 	if needsLink {
 		text, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/task_type_skill.scl", map[string]string{
@@ -347,7 +371,7 @@ func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 	return executePlan(fsys, repoRoot, files, records)
 }
 
-func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg ToolConfig) (WiringResult, error) {
+func CreateKnowledge(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg KnowledgeConfig) (WiringResult, error) {
 	app, appDir, err := loadAgentAppFor(fsys, repoRoot, cfg.AppID)
 	if err != nil {
 		return WiringResult{}, err
@@ -356,13 +380,96 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 	if !ok {
 		return WiringResult{}, missingTaskType(cfg.AppID, cfg.TaskTypeName)
 	}
+	if err := validateKnowledgeConfig(cfg); err != nil {
+		return WiringResult{}, err
+	}
+	knowledge, exists := app.ReferenceKnowledge(cfg.Name)
+	knowledgeKey := "knowledge_" + agents.Snake(cfg.Name)
+	filePath := filepath.Join(appDir, "knowledge", agents.Kebab(cfg.Name)+".md")
+	if exists {
+		knowledgeKey = knowledge.Key
+	} else if cfg.Title == "" {
+		return WiringResult{}, fmt.Errorf("reference knowledge %q needs a title: add \"<Title>\" to 'simple new knowledge'", cfg.Name)
+	}
+	linkKey := "task_type_" + agents.Snake(task.Name) + "_carries_knowledge_" + agents.Snake(cfg.Name)
+	needsLink := !app.HasSkillLink(task.Key, knowledgeKey)
+	if !exists {
+		if err := ensureKeysFree(app, "reference knowledge", cfg.Name, knowledgeKey); err != nil {
+			return WiringResult{}, err
+		}
+	}
+	if needsLink {
+		if err := ensureKeysFree(app, "reference knowledge", cfg.Name, linkKey); err != nil {
+			return WiringResult{}, err
+		}
+	}
+	if exists && !needsLink {
+		return WiringResult{Created: []string{}, Records: []string{}, FillIn: []string{}, NothingToAdd: true}, nil
+	}
+	files := make([]plannedFile, 0, 1)
+	adds := make([]recordAddition, 0, 2)
+	if !exists {
+		content, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/knowledge.md", map[string]string{"Title": cfg.Title})
+		if renderErr != nil {
+			return WiringResult{}, renderErr
+		}
+		files = append(files, plannedFile{path: filePath, content: []byte(content)})
+		knowledgeRecord, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/knowledge.scl", map[string]string{
+			"Key": knowledgeKey, "Title": cfg.Title, "BodyPath": "knowledge/" + agents.Kebab(cfg.Name) + ".md",
+		})
+		if renderErr != nil {
+			return WiringResult{}, renderErr
+		}
+		adds = append(adds, recordAddition{file: "records/70_agent_knowledge.scl", header: knowledgeHeader, key: knowledgeKey, text: knowledgeRecord})
+	} else if needsLink && knowledge.Body.Path != "" {
+		files = append(files, plannedFile{path: filepath.Join(appDir, filepath.FromSlash(knowledge.Body.Path)), reuseOnly: true})
+	}
+	if needsLink {
+		position := app.NextSkillPosition(task.Key)
+		link, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/task_type_skill.scl", map[string]string{
+			"Key": linkKey, "TaskTypeKey": task.Key, "KnowledgeKey": knowledgeKey, "Position": strconv.Itoa(position),
+		})
+		if renderErr != nil {
+			return WiringResult{}, renderErr
+		}
+		adds = append(adds, recordAddition{file: "records/72_agent_links.scl", header: linksHeader, key: linkKey, text: link})
+	}
+	records, err := prepareRecords(fsys, appDir, adds)
+	if err != nil {
+		return WiringResult{}, err
+	}
+	return executePlan(fsys, repoRoot, files, records)
+}
+
+func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg ToolConfig) (WiringResult, error) {
+	app, appDir, err := loadAgentAppFor(fsys, repoRoot, cfg.AppID)
+	if err != nil {
+		return WiringResult{}, err
+	}
 	if err := validateToolConfig(cfg); err != nil {
 		return WiringResult{}, err
 	}
 	_, platform := stringIn(agents.PlatformTools, cfg.Name)
 	action, ownAction := app.Action(cfg.Name)
+	var task *agents.TaskType
+	if cfg.TaskTypeName != "" {
+		var ok bool
+		task, ok = app.TaskType(cfg.TaskTypeName)
+		if !ok {
+			return WiringResult{}, missingTaskType(cfg.AppID, cfg.TaskTypeName)
+		}
+	} else if platform {
+		return WiringResult{}, fmt.Errorf("platform tool %q needs --task-type because it has no app action to set up; name the kind of work to receive it", cfg.Name)
+	}
 	if !platform && !ownAction && cfg.DisplayName == "" {
-		return WiringResult{}, fmt.Errorf("%q is neither a platform tool nor an action in %s: create it with 'simple new tool %s %s \"<Display name>\" --task-type %s --scope <org>'", cfg.Name, cfg.AppID, cfg.AppID, cfg.Name, cfg.TaskTypeName)
+		command := fmt.Sprintf("simple new tool %s %s \"<Display name>\"", cfg.AppID, cfg.Name)
+		if cfg.TaskTypeName != "" {
+			command += " --task-type " + cfg.TaskTypeName
+		}
+		if cfg.Language == LanguageTypeScript {
+			command += " --scope <org>"
+		}
+		return WiringResult{}, fmt.Errorf("tool %q is neither a platform tool nor an action of %s; create it with '%s'", cfg.Name, cfg.AppID, command)
 	}
 	if !platform && !ownAction {
 		if err := validateActionConfigForTool(cfg); err != nil {
@@ -373,23 +480,38 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 	if ownAction {
 		tool = agents.ToolRef{ActionKey: action.Key, Name: action.Name, OwnAction: true}
 	}
-	linkKey := "task_type_" + agents.Snake(task.Name) + "_may_call_" + agents.Snake(cfg.Name)
-	needsLink := !app.HasToolLink(task.Key, tool)
+	linkKey := ""
+	needsLink := false
+	if task != nil {
+		linkKey = "task_type_" + agents.Snake(task.Name) + "_may_call_" + agents.Snake(cfg.Name)
+		needsLink = !app.HasToolLink(task.Key, tool)
+	}
 	hasLesson := false
+	var lesson *agents.Knowledge
 	if ownAction {
-		_, hasLesson = app.Lesson(action.Key)
+		lesson, hasLesson = app.Lesson(action.Key)
 	}
 	newAction := !platform && !ownAction
 	needsLesson := (ownAction && !hasLesson) || newAction
-	needsLookup := platform && !app.HasLookup(filepath.Join(appDir, "records", "72_agent_links.scl"), "platform_tool_"+agents.Snake(cfg.Name))
+	lookupFile := filepath.Join(appDir, "records", "72_agent_links.scl")
+	lookupName := "platform_tool_" + agents.Snake(cfg.Name)
+	lookup, hasLookup := findPlatformToolLookup(app, lookupFile, lookupName)
+	if platform && needsLink && hasLookup && (lookup.AppID != agents.PlatformAppID || lookup.Name != cfg.Name) {
+		target := "another tool"
+		if lookup.AppID != "" && lookup.Name != "" {
+			target = lookup.AppID + "/" + lookup.Name
+		}
+		return WiringResult{}, fmt.Errorf("tool %q cannot use variable %q because it already looks up %s at %s:%d; change that lookup or choose a different variable name", cfg.Name, lookupName, target, lookup.File, lookup.Line)
+	}
+	needsLookup := platform && needsLink && !hasLookup
 	if needsLink {
-		if err := ensureKeysFree(app, linkKey); err != nil {
+		if err := ensureKeysFree(app, "tool", cfg.Name, linkKey); err != nil {
 			return WiringResult{}, err
 		}
 	}
 	lessonKey, lessonLinkKey := "tool_"+agents.Snake(cfg.Name), "tool_"+agents.Snake(cfg.Name)+"_lesson"
 	if needsLesson {
-		if err := ensureKeysFree(app, lessonKey, lessonLinkKey); err != nil {
+		if err := ensureKeysFree(app, "tool", cfg.Name, lessonKey, lessonLinkKey); err != nil {
 			return WiringResult{}, err
 		}
 	}
@@ -398,36 +520,34 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 		actionKey = action.Key
 	}
 	if newAction {
-		if err := ensureKeysFree(app, actionKey); err != nil {
+		if err := ensureKeysFree(app, "tool", cfg.Name, actionKey); err != nil {
 			return WiringResult{}, err
 		}
 		if PathExists(fsys, filepath.Join(appDir, "actions", cfg.Name)) {
-			return WiringResult{}, fmt.Errorf("action path for %q already exists in %s", cfg.Name, cfg.AppID)
+			return WiringResult{}, fmt.Errorf("action folder for tool %q already exists in %s; move or rename that folder", cfg.Name, cfg.AppID)
 		}
 	}
 	if !needsLink && !needsLesson && !needsLookup && !newAction {
 		return WiringResult{Created: []string{}, Records: []string{}, FillIn: []string{}, NothingToAdd: true}, nil
 	}
-	files := make([]plannedFile, 0, 2)
+	files := make([]plannedFile, 0, 1)
 	adds := make([]recordAddition, 0, 4)
 	if newAction {
 		action = &agents.Action{Key: actionKey, Name: cfg.Name, DisplayName: cfg.DisplayName, Description: cfg.Description}
-	}
-	if newAction {
 		if cfg.Language == "" {
 			cfg.Language = LanguageTypeScript
 		}
 		if cfg.Language != LanguageTypeScript && cfg.Language != LanguageRust {
-			return WiringResult{}, fmt.Errorf("unsupported action language: %s", cfg.Language)
+			return WiringResult{}, fmt.Errorf("tool %q has unsupported language %q; choose ts or rust", cfg.Name, cfg.Language)
 		}
 		if cfg.ExecutionEnv == "" {
 			cfg.ExecutionEnv = "server"
 		}
 		if cfg.Language == LanguageTypeScript && cfg.Scope == "" {
-			return WiringResult{}, fmt.Errorf("--scope is required (e.g., --scope mycompany)")
+			return WiringResult{}, fmt.Errorf("tool %q needs --scope when you create a TypeScript action", cfg.Name)
 		}
 		if !contains(validToolExecutionEnvs, cfg.ExecutionEnv) {
-			return WiringResult{}, fmt.Errorf("invalid execution environment: %s. Valid values: server, client, both", cfg.ExecutionEnv)
+			return WiringResult{}, fmt.Errorf("tool %q has unsupported environment %q; choose server, client, or both", cfg.Name, cfg.ExecutionEnv)
 		}
 		data := map[string]string{"ActionName": cfg.Name, "ActionNameScl": actionKey, "DisplayName": cfg.DisplayName,
 			"Description": cfg.Description, "Scope": cfg.Scope, "ExecutionEnv": cfg.ExecutionEnv, "Language": cfg.Language, "Tool": "true"}
@@ -436,6 +556,11 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 			return WiringResult{}, renderErr
 		}
 		adds = append(adds, recordAddition{file: "records/10_actions.scl", header: actionHeader, key: actionKey, text: actionRecord})
+		actionFiles, planErr := planToolActionFiles(tplFS, appDir, cfg)
+		if planErr != nil {
+			return WiringResult{}, planErr
+		}
+		files = append(files, actionFiles...)
 	}
 	if needsLesson {
 		title := action.DisplayName
@@ -443,7 +568,7 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 			title = cfg.DisplayName
 		}
 		if utf8.RuneCountInString(title) > 255 {
-			return WiringResult{}, fmt.Errorf("knowledge title is longer than 255 characters")
+			return WiringResult{}, fmt.Errorf("tool %q lesson title is too long; use 255 characters or fewer", cfg.Name)
 		}
 		purpose := cfg.Description
 		if purpose == "" {
@@ -460,9 +585,7 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 			return WiringResult{}, findingError("knowledge/tool-"+agents.Kebab(cfg.Name)+".md", findings[0])
 		}
 		lessonPath := filepath.Join(appDir, "knowledge", "tool-"+agents.Kebab(cfg.Name)+".md")
-		if !PathExists(fsys, lessonPath) {
-			files = append(files, plannedFile{lessonPath, []byte(lessonText)})
-		}
+		files = append(files, plannedFile{path: lessonPath, content: []byte(lessonText)})
 		knowledgeRecord, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/knowledge.scl", map[string]string{
 			"Key": lessonKey, "Title": title, "BodyPath": "knowledge/tool-" + agents.Kebab(cfg.Name) + ".md",
 		})
@@ -477,6 +600,8 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 		}
 		adds = append(adds, recordAddition{file: "records/70_agent_knowledge.scl", header: knowledgeHeader, key: lessonKey, text: knowledgeRecord})
 		adds = append(adds, recordAddition{file: "records/72_agent_links.scl", header: linksHeader, key: lessonLinkKey, text: lessonLink})
+	} else if lesson != nil && lesson.Body.Path != "" && needsLink {
+		files = append(files, plannedFile{path: filepath.Join(appDir, filepath.FromSlash(lesson.Body.Path)), reuseOnly: true})
 	}
 	if needsLink {
 		logicRef := ""
@@ -504,32 +629,54 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 	if err != nil {
 		return WiringResult{}, err
 	}
-	if newAction {
-		actionConfig := ActionConfig{AppID: cfg.AppID, ActionName: cfg.Name, DisplayName: cfg.DisplayName, Description: cfg.Description, Scope: cfg.Scope,
-			ExecutionEnv: cfg.ExecutionEnv, Language: cfg.Language, Tool: true}
-		if err := createActionStructure(fsys, tplFS, repoRoot, actionConfig, true); err != nil {
-			return WiringResult{}, fmt.Errorf("failed to create tool action: %w", err)
-		}
-	}
 	result, err := executePlan(fsys, repoRoot, files, records)
 	if err != nil {
 		return result, err
-	}
-	if newAction {
-		for _, path := range actionFilePaths(appDir, cfg.Name, cfg.Language) {
-			result.Created = append(result.Created, relativeToRoot(repoRoot, path))
-			content, readErr := fsys.ReadFile(path)
-			if readErr == nil && bytes.Contains(content, []byte(agents.Marker)) {
-				result.FillIn = append(result.FillIn, relativeToRoot(repoRoot, path))
-			}
-		}
-		sort.Strings(result.Created)
-		sort.Strings(result.FillIn)
 	}
 	return result, nil
 }
 
 var validToolExecutionEnvs = []string{"server", "client", "both"}
+
+func planToolActionFiles(tplFS fsx.TemplateFS, appDir string, cfg ToolConfig) ([]plannedFile, error) {
+	actionDir := filepath.Join(appDir, "actions", cfg.Name)
+	type actionTemplate struct {
+		source string
+		target string
+	}
+	var templates []actionTemplate
+	if cfg.Language == LanguageRust {
+		templates = []actionTemplate{
+			{source: "templates/action-rust/Cargo.toml", target: filepath.Join(actionDir, "Cargo.toml")},
+			{source: "templates/action-rust/main.rs", target: filepath.Join(actionDir, "src", "main.rs")},
+			{source: "templates/action-rust/gitignore", target: filepath.Join(actionDir, ".gitignore")},
+		}
+	} else {
+		templates = []actionTemplate{
+			{source: "templates/action/package.json", target: filepath.Join(actionDir, "package.json")},
+			{source: "templates/action/index.ts", target: filepath.Join(actionDir, "src", "index.ts")},
+			{source: "templates/action/tsconfig.json", target: filepath.Join(actionDir, "tsconfig.json")},
+			{source: "templates/action/tsdoc.json", target: filepath.Join(actionDir, "tsdoc.json")},
+			{source: "templates/action/vitest.config.ts", target: filepath.Join(actionDir, "vitest.config.ts")},
+			{source: "templates/action/tests/helpers.ts", target: filepath.Join(actionDir, "tests", "helpers.ts")},
+			{source: "templates/action/tests/index.test.ts", target: filepath.Join(actionDir, "tests", "index.test.ts")},
+		}
+	}
+	data := map[string]string{
+		"ActionName": cfg.Name, "ActionNameScl": agents.Snake(cfg.Name), "DisplayName": cfg.DisplayName,
+		"Description": cfg.Description, "Scope": cfg.Scope, "ExecutionEnv": cfg.ExecutionEnv,
+		"Language": cfg.Language, "Tool": "tool",
+	}
+	files := make([]plannedFile, 0, len(templates))
+	for _, item := range templates {
+		content, err := renderTemplateContent(tplFS, item.source, data)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, plannedFile{path: item.target, content: content})
+	}
+	return files, nil
+}
 
 const (
 	knowledgeHeader = "# This file holds agent knowledge records.\n# simple new wrote this file; the Markdown files are where the words go."
@@ -557,36 +704,36 @@ func loadAgentAppFor(fsys fsx.FileSystem, root, appID string) (*agents.App, stri
 
 func validateAgentConfig(cfg AgentConfig) error {
 	if !kebabName.MatchString(cfg.Name) {
-		return fmt.Errorf("invalid agent name %q: use lowercase letters, digits, and hyphens, starting with a letter", cfg.Name)
+		return fmt.Errorf("agent %q has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter", cfg.Name)
 	}
 	if utf8.RuneCountInString(cfg.DisplayName) > 100 {
-		return fmt.Errorf("agent display name is longer than 100 characters")
+		return fmt.Errorf("agent %q display name is longer than 100 characters; shorten the display name", cfg.Name)
 	}
-	return validateScaffoldText("display name", cfg.DisplayName, 100)
+	return validateScaffoldText("agent", cfg.Name, "display name", cfg.DisplayName, 100)
 }
 
 func validateTaskTypeConfig(cfg TaskTypeConfig) error {
 	if !taskTypeName.MatchString(cfg.Name) {
-		return fmt.Errorf("invalid task-type name %q: use lowercase letters, digits, hyphens, or underscores, starting with a letter", cfg.Name)
+		return fmt.Errorf("kind of work %q has an invalid name; use lowercase letters and digits in groups joined by single hyphens or underscores, starting with a letter", cfg.Name)
 	}
 	if len(cfg.Name) > 100 {
-		return fmt.Errorf("task-type name is longer than 100 characters")
+		return fmt.Errorf("kind of work %q name is longer than 100 characters; shorten the name", cfg.Name)
 	}
 	if utf8.RuneCountInString(cfg.PluralName) > 100 {
-		return fmt.Errorf("plural name is longer than 100 characters")
+		return fmt.Errorf("kind of work %q plural name is longer than 100 characters; shorten the plural name", cfg.Name)
 	}
-	if err := validateScaffoldText("plural name", cfg.PluralName, 100); err != nil {
+	if err := validateScaffoldText("kind of work", cfg.Name, "plural name", cfg.PluralName, 100); err != nil {
 		return err
 	}
-	if err := validateScaffoldText("description", cfg.Description, 1000); err != nil {
+	if err := validateScaffoldText("kind of work", cfg.Name, "description", cfg.Description, 1000); err != nil {
 		return err
 	}
 	if cfg.WakeIntervalSeconds < 0 {
-		return fmt.Errorf("--every must be at least one whole second")
+		return fmt.Errorf("--every must be a whole-second duration of at least one second, such as 90s, 30m, or 1h")
 	}
 	for _, name := range cfg.Tools {
 		if !kebabName.MatchString(name) {
-			return fmt.Errorf("invalid tool name %q in --tools", name)
+			return fmt.Errorf("tool %q in --tools has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter", name)
 		}
 	}
 	return nil
@@ -594,70 +741,91 @@ func validateTaskTypeConfig(cfg TaskTypeConfig) error {
 
 func validateSkillConfig(cfg SkillConfig) error {
 	if !kebabName.MatchString(cfg.Name) {
-		return fmt.Errorf("invalid skill name %q: use lowercase letters, digits, and hyphens, starting with a letter", cfg.Name)
+		return fmt.Errorf("skill %q has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter", cfg.Name)
 	}
 	if utf8.RuneCountInString(cfg.Title) > 255 {
-		return fmt.Errorf("knowledge title is longer than 255 characters")
+		return fmt.Errorf("skill %q title is longer than 255 characters; shorten the title", cfg.Name)
 	}
 	if cfg.Title != "" {
-		if err := validateScaffoldText("title", cfg.Title, 255); err != nil {
+		if err := validateScaffoldText("skill", cfg.Name, "title", cfg.Title, 255); err != nil {
 			return err
 		}
 	}
-	return validateScaffoldText("description", cfg.Description, 1000)
+	return validateScaffoldText("skill", cfg.Name, "description", cfg.Description, 1000)
+}
+
+func validateKnowledgeConfig(cfg KnowledgeConfig) error {
+	if !kebabName.MatchString(cfg.Name) {
+		return fmt.Errorf("reference knowledge %q has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter", cfg.Name)
+	}
+	for _, prefix := range []string{"skill-", "tool-", "playbook-"} {
+		if strings.HasPrefix(cfg.Name, prefix) {
+			return fmt.Errorf("reference knowledge %q cannot use the reserved %q prefix; choose a name without it", cfg.Name, prefix)
+		}
+	}
+	if utf8.RuneCountInString(cfg.Title) > 255 {
+		return fmt.Errorf("reference knowledge %q title is longer than 255 characters; shorten the title", cfg.Name)
+	}
+	if cfg.Title != "" {
+		return validateScaffoldText("reference knowledge", cfg.Name, "title", cfg.Title, 255)
+	}
+	return nil
 }
 
 func validateToolConfig(cfg ToolConfig) error {
 	if !kebabName.MatchString(cfg.Name) {
-		return fmt.Errorf("invalid tool name %q: use lowercase letters, digits, and hyphens, starting with a letter", cfg.Name)
+		return fmt.Errorf("tool %q has an invalid name; use lowercase letters and digits in groups joined by single hyphens, starting with a letter", cfg.Name)
 	}
 	if utf8.RuneCountInString(cfg.DisplayName) > 100 {
-		return fmt.Errorf("display name is longer than 100 characters")
+		return fmt.Errorf("tool %q display name is longer than 100 characters; shorten the display name", cfg.Name)
 	}
 	if cfg.DisplayName != "" {
-		if err := validateScaffoldText("display name", cfg.DisplayName, 100); err != nil {
+		if err := validateScaffoldText("tool", cfg.Name, "display name", cfg.DisplayName, 100); err != nil {
 			return err
 		}
 	}
-	return validateScaffoldText("description", cfg.Description, 1000)
+	return validateScaffoldText("tool", cfg.Name, "description", cfg.Description, 1000)
 }
 
 func validateActionConfigForTool(cfg ToolConfig) error {
 	if cfg.DisplayName == "" {
-		return fmt.Errorf("display name is required when creating an app tool action")
+		return fmt.Errorf("tool %q needs a display name to create an app action; add \"<Display name>\"", cfg.Name)
 	}
-	if err := validateScaffoldText("display name", cfg.DisplayName, 100); err != nil {
+	if err := validateScaffoldText("tool", cfg.Name, "display name", cfg.DisplayName, 100); err != nil {
 		return err
 	}
 	return nil
 }
 
-func validateScaffoldText(field, value string, limit int) error {
+func validateScaffoldText(kind, name, field, value string, limit int) error {
 	if strings.ContainsAny(value, "\n\r") {
-		return fmt.Errorf("%s must be a single line", field)
+		return fmt.Errorf("%s %q %s must be a single line; remove line breaks", kind, name, field)
 	}
 	if strings.Contains(value, `"`) {
-		return fmt.Errorf("%s must not contain a double quote", field)
+		return fmt.Errorf("%s %q %s must not contain a double quote; remove the quote", kind, name, field)
+	}
+	if strings.Contains(value, `\`) {
+		return fmt.Errorf("%s %q %s must not contain a backslash; remove it", kind, name, field)
 	}
 	if utf8.RuneCountInString(value) > limit {
-		return fmt.Errorf("%s is longer than %d characters", field, limit)
+		return fmt.Errorf("%s %q %s is longer than %d characters; shorten it", kind, name, field, limit)
 	}
 	return nil
 }
 
-func selectAgent(app *agents.App, appID, wanted string) (*agents.Agent, error) {
+func selectAgent(app *agents.App, appID, wanted, taskTypeName string) (*agents.Agent, error) {
 	if wanted != "" {
 		if agent, ok := app.Agent(wanted); ok {
 			return agent, nil
 		}
-		return nil, fmt.Errorf("agent %q does not exist in %s: create it with 'simple new agent'", wanted, appID)
+		return nil, fmt.Errorf("agent %q does not exist in %s; create it with 'simple new agent %s %s \"<Display name>\"'", wanted, appID, appID, wanted)
 	}
 	agentsList := app.Agents()
 	if len(agentsList) == 1 {
 		return agentsList[0], nil
 	}
 	if len(agentsList) == 0 {
-		return nil, fmt.Errorf("%s has no agent yet: run 'simple new agent %s <name> \"<Display name>\"' first", appID, appID)
+		return nil, fmt.Errorf("kind of work %q has no agent in %s; create one with 'simple new agent %s <name> \"<Display name>\"'", taskTypeName, appID, appID)
 	}
 	names := make([]string, 0, len(agentsList))
 	for _, item := range agentsList {
@@ -668,20 +836,20 @@ func selectAgent(app *agents.App, appID, wanted string) (*agents.Agent, error) {
 		names = append(names, agents.Kebab(name))
 	}
 	sort.Strings(names)
-	return nil, fmt.Errorf("%s has %d agents (%s): say which with --agent", appID, len(agentsList), strings.Join(names, ", "))
+	return nil, fmt.Errorf("kind of work %q has multiple agents in %s (%s); choose one with --agent", taskTypeName, appID, strings.Join(names, ", "))
 }
 
-func ensureKeysFree(app *agents.App, keys ...string) error {
+func ensureKeysFree(app *agents.App, subject, name string, keys ...string) error {
 	for _, key := range keys {
 		if file, line, ok := app.KeyTaken(key); ok {
-			return fmt.Errorf("record key %q is already used at %s:%d", key, file, line)
+			return fmt.Errorf("cannot use %s %q because a record name it needs is already used at %s:%d; choose a different %s name", subject, name, file, line, subject)
 		}
 	}
 	return nil
 }
 
 func missingTaskType(appID, name string) error {
-	return fmt.Errorf("kind of work %q does not exist in %s: create it with 'simple new task-type'", name, appID)
+	return fmt.Errorf("kind of work %q does not exist in %s; create it with 'simple new task-type'", name, appID)
 }
 
 func renderAgentTemplate(tplFS fsx.TemplateFS, path string, data any) (string, error) {
@@ -774,36 +942,107 @@ func prepareRecords(fsys fsx.FileSystem, appDir string, additions []recordAdditi
 
 func executePlan(fsys fsx.FileSystem, repoRoot string, files []plannedFile, records []plannedRecords) (WiringResult, error) {
 	result := WiringResult{Created: []string{}, Records: []string{}, FillIn: []string{}}
+	operations := make([]plannedWrite, 0, len(files)+len(records))
+	fillIn := make(map[string]bool)
+	created := make(map[string]bool)
 	for _, file := range files {
-		if PathExists(fsys, file.path) {
+		old, existed, err := readExistingFile(fsys, file.path)
+		if err != nil {
+			return WiringResult{}, fmt.Errorf("failed to check existing file %s: %w", file.path, err)
+		}
+		if file.reuseOnly && !existed {
 			continue
 		}
-		if err := fsys.MkdirAll(filepath.Dir(file.path), fsx.DirPerm); err != nil {
-			return WiringResult{}, fmt.Errorf("failed to create directory for %s: %w", file.path, err)
+		content := file.content
+		if existed {
+			content = old
+		} else {
+			operations = append(operations, plannedWrite{path: file.path, content: file.content})
+			created[relativeToRoot(repoRoot, file.path)] = true
 		}
-		if err := fsys.WriteFile(file.path, file.content, fsx.FilePerm); err != nil {
-			return WiringResult{}, fmt.Errorf("failed to write %s: %w", file.path, err)
-		}
-		result.Created = append(result.Created, relativeToRoot(repoRoot, file.path))
-		if bytes.Contains(file.content, []byte(agents.Marker)) {
-			result.FillIn = append(result.FillIn, relativeToRoot(repoRoot, file.path))
+		if bytes.Contains(content, []byte(agents.Marker)) {
+			fillIn[relativeToRoot(repoRoot, file.path)] = true
 		}
 	}
 	for _, recordsFile := range records {
-		if err := fsys.MkdirAll(filepath.Dir(recordsFile.path), fsx.DirPerm); err != nil {
-			return WiringResult{}, fmt.Errorf("failed to create records directory: %w", err)
+		old, existed, err := readExistingFile(fsys, recordsFile.path)
+		if err != nil {
+			return WiringResult{}, fmt.Errorf("failed to check existing records file %s: %w", recordsFile.path, err)
 		}
-		if err := fsys.WriteFile(recordsFile.path, recordsFile.content, fsx.FilePerm); err != nil {
-			return WiringResult{}, fmt.Errorf("failed to write records file %s: %w", recordsFile.path, err)
+		operations = append(operations, plannedWrite{path: recordsFile.path, content: recordsFile.content, old: old, existed: existed})
+		path := relativeToRoot(repoRoot, recordsFile.path)
+		if !existed {
+			created[path] = true
 		}
-		if !recordsFile.existed {
-			result.Created = append(result.Created, relativeToRoot(repoRoot, recordsFile.path))
+		if bytes.Contains(recordsFile.content, []byte(agents.Marker)) {
+			fillIn[path] = true
 		}
 		result.Records = append(result.Records, recordsFile.keys...)
+	}
+
+	written := make([]plannedWrite, 0, len(operations))
+	for _, operation := range operations {
+		if err := fsys.MkdirAll(filepath.Dir(operation.path), fsx.DirPerm); err != nil {
+			cause := fmt.Errorf("failed to create directory for %s: %w", operation.path, err)
+			return WiringResult{}, rollbackPlan(fsys, written, cause)
+		}
+		if err := fsys.WriteFile(operation.path, operation.content, fsx.FilePerm); err != nil {
+			cause := fmt.Errorf("failed to write %s: %w", operation.path, err)
+			return WiringResult{}, rollbackPlan(fsys, append(written, operation), cause)
+		}
+		written = append(written, operation)
+	}
+	for path := range created {
+		result.Created = append(result.Created, path)
+	}
+	for path := range fillIn {
+		result.FillIn = append(result.FillIn, path)
 	}
 	sort.Strings(result.Created)
 	sort.Strings(result.FillIn)
 	return result, nil
+}
+
+type plannedWrite struct {
+	path    string
+	content []byte
+	old     []byte
+	existed bool
+}
+
+func readExistingFile(fsys fsx.FileSystem, path string) ([]byte, bool, error) {
+	_, err := fsys.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	content, err := fsys.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	return content, true, nil
+}
+
+func rollbackPlan(fsys fsx.FileSystem, written []plannedWrite, cause error) error {
+	var rollbackFailures []string
+	for i := len(written) - 1; i >= 0; i-- {
+		operation := written[i]
+		var err error
+		if operation.existed {
+			err = fsys.WriteFile(operation.path, operation.old, fsx.FilePerm)
+		} else {
+			err = fsys.Remove(operation.path)
+		}
+		if err != nil {
+			rollbackFailures = append(rollbackFailures, fmt.Sprintf("%s: %v", operation.path, err))
+		}
+	}
+	if len(rollbackFailures) > 0 {
+		return fmt.Errorf("%w; rollback also failed for %s", cause, strings.Join(rollbackFailures, ", "))
+	}
+	return cause
 }
 
 func relativeToRoot(root, path string) string {
@@ -812,16 +1051,6 @@ func relativeToRoot(root, path string) string {
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(relative)
-}
-
-func removePlannedFile(files []plannedFile, path string) []plannedFile {
-	result := files[:0]
-	for _, file := range files {
-		if file.path != path {
-			result = append(result, file)
-		}
-	}
-	return result
 }
 
 func actionFilePaths(appDir, name, language string) []string {

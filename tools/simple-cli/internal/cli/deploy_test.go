@@ -220,6 +220,73 @@ func TestRunDeployWithNoAgentProblemsKeepsOutput(t *testing.T) {
 	}
 }
 
+func TestRunDeployChecksTheSuppliedAppFolder(t *testing.T) {
+	originalCanonical, originalAt := checkBuildAgents, checkBuildAgentsAt
+	defer func() { checkBuildAgents, checkBuildAgentsAt = originalCanonical, originalAt }()
+	checkBuildAgents = func(fsx.FileSystem, string, string) ([]agents.Problem, error) {
+		return nil, errors.New("deploy checked the app-ID-derived folder")
+	}
+	problem := agents.Problem{File: "apps/deployed-copy/records/71_agents.scl", Line: 4, Rule: "finish the guidance"}
+	checkCalls := 0
+	var checkedFolder string
+	checkBuildAgentsAt = func(_ fsx.FileSystem, _, appID, appDir string) ([]agents.Problem, error) {
+		checkCalls++
+		if appID != "com.acme.shop" {
+			t.Errorf("checked app ID = %q, want parsed ID", appID)
+		}
+		checkedFolder = appDir
+		return []agents.Problem{problem}, nil
+	}
+	synctest.Test(t, func(t *testing.T) {
+		fixture := newDeployFixture()
+		fixture.versioner.id = "com.acme.shop"
+		collected := false
+		fixture.collect = func(func(int, int)) (map[string]deploy.FileInfo, error) {
+			collected = true
+			return smallApp, nil
+		}
+		opts := deployOptions{appPath: "apps/deployed-copy", env: "dev", dryRun: true, mode: progressPlain,
+			fsys: &fsx.MockFileSystem{Files: map[string][]byte{"apps/deployed-copy": nil}}}
+		var out bytes.Buffer
+		err := runDeployWith(context.Background(), &out, fixture.deps(), opts)
+		if err == nil || !strings.Contains(err.Error(), "1 agent problems") {
+			t.Fatalf("runDeployWith() error = %v, want agent check failure", err)
+		}
+		if collected {
+			t.Error("deploy collected files before the agent check passed")
+		}
+	})
+	wantFolder := "apps/deployed-copy"
+	if checkCalls != 1 || checkedFolder != wantFolder {
+		t.Errorf("checked folder = %q in %d checks, want %q once", checkedFolder, checkCalls, wantFolder)
+	}
+}
+
+func TestDeployAgentProblemsUseJSONOutput(t *testing.T) {
+	problem := agents.Problem{File: "apps/com.acme.shop/records/71_agents.scl", Line: 8, Rule: "replace the remaining guidance"}
+	d := &deployRun{opts: deployOptions{json: true}, facts: &deployFacts{}, agentProblems: []agents.Problem{problem}}
+	d.facts.set(func(facts *deployFactsSnapshot) { facts.appID = "com.acme.shop" })
+	var out bytes.Buffer
+	err := d.reportFailure(&out, stepRunResult{err: errors.New("deploy stopped because 1 agent problems remain")})
+	if err == nil || !strings.Contains(err.Error(), "1 agent problems") {
+		t.Fatalf("reportFailure() error = %v, want the original deploy error", err)
+	}
+	var result struct {
+		Status        string             `json:"status"`
+		AppID         string             `json:"app_id"`
+		AgentProblems []agentProblemJSON `json:"agent_problems"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("agent problem output is not JSON: %v: %s", err, out.String())
+	}
+	if result.Status != "failed" || result.AppID != "com.acme.shop" || len(result.AgentProblems) != 1 || result.AgentProblems[0].File != problem.File || result.AgentProblems[0].Line != problem.Line {
+		t.Fatalf("JSON result = %#v, want the build agent_problems shape", result)
+	}
+	if strings.Contains(out.String(), "Nothing was uploaded") || strings.Contains(out.String(), "still") {
+		t.Errorf("JSON output included plain text: %s", out.String())
+	}
+}
+
 func TestRunDeploy_AuthRetry(t *testing.T) {
 	// Temporarily bypass cryptographic verification since we are returning mock JWTs
 	origVerify := deploy.VerifyEd25519

@@ -79,8 +79,8 @@ func TestCheckInstructionsRuleCases(t *testing.T) {
 			if test.wantText == 1 && !containsFinding(playbookFindings, test.wantRule) {
 				t.Errorf("finding belongs to persona, want playbook: %#v", both)
 			}
-			if !strings.HasSuffix(found.Rule, ".") {
-				t.Errorf("finding is not a sentence: %q", found.Rule)
+			if strings.HasSuffix(found.Rule, ".") {
+				t.Errorf("finding has a trailing full stop: %q", found.Rule)
 			}
 			cleanPersona, cleanPlaybook := CheckInstructions("Support Agent", testPersona, testPlaybook)
 			if len(cleanPersona)+len(cleanPlaybook) != 0 {
@@ -176,6 +176,9 @@ func TestCheckSkillRuleCases(t *testing.T) {
 		{name: "empty purpose section", body: "# Refund Policy\n\nSlug: `skill-refund-policy`\n\n## Purpose\n\n## When To Use\n- When a return needs review.\n\n" + strings.Join(skillTail(), "\n"), wantLine: 6, wantRule: "write a paragraph directly under Purpose"},
 		{name: "no when to use bullet", body: strings.Replace(good, "- When a return needs review.", "Use this when a return needs review.", 1), wantLine: 10, wantRule: "add at least one dash bullet under When To Use"},
 		{name: "empty related tools", body: optionalRelatedTools(good, "A useful tool is described here."), wantLine: 33, wantRule: "add at least one tool identifier"},
+		{name: "related tools may be immediately empty", body: strings.Replace(good, "## Completion Checklist", "## Related Tools\n## Completion Checklist", 1), clean: true},
+		{name: "fenced trigger bullet is counted", body: strings.Replace(good, "- When a return needs review.", "```text\n- When a return needs review.\n```", 1), clean: true},
+		{name: "fenced related tool bullet is counted", body: strings.Replace(good, "## Completion Checklist", "## Related Tools\n```text\n- `process-data`\n```\n\n## Completion Checklist", 1), clean: true},
 		{name: "double space after heading marker", body: strings.Replace(good, "## Purpose", "##  Purpose", 1), wantLine: 9, wantRule: "add section \"Purpose\""},
 		{name: "trailing whitespace in heading", body: strings.Replace(good, "## Purpose\n", "## Purpose \n", 1), wantLine: 3, wantRule: "this section heading is not allowed"},
 		{name: "tilde fence is not a skill fence", body: strings.Replace(good, "## Procedure\n", "## Procedure\n~~~\n## Hidden Section\n~~~\n", 1), wantLine: 18, wantRule: "this section heading is not allowed"},
@@ -200,11 +203,39 @@ func TestCheckSkillRuleCases(t *testing.T) {
 			if finding.Line != test.wantLine {
 				t.Errorf("finding line = %d, want %d", finding.Line, test.wantLine)
 			}
-			if !strings.HasSuffix(finding.Rule, ".") {
-				t.Errorf("finding is not a sentence: %q", finding.Rule)
+			if strings.HasSuffix(finding.Rule, ".") {
+				t.Errorf("finding has a trailing full stop: %q", finding.Rule)
 			}
 			if len(CheckSkill(good)) != 0 {
 				t.Errorf("clean counterpart produced findings: %#v", CheckSkill(good))
+			}
+		})
+	}
+}
+
+func TestSkillFileNameFinding(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{name: "matching skill name", path: "knowledge/skill-refund-policy.md"},
+		{name: "mismatched skill name", path: "knowledge/return-policy.md", want: true},
+		{name: "matching tool lesson name", path: "knowledge/tool-find-order.md"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			slug := "skill-refund-policy"
+			if strings.Contains(test.name, "tool lesson") {
+				slug = "tool-find-order"
+			}
+			body := "# Guidance\n\nSlug: `" + slug + "`\n"
+			finding := SkillFileNameFinding(body, test.path)
+			if (finding != nil) != test.want {
+				t.Fatalf("SkillFileNameFinding() = %#v, want mismatch %v", finding, test.want)
+			}
+			if finding != nil && strings.HasSuffix(finding.Rule, ".") {
+				t.Fatalf("filename finding has trailing full stop: %#v", finding)
 			}
 		})
 	}
@@ -221,6 +252,25 @@ func TestCheckSkillSlugMustBeOutsideFence(t *testing.T) {
 	body := strings.Replace(skillBody("skill-refund-policy"), "Slug: `skill-refund-policy`", "```\nSlug: `skill-refund-policy`\n```", 1)
 	if finding := findSkillRule(CheckSkill(body), "write a slug line"); finding == nil {
 		t.Fatal("slug inside a fenced block was accepted")
+	}
+}
+
+func TestHasSlugLine(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "plain slug line", body: "Slug: `skill-returns`\n", want: true},
+		{name: "slug inside a code fence", body: "```\nSlug: `skill-returns`\n```\n"},
+		{name: "no slug line", body: "# Return Terms\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := HasSlugLine(tt.body); got != tt.want {
+				t.Fatalf("HasSlugLine() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
