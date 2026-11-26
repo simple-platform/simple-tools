@@ -41,6 +41,7 @@ var TemplatesFS embed.FS
 type MonorepoConfig struct {
 	ProjectName string
 	TenantName  string
+	CLIVersion  string
 }
 
 // CreateMonorepoStructure creates all directories and files for a new monorepo.
@@ -65,14 +66,25 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		return err
 	}
 
-	// Copy context documentation
-	if err := copyContextDocs(fsys, tplFS, rootPath); err != nil {
+	documentationFiles, err := DocumentationFiles(tplFS)
+	if err != nil {
 		return err
 	}
-
-	// Copy Antigravity Agent Context (.agent/)
-	if err := copyAgentDocs(fsys, tplFS, rootPath); err != nil {
+	for _, file := range documentationFiles {
+		destination := filepath.Join(rootPath, filepath.FromSlash(file.Path))
+		if err := fsys.MkdirAll(filepath.Dir(destination), fsx.DirPerm); err != nil {
+			return fmt.Errorf("failed to create documentation directory for %s: %w", file.Path, err)
+		}
+		if err := fsys.WriteFile(destination, file.Content, fsx.FilePerm); err != nil {
+			return fmt.Errorf("failed to write documentation %s: %w", file.Path, err)
+		}
+	}
+	stamp, err := MarshalDocumentationStamp(FingerprintDocumentationFiles(documentationFiles), cfg.CLIVersion, documentationFiles)
+	if err != nil {
 		return err
+	}
+	if err := fsys.WriteFile(filepath.Join(rootPath, ".simple", "docs.json"), stamp, fsx.FilePerm); err != nil {
+		return fmt.Errorf("failed to write documentation stamp: %w", err)
 	}
 
 	// Copy AGENTS.md

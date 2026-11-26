@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"simple-cli/internal/scaffold"
 )
 
 // invokeCmd is a test helper that executes the root command with specific arguments
@@ -76,6 +78,22 @@ func TestInitCmd_Integration(t *testing.T) {
 	// Verify simple.scl was created with tenant
 	if _, err := os.Stat(tmpDir + "/proj1/simple.scl"); os.IsNotExist(err) {
 		t.Error("simple.scl not created")
+	}
+
+	stampData, err := os.ReadFile(tmpDir + "/proj1/.simple/docs.json")
+	if err != nil {
+		t.Fatalf("docs stamp was not created: %v", err)
+	}
+	var stamp scaffold.DocumentationStamp
+	if err := json.Unmarshal(stampData, &stamp); err != nil {
+		t.Fatalf("docs stamp is invalid JSON: %v", err)
+	}
+	fingerprint, err := scaffold.DocumentationFingerprint()
+	if err != nil {
+		t.Fatalf("DocumentationFingerprint() error = %v", err)
+	}
+	if stamp.CLIVersion != Version || stamp.Fingerprint != fingerprint {
+		t.Errorf("docs stamp = %+v, want CLI version %q and fingerprint %q", stamp, Version, fingerprint)
 	}
 
 	// Case 2: JSON Output validation

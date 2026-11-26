@@ -191,6 +191,13 @@
       "flags": [
         { "name": "--tenant", "type": "string", "description": "Tenant name for configuration" }
       ]
+    },
+    "docs update": {
+      "usage": "simple docs update",
+      "description": "Update the guidance shipped for coding assistants; leaves packages alone",
+      "flags": [
+        { "name": "--json", "type": "boolean", "description": "Output one JSON document" }
+      ]
     }
   }
 }

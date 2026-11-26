@@ -61,6 +61,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	cfg := scaffold.MonorepoConfig{
 		ProjectName: projectName,
 		TenantName:  tenantName,
+		CLIVersion:  Version,
 	}
 	if err := scaffold.CreateMonorepoStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, targetPath, cfg); err != nil {
 		return fmt.Errorf("failed to create monorepo: %w", err)

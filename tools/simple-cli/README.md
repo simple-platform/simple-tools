@@ -462,6 +462,25 @@ simple init .
 
 ---
 
+### `simple docs update`
+
+Refresh the guidance for coding assistants shipped with the CLI. Run this from
+any directory inside a workspace. Changed and missing guidance is updated;
+files added by the team are left alone. Root `AGENTS.md` and `.cursorrules`
+differences are reported for manual comparison and are never changed. The
+command never touches packages.
+
+**Usage:**
+
+```bash
+simple docs update
+```
+
+Use `--json` for one JSON document containing `updated`, `removed`, `differs`,
+and `upToDate` fields.
+
+---
+
 ### `simple new app`
 
 Create a new application within the workspace.

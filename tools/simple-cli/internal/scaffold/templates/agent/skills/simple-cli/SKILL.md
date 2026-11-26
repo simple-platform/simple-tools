@@ -288,3 +288,15 @@ Initialize a new workspace (Monorepo).
   - `<project-name>`: Name of the root directory to create.
 - **Flags:**
   - `--tenant <string>`: Tenant name for `simple.scl` configuration.
+
+### `simple docs update`
+
+Update the guidance for coding assistants that ships with the CLI. Run it from
+any directory inside a workspace. It updates changed or missing guidance,
+removes only obsolete files recorded by an earlier update, and leaves root
+guidance files that differ for a manual comparison. It never touches packages.
+
+- **Usage:** `simple docs update [--json]`
+- **Output:** Lists changed and removed guidance files and any root guidance
+  files that differ. With `--json`, emits `updated`, `removed`, `differs`, and
+  `upToDate` fields.
