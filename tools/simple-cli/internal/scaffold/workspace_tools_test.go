@@ -57,8 +57,8 @@ func TestWorkspaceToolVersionsArePinned(t *testing.T) {
 	}
 	var manifest workspaceManifest
 	readTemplateJSON(t, "templates/package.json", &manifest)
-	if manifest.PackageManager != "pnpm@10.33.4" || manifest.Engines["node"] != ">=25" {
-		t.Errorf("package.json packageManager = %q, engines.node = %q, want pnpm@10.33.4 and >=25", manifest.PackageManager, manifest.Engines["node"])
+	if manifest.PackageManager != "pnpm@10.34.9" || manifest.Engines["node"] != ">=25" {
+		t.Errorf("package.json packageManager = %q, engines.node = %q, want pnpm@10.34.9 and >=25", manifest.PackageManager, manifest.Engines["node"])
 	}
 }
 
