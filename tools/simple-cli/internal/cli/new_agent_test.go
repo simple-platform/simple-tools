@@ -105,6 +105,78 @@ func TestNewAgentCommandsOutput(t *testing.T) {
 	}
 }
 
+func TestAgentAndTaskTypeRepeatCommandsSucceedInTextAndJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		cmd  *cobra.Command
+		args []string
+		run  func(*cobra.Command, []string) error
+		kind string
+		json bool
+	}{
+		{name: "agent text", cmd: newAgentCmd, args: []string{"com.acme.shop", "support", "Support Agent"}, run: runNewAgent, kind: "agent"},
+		{name: "agent JSON", cmd: newAgentCmd, args: []string{"com.acme.shop", "support", "Support Agent"}, run: runNewAgent, kind: "agent", json: true},
+		{name: "task type text", cmd: newTaskTypeCmd, args: []string{"com.acme.shop", "returns", "Returns"}, run: runNewTaskType, kind: "task-type"},
+		{name: "task type JSON", cmd: newTaskTypeCmd, args: []string{"com.acme.shop", "returns", "Returns"}, run: runNewTaskType, kind: "task-type", json: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			oldRoot, oldFS, oldJSON := agentCommandRoot, agentCommandFS, jsonOutput
+			oldAgent, oldTask := createAgentWiring, createTaskTypeWiring
+			t.Cleanup(func() {
+				agentCommandRoot, agentCommandFS, jsonOutput = oldRoot, oldFS, oldJSON
+				createAgentWiring, createTaskTypeWiring = oldAgent, oldTask
+			})
+			agentCommandRoot = func() (string, error) { return "/repo", nil }
+			agentCommandFS = &fsx.MockFileSystem{}
+			jsonOutput = test.json
+			oldOut := test.cmd.OutOrStdout()
+			t.Cleanup(func() { test.cmd.SetOut(oldOut) })
+			cmdOut := &bytes.Buffer{}
+			test.cmd.SetOut(cmdOut)
+			resetNewFlags(test.cmd)
+			writes, calls := 0, 0
+			repeat := func() (scaffold.WiringResult, error) {
+				calls++
+				if calls == 1 {
+					writes++
+					return scaffold.WiringResult{Created: []string{"apps/com.acme.shop/knowledge/support-persona.md"}, Records: []string{"agent_support"}, FillIn: []string{"apps/com.acme.shop/knowledge/support-persona.md"}}, nil
+				}
+				return scaffold.WiringResult{NothingToAdd: true, FillIn: []string{"apps/com.acme.shop/knowledge/support-persona.md"}}, nil
+			}
+			createAgentWiring = func(fsx.FileSystem, fsx.TemplateFS, string, scaffold.AgentConfig) (scaffold.WiringResult, error) {
+				return repeat()
+			}
+			createTaskTypeWiring = func(fsx.FileSystem, fsx.TemplateFS, string, scaffold.TaskTypeConfig) (scaffold.WiringResult, error) {
+				return repeat()
+			}
+			for run := 0; run < 2; run++ {
+				cmdOut.Reset()
+				if err := test.run(test.cmd, test.args); err != nil {
+					t.Fatalf("run %d error = %v", run+1, err)
+				}
+			}
+			if calls != 2 || writes != 1 {
+				t.Fatalf("calls = %d, writes = %d, want two calls and one write", calls, writes)
+			}
+			if test.json {
+				var got map[string]any
+				if err := json.Unmarshal(cmdOut.Bytes(), &got); err != nil {
+					t.Fatalf("repeat output is not JSON: %v", err)
+				}
+				if got["status"] != "success" || len(got["created"].([]any)) != 0 || len(got["records"].([]any)) != 0 || len(got["fill_in"].([]any)) != 1 {
+					t.Fatalf("repeat JSON = %#v, want successful no-op with existing marker path", got)
+				}
+				return
+			}
+			want := "Nothing to add for " + test.kind + " " + test.args[1] + " in com.acme.shop.\nFill in:\n- apps/com.acme.shop/knowledge/support-persona.md\nRun `simple build com.acme.shop` to see what is left.\n"
+			if cmdOut.String() != want {
+				t.Fatalf("repeat text = %q, want %q", cmdOut.String(), want)
+			}
+		})
+	}
+}
+
 func TestNewCommandArgumentValidation(t *testing.T) {
 	oldRoot, oldFS := agentCommandRoot, agentCommandFS
 	t.Cleanup(func() { agentCommandRoot, agentCommandFS = oldRoot, oldFS })
@@ -686,6 +758,128 @@ func TestNewTaskTypeWakeInterval(t *testing.T) {
 			}
 			if strings.Contains(tt.name, "without every") && strings.Contains(content, "wake_interval_seconds") {
 				t.Fatalf("record unexpectedly contains wake_interval_seconds: %s", content)
+			}
+		})
+	}
+}
+
+func TestNewAgentCmd_AppIDValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		appID       string
+		createApp   bool
+		wantErr     string
+		wantSuccess bool
+	}{
+		{
+			name:        "uppercase app id that exists is accepted",
+			appID:       "com.Acme.Shop",
+			createApp:   true,
+			wantSuccess: true,
+		},
+		{
+			name:    "missing app",
+			appID:   "com.acme.missing",
+			wantErr: `app com.acme.missing does not exist: run 'simple new app com.acme.missing "<Display name>"' first`,
+		},
+		{
+			name:    "empty id",
+			appID:   "",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "dot dot",
+			appID:   "..",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "dot dot traversal",
+			appID:   "../../..",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "forward slash",
+			appID:   "a/b",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    `backslash`,
+			appID:   `a\b`,
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "absolute path",
+			appID:   "/root/apps/com.acme.shop",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			oldWd, _ := os.Getwd()
+			_ = os.Chdir(tmpDir)
+			oldRoot, oldFS := agentCommandRoot, agentCommandFS
+			oldCreateAgent := createAgentWiring
+			t.Cleanup(func() {
+				_ = os.Chdir(oldWd)
+				agentCommandRoot, agentCommandFS = oldRoot, oldFS
+				createAgentWiring = oldCreateAgent
+				resetNewFlags(newAgentCmd)
+			})
+			agentCommandRoot = os.Getwd
+			agentCommandFS = fsx.OSFileSystem{}
+			createAgentWiring = scaffold.CreateAgent
+			resetNewFlags(newAgentCmd)
+
+			if tt.createApp {
+				if err := scaffold.CreateAppStructure(fsx.OSFileSystem{}, scaffold.TemplatesFS, tmpDir, tt.appID, "Shop", "Example app"); err != nil {
+					t.Fatalf("CreateAppStructure failed: %v", err)
+				}
+			}
+
+			countFiles := func() int {
+				count := 0
+				_ = filepath.Walk(tmpDir, func(_ string, info os.FileInfo, err error) error {
+					if err == nil && !info.IsDir() {
+						count++
+					}
+					return nil
+				})
+				return count
+			}
+
+			initialFileCount := countFiles()
+
+			var cmdOut bytes.Buffer
+			oldCmdOut := newAgentCmd.OutOrStdout()
+			newAgentCmd.SetOut(&cmdOut)
+			t.Cleanup(func() { newAgentCmd.SetOut(oldCmdOut) })
+
+			args := []string{"new", "agent", tt.appID, "support", "Support Agent"}
+			_, _, err := invokeCmd(args...)
+
+			if tt.wantSuccess {
+				if err != nil {
+					t.Fatalf("expected success, got error: %v", err)
+				}
+				if !strings.Contains(cmdOut.String(), "Created agent support") {
+					t.Fatalf("expected output to mention created agent, got: %s", cmdOut.String())
+				}
+				personaPath := filepath.Join(tmpDir, "apps", tt.appID, "knowledge", "support-persona.md")
+				if _, err := os.Stat(personaPath); err != nil {
+					t.Fatalf("expected persona file to exist: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error for appID %q, got nil", tt.appID)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
+				}
+				if countFiles() != initialFileCount {
+					t.Fatalf("files were written on failure for appID %q (initial: %d, current: %d)", tt.appID, initialFileCount, countFiles())
+				}
 			}
 		})
 	}

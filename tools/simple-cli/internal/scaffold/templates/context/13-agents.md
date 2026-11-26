@@ -34,7 +34,7 @@ Creates a kind of work, its shape file, and its states file if it cannot reuse o
 - `--desc <description>`: Optional, one line with no double quote or backslash, up to 1,000 characters.
 - `--json`: Use the root JSON output format.
 
-If the kind of work already exists, the command refuses and points to `simple new skill` or `simple new tool` for additions.
+If the kind of work already exists and the request matches, the command succeeds without adding anything. It refuses when a supplied plural name, description, agent, work mode, tool, or interval differs from the existing kind of work.
 
 ### `simple new skill`
 
@@ -183,7 +183,7 @@ When building an app or all apps, `simple build` checks agents after building ac
 
 The marker scan runs for every app. It reports each `TODO(simple):` line in `knowledge/**/*.md`, `records/**/*.scl`, `records/**/*.json`, and app action sources under `actions/*/src/**`.
 
-Wiring and structure checks run when the app has at least one agent or kind-of-work record:
+Agent wiring and structure checks run when the app has at least one `agent` or `agent_task_type` record. A people-only kind of work by itself does not start these checks:
 
 - Each agent points to a knowledge record in the app with a body.
 - A kind of work with no linked agent has no default-agent, playbook, or carried-link checks. It may be work for people or have its agent chosen when the task starts.

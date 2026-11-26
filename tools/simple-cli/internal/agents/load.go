@@ -33,19 +33,49 @@ var parseSCL = func(filePath string) ([]byte, error) {
 }
 
 type parsedBlock struct {
-	Name     any    `json:"name"`
-	Type     string `json:"type"`
-	Key      string `json:"key"`
-	Children []struct {
-		Key   string `json:"key"`
-		Value any    `json:"value"`
-	} `json:"children"`
+	Name     any           `json:"name"`
+	Type     string        `json:"type"`
+	Key      string        `json:"key"`
+	Children []parsedChild `json:"children"`
+}
+
+type parsedChild struct {
+	Type     string        `json:"type"`
+	Key      string        `json:"key"`
+	Value    any           `json:"value"`
+	Children []parsedChild `json:"children"`
+}
+
+func (child parsedChild) value() any {
+	if child.Type != "block" {
+		if child.Type == "kv_multi" {
+			if items, ok := child.Value.([]any); ok {
+				unwrapped := make([]any, len(items))
+				for i, item := range items {
+					if entry, ok := item.(map[string]any); ok {
+						if val, exists := entry["value"]; exists {
+							unwrapped[i] = val
+							continue
+						}
+					}
+					unwrapped[i] = item
+				}
+				return unwrapped
+			}
+		}
+		return child.Value
+	}
+	value := make(map[string]any, len(child.Children))
+	for _, nested := range child.Children {
+		value[nested.Key] = nested.value()
+	}
+	return value
 }
 
 var (
-	setLine         = regexp.MustCompile(`^\s*set\s+([^,\s]+)\s*,\s*([^\s{]+)`)
-	agentDeclLine   = regexp.MustCompile(`(?m)^\s*set\s+(?:"(?:dev_simple_system\.)?(?:agent|task_type)"|(?:dev_simple_system\.)?(?:agent|task_type))\s*,`)
-	agentRecordLine = regexp.MustCompile(`(?m)^\s*set\s+(?:"(?:dev_simple_system\.)?(?:agent|task_type|agent_task_type|task_type_skill|task_type_tool|logic_skill)"|(?:dev_simple_system\.)?(?:agent|task_type|agent_task_type|task_type_skill|task_type_tool|logic_skill))\s*,`)
+	setLine         = regexp.MustCompile(`\bset\s+([^,\s]+)\s*,\s*([^\s{]+)`)
+	agentDeclLine   = regexp.MustCompile(`\bset\s+(?:"(?:dev_simple_system\.)?(?:agent|agent_task_type)"|'(?:dev_simple_system\.)?(?:agent|agent_task_type)'|(?:dev_simple_system\.)?(?:agent|agent_task_type))\s*,`)
+	agentRecordLine = regexp.MustCompile(`\bset\s+(?:"(?:dev_simple_system\.)?(?:agent|agent_task_type)"|'(?:dev_simple_system\.)?(?:agent|agent_task_type)'|(?:dev_simple_system\.)?(?:agent|agent_task_type))\s*,`)
 	varLine         = regexp.MustCompile(`^\s*var\s+([^\s{]+)`)
 	appRecordExpr   = regexp.MustCompile(`^\s*\$app_record\(\s*["']([^"']+)["']\s*\)\s*$`)
 	varExpr         = regexp.MustCompile(`^\s*\$var\(\s*["']([^"']+)["']\s*\)\s*\|>\s*\$jq\(\s*["'](.*)["']\s*\)\s*$`)
@@ -77,8 +107,8 @@ func LoadAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, error) {
 	return loadFromDir(fsys, repoRoot, appID, filepath.Clean(appDir))
 }
 
-// HasAgentDeclarations finds agent and kind-of-work records without invoking
-// the parser, so unrelated record syntax cannot block an app with no agent work.
+// HasAgentDeclarations finds agent and executor-link records without invoking
+// the parser, so people-only work does not trigger agent checks.
 func HasAgentDeclarations(fsys fsx.FileSystem, repoRoot, appID string) (bool, error) {
 	repoRoot, err := filepath.Abs(repoRoot)
 	if err != nil {
@@ -149,7 +179,7 @@ func loadFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, err
 				}
 				fields := make(map[string]any, len(block.Children))
 				for _, field := range block.Children {
-					fields[field.Key] = field.Value
+					fields[field.Key] = field.value()
 				}
 				all = append(all, record{table: baseTable(table), key: key, file: relFile, line: findRecordLine(data, table, key), fields: fields})
 			case "var":
@@ -348,7 +378,7 @@ func sclFiles(fsys fsx.FileSystem, root string) ([]string, error) {
 
 func baseTable(table string) string {
 	const platformPrefix = "dev_simple_system."
-	table = strings.Trim(table, `"`)
+	table = strings.Trim(strings.TrimSpace(table), `"'`)
 	if strings.HasPrefix(table, platformPrefix) {
 		return strings.TrimPrefix(table, platformPrefix)
 	}
@@ -374,9 +404,10 @@ func relative(root, path string) string {
 
 func findRecordLine(data []byte, table, key string) int {
 	for index, line := range strings.Split(string(data), "\n") {
-		match := setLine.FindStringSubmatch(line)
-		if len(match) == 3 && baseTable(match[1]) == baseTable(table) && match[2] == key {
-			return index + 1
+		for _, match := range setLine.FindAllStringSubmatch(line, -1) {
+			if len(match) == 3 && baseTable(match[1]) == baseTable(table) && (match[2] == key || strings.Trim(match[2], `"'`) == strings.Trim(key, `"'`)) {
+				return index + 1
+			}
 		}
 	}
 	return 0

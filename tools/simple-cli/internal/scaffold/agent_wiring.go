@@ -70,22 +70,49 @@ type plannedRecords struct {
 var kebabName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 var taskTypeName = regexp.MustCompile(`^[a-z][a-z0-9]*(?:[-_][a-z0-9]+)*$`)
 
+func appChildPath(appDir string, parts ...string) (string, error) {
+	root, err := filepath.Abs(appDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve app directory: %w", err)
+	}
+	for _, part := range parts {
+		if filepath.IsAbs(part) {
+			return "", fmt.Errorf("generated file path must stay inside the app folder")
+		}
+	}
+	path := filepath.Clean(filepath.Join(append([]string{root}, parts...)...))
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("generated file path must stay inside the app folder")
+	}
+	return path, nil
+}
+
 func CreateAgent(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg AgentConfig) (WiringResult, error) {
 	app, appDir, err := loadAgentAppFor(fsys, repoRoot, cfg.AppID)
 	if err != nil {
 		return WiringResult{}, err
 	}
-	if _, exists := app.Agent(cfg.Name); exists {
-		return WiringResult{}, fmt.Errorf("agent %q already exists in %s; choose a different name", cfg.Name, cfg.AppID)
-	}
 	if err := validateAgentConfig(cfg); err != nil {
 		return WiringResult{}, err
+	}
+	if existing, exists := app.Agent(cfg.Name); exists {
+		if existing.DisplayName != cfg.DisplayName {
+			return WiringResult{}, fmt.Errorf("agent %q already exists in %s with display name %q, not %q; use the existing name or choose a different agent name", cfg.Name, cfg.AppID, existing.DisplayName, cfg.DisplayName)
+		}
+		if cfg.Description != "" && existing.Description != cfg.Description {
+			return WiringResult{}, fmt.Errorf("agent %q already exists in %s with description %q, not %q; use the existing name or choose a different agent name", cfg.Name, cfg.AppID, existing.Description, cfg.Description)
+		}
+		return resultWithReusedBodies(fsys, repoRoot, appDir, existing.Persona)
 	}
 	personaKey, agentKey := "persona_"+agents.Snake(cfg.Name), "agent_"+agents.Snake(cfg.Name)
 	if err := ensureKeysFree(app, "agent", cfg.Name, personaKey, agentKey); err != nil {
 		return WiringResult{}, err
 	}
-	personaPath := filepath.Join(appDir, "knowledge", agents.Kebab(cfg.Name)+"-persona.md")
+	personaPath, err := appChildPath(appDir, "knowledge", agents.Kebab(cfg.Name)+"-persona.md")
+	if err != nil {
+		return WiringResult{}, err
+	}
 	persona, err := renderAgentTemplate(tplFS, "templates/ai-agent/persona.md", map[string]string{"DisplayName": cfg.DisplayName})
 	if err != nil {
 		return WiringResult{}, err
@@ -118,20 +145,29 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 	if err != nil {
 		return WiringResult{}, err
 	}
-	if _, exists := app.TaskType(cfg.Name); exists {
-		return WiringResult{}, fmt.Errorf("kind of work %q already exists in %s; add to it with 'simple new skill' or 'simple new tool'", cfg.Name, cfg.AppID)
-	}
 	if err := validateTaskTypeConfig(cfg); err != nil {
 		return WiringResult{}, err
 	}
 	if cfg.NoAgent && (cfg.AgentFlagSet || cfg.ToolsFlagSet || cfg.EveryFlagSet || cfg.AgentName != "" || len(cfg.Tools) != 0) {
 		return WiringResult{}, fmt.Errorf("kind of work %q cannot use --no-agent with --agent, --tools, or --every; remove those flags", cfg.Name)
 	}
+	existing, hasExisting := app.TaskType(cfg.Name)
 	var agent *agents.Agent
 	if !cfg.NoAgent {
-		agent, err = selectAgent(app, cfg.AppID, cfg.AgentName, cfg.Name)
-		if err != nil {
-			return WiringResult{}, err
+		if hasExisting {
+			agent = existing.DefaultAgent
+			if cfg.AgentName != "" {
+				requestedAgent, exists := app.Agent(cfg.AgentName)
+				if !exists {
+					return WiringResult{}, fmt.Errorf("agent %q does not exist in %s; create it with 'simple new agent %s %s \"<Display name>\"'", cfg.AgentName, cfg.AppID, cfg.AppID, cfg.AgentName)
+				}
+				agent = requestedAgent
+			}
+		} else {
+			agent, err = selectAgent(app, cfg.AppID, cfg.AgentName, cfg.Name)
+			if err != nil {
+				return WiringResult{}, err
+			}
 		}
 	}
 	validTools := make([]agents.ToolRef, 0, len(cfg.Tools))
@@ -150,6 +186,9 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 			continue
 		}
 		return WiringResult{}, fmt.Errorf("tool %q does not exist in %s; create it first with 'simple new tool %s %s \"<Display name>\" --lang ts --scope <org>' without --task-type, then run this command again", name, cfg.AppID, cfg.AppID, name)
+	}
+	if hasExisting {
+		return existingTaskTypeResult(fsys, repoRoot, appDir, cfg, app, existing, agent, validTools)
 	}
 	nameKey := agents.Snake(cfg.Name)
 	taskKey := "task_type_" + nameKey
@@ -170,15 +209,31 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 	if agent != nil && agent.Persona == nil {
 		return WiringResult{}, fmt.Errorf("agent %q in %s has no readable persona; point it to knowledge with a readable body before adding kind of work %q", agent.DisplayName, cfg.AppID, cfg.Name)
 	}
-	shapePath := filepath.Join(appDir, "records", "task-types", nameKey+".json")
-	statesPath := filepath.Join(appDir, "records", "task-types", "states.json")
+	shapePath, err := appChildPath(appDir, "records", "task-types", nameKey+".json")
+	if err != nil {
+		return WiringResult{}, err
+	}
+	statesPath, err := appChildPath(appDir, "records", "task-types", "states.json")
+	if err != nil {
+		return WiringResult{}, err
+	}
 	statesRepoPath, hasStates := app.StatesFile()
 	if hasStates {
-		statesPath = filepath.Join(repoRoot, filepath.FromSlash(statesRepoPath))
+		statesRel, relErr := filepath.Rel(filepath.Join("apps", filepath.FromSlash(cfg.AppID)), filepath.FromSlash(statesRepoPath))
+		if relErr != nil || statesRel == ".." || filepath.IsAbs(statesRel) || strings.HasPrefix(statesRel, ".."+string(filepath.Separator)) {
+			return WiringResult{}, fmt.Errorf("states file for kind of work %q must stay inside the app folder", cfg.Name)
+		}
+		statesPath, err = appChildPath(appDir, statesRel)
+		if err != nil {
+			return WiringResult{}, err
+		}
 	}
 	files := make([]plannedFile, 0, 3)
 	if !cfg.NoAgent {
-		playbookPath := filepath.Join(appDir, "knowledge", "playbook-"+agents.Kebab(cfg.Name)+".md")
+		playbookPath, pathErr := appChildPath(appDir, "knowledge", "playbook-"+agents.Kebab(cfg.Name)+".md")
+		if pathErr != nil {
+			return WiringResult{}, pathErr
+		}
 		playbook, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/playbook.md", nil)
 		if renderErr != nil {
 			return WiringResult{}, renderErr
@@ -301,6 +356,56 @@ func CreateTaskType(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, 
 	return executePlan(fsys, repoRoot, files, records)
 }
 
+func existingTaskTypeResult(fsys fsx.FileSystem, repoRoot, appDir string, cfg TaskTypeConfig, app *agents.App, existing *agents.TaskType, expectedAgent *agents.Agent, expectedTools []agents.ToolRef) (WiringResult, error) {
+	if existing.PluralName != cfg.PluralName {
+		return WiringResult{}, taskTypeDifference(cfg, "plural name", existing.PluralName, cfg.PluralName)
+	}
+	if cfg.Description != "" && existing.Description != cfg.Description {
+		return WiringResult{}, taskTypeDifference(cfg, "description", existing.Description, cfg.Description)
+	}
+	hasAgentLink := false
+	for _, link := range app.AgentTaskTypeLinks {
+		if link.TaskTypeRef.Key == existing.Key {
+			hasAgentLink = true
+			break
+		}
+	}
+	if cfg.NoAgent && hasAgentLink {
+		return WiringResult{}, fmt.Errorf("kind of work %q already has agent-owned work, not people-only work; use the existing kind or choose a different name", cfg.Name)
+	}
+	if !cfg.NoAgent && !hasAgentLink {
+		return WiringResult{}, fmt.Errorf("kind of work %q already has people-only work, not agent-owned work; use the existing kind or choose a different name", cfg.Name)
+	}
+	if !cfg.NoAgent && expectedAgent == nil {
+		return WiringResult{}, fmt.Errorf("kind of work %q already exists in %s without a default agent; repair its agent link before repeating the command", cfg.Name, cfg.AppID)
+	}
+	if expectedAgent != nil {
+		if existing.DefaultAgent == nil {
+			return WiringResult{}, fmt.Errorf("kind of work %q already exists in %s without a default agent; repair its agent link before repeating the command", cfg.Name, cfg.AppID)
+		}
+		if existing.DefaultAgent.Key != expectedAgent.Key {
+			return WiringResult{}, taskTypeDifference(cfg, "default agent", existing.DefaultAgent.DisplayName, expectedAgent.DisplayName)
+		}
+	}
+	for _, tool := range expectedTools {
+		if !app.HasToolLink(existing.Key, tool) {
+			return WiringResult{}, fmt.Errorf("kind of work %q already exists in %s without requested tool %q; use the existing tools or choose a different kind of work name", cfg.Name, cfg.AppID, tool.Name)
+		}
+	}
+	if cfg.WakeIntervalSeconds > 0 && existing.WakeIntervalSeconds != cfg.WakeIntervalSeconds {
+		return WiringResult{}, fmt.Errorf("kind of work %q already exists in %s with wake interval %d seconds, not %d seconds; use the existing interval or choose a different kind of work name", cfg.Name, cfg.AppID, existing.WakeIntervalSeconds, cfg.WakeIntervalSeconds)
+	}
+	var persona *agents.Knowledge
+	if expectedAgent != nil {
+		persona = expectedAgent.Persona
+	}
+	return resultWithReusedBodiesAndFiles(fsys, repoRoot, appDir, []string{existing.ShapePath}, persona, existing.Playbook)
+}
+
+func taskTypeDifference(cfg TaskTypeConfig, field, existing, requested string) error {
+	return fmt.Errorf("kind of work %q already exists in %s with %s %q, not %q; use the existing name or choose a different kind of work name", cfg.Name, cfg.AppID, field, existing, requested)
+}
+
 func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg SkillConfig) (WiringResult, error) {
 	app, appDir, err := loadAgentAppFor(fsys, repoRoot, cfg.AppID)
 	if err != nil {
@@ -314,7 +419,10 @@ func CreateSkill(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg
 		return WiringResult{}, err
 	}
 	knowledge, exists := app.Skill(cfg.Name)
-	filePath := filepath.Join(appDir, "knowledge", "skill-"+agents.Kebab(cfg.Name)+".md")
+	filePath, err := appChildPath(appDir, "knowledge", "skill-"+agents.Kebab(cfg.Name)+".md")
+	if err != nil {
+		return WiringResult{}, err
+	}
 	knowledgeKey := "skill_" + agents.Snake(cfg.Name)
 	position := app.NextSkillPosition(task.Key)
 	linkKey := "task_type_" + agents.Snake(task.Name) + "_carries_skill_" + agents.Snake(cfg.Name)
@@ -398,7 +506,10 @@ func CreateKnowledge(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string,
 	}
 	knowledge, exists := app.ReferenceKnowledge(cfg.Name)
 	knowledgeKey := "knowledge_" + agents.Snake(cfg.Name)
-	filePath := filepath.Join(appDir, "knowledge", agents.Kebab(cfg.Name)+".md")
+	filePath, err := appChildPath(appDir, "knowledge", agents.Kebab(cfg.Name)+".md")
+	if err != nil {
+		return WiringResult{}, err
+	}
 	if exists {
 		knowledgeKey = knowledge.Key
 	} else if cfg.Title == "" {
@@ -460,6 +571,10 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 		return WiringResult{}, err
 	}
 	if err := validateToolConfig(cfg); err != nil {
+		return WiringResult{}, err
+	}
+	actionDir, err := appChildPath(appDir, "actions", cfg.Name)
+	if err != nil {
 		return WiringResult{}, err
 	}
 	_, platform := stringIn(agents.PlatformTools, cfg.Name)
@@ -534,7 +649,7 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 		if err := ensureKeysFree(app, "tool", cfg.Name, actionKey); err != nil {
 			return WiringResult{}, err
 		}
-		if PathExists(fsys, filepath.Join(appDir, "actions", cfg.Name)) {
+		if PathExists(fsys, actionDir) {
 			return WiringResult{}, fmt.Errorf("action folder for tool %q already exists in %s; move or rename that folder", cfg.Name, cfg.AppID)
 		}
 	}
@@ -595,7 +710,10 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 		if len(findings) != 0 {
 			return WiringResult{}, findingError("knowledge/tool-"+agents.Kebab(cfg.Name)+".md", findings[0])
 		}
-		lessonPath := filepath.Join(appDir, "knowledge", "tool-"+agents.Kebab(cfg.Name)+".md")
+		lessonPath, pathErr := appChildPath(appDir, "knowledge", "tool-"+agents.Kebab(cfg.Name)+".md")
+		if pathErr != nil {
+			return WiringResult{}, pathErr
+		}
 		files = append(files, plannedFile{path: lessonPath, content: []byte(lessonText)})
 		knowledgeRecord, renderErr := renderAgentTemplate(tplFS, "templates/ai-agent/knowledge.scl", map[string]string{
 			"Key": lessonKey, "Title": title, "BodyPath": "knowledge/tool-" + agents.Kebab(cfg.Name) + ".md",
@@ -650,7 +768,10 @@ func CreateTool(fsys fsx.FileSystem, tplFS fsx.TemplateFS, repoRoot string, cfg 
 var validToolExecutionEnvs = []string{"server", "client", "both"}
 
 func planToolActionFiles(tplFS fsx.TemplateFS, appDir string, cfg ToolConfig) ([]plannedFile, error) {
-	actionDir := filepath.Join(appDir, "actions", cfg.Name)
+	actionDir, err := appChildPath(appDir, "actions", cfg.Name)
+	if err != nil {
+		return nil, err
+	}
 	type actionTemplate struct {
 		source string
 		target string
@@ -702,9 +823,9 @@ type recordAddition struct {
 }
 
 func loadAgentAppFor(fsys fsx.FileSystem, root, appID string) (*agents.App, string, error) {
-	appDir := filepath.Join(root, "apps", filepath.FromSlash(appID))
-	if !PathExists(fsys, appDir) {
-		return nil, "", fmt.Errorf("app %s does not exist: run 'simple new app %s \"<Display name>\"' first", appID, appID)
+	appDir, err := ExistingAppPath(fsys, root, appID)
+	if err != nil {
+		return nil, "", err
 	}
 	app, err := loadAgentApp(fsys, root, appID)
 	if err != nil {
@@ -1141,6 +1262,10 @@ func checkPlatformToolLookup(name, variable string, lookup agents.LookupInfo, ex
 }
 
 func resultWithReusedBodies(fsys fsx.FileSystem, repoRoot, appDir string, bodies ...*agents.Knowledge) (WiringResult, error) {
+	return resultWithReusedBodiesAndFiles(fsys, repoRoot, appDir, nil, bodies...)
+}
+
+func resultWithReusedBodiesAndFiles(fsys fsx.FileSystem, repoRoot, appDir string, files []string, bodies ...*agents.Knowledge) (WiringResult, error) {
 	fillIn := make(map[string]struct{})
 	for _, body := range bodies {
 		if body == nil || body.Body.Path == "" {
@@ -1150,6 +1275,19 @@ func resultWithReusedBodies(fsys fsx.FileSystem, repoRoot, appDir string, bodies
 		content, exists, err := readExistingFile(fsys, path)
 		if err != nil {
 			return WiringResult{}, fmt.Errorf("failed to check reused body %s: %w", body.Body.Path, err)
+		}
+		if exists && bytes.Contains(content, []byte(agents.Marker)) {
+			fillIn[relativeToRoot(repoRoot, path)] = struct{}{}
+		}
+	}
+	for _, relative := range files {
+		if relative == "" {
+			continue
+		}
+		path := filepath.Join(appDir, filepath.FromSlash(relative))
+		content, exists, err := readExistingFile(fsys, path)
+		if err != nil {
+			return WiringResult{}, fmt.Errorf("failed to check reused file %s: %w", relative, err)
 		}
 		if exists && bytes.Contains(content, []byte(agents.Marker)) {
 			fillIn[relativeToRoot(repoRoot, path)] = struct{}{}

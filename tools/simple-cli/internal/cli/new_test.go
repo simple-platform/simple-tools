@@ -190,8 +190,9 @@ func TestNewActionCmd_MissingApp(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error when app doesn't exist")
 	}
-	if !strings.Contains(err.Error(), "app does not exist") {
-		t.Errorf("Unexpected error: %v", err)
+	want := `app com.example.nonexistent does not exist: run 'simple new app com.example.nonexistent "<Display name>"' first`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("Unexpected error: %v, want %q", err, want)
 	}
 }
 
@@ -532,6 +533,121 @@ func TestNewActionCmd_UnquotableText(t *testing.T) {
 			// worse than none, because the next attempt reports it exists.
 			if _, statErr := os.Stat(filepath.Join(appDir, "actions", "greet-user")); statErr == nil {
 				t.Error("A refused scaffold must leave no action directory behind")
+			}
+		})
+	}
+}
+
+func TestNewActionCmd_AppIDValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		appID       string
+		createApp   bool
+		wantErr     string
+		wantSuccess bool
+	}{
+		{
+			name:        "uppercase app id that exists is accepted",
+			appID:       "com.Acme.Shop",
+			createApp:   true,
+			wantSuccess: true,
+		},
+		{
+			name:    "missing app",
+			appID:   "com.acme.missing",
+			wantErr: `app com.acme.missing does not exist: run 'simple new app com.acme.missing "<Display name>"' first`,
+		},
+		{
+			name:    "empty id",
+			appID:   "",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "dot dot",
+			appID:   "..",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "dot dot traversal",
+			appID:   "../../..",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "forward slash",
+			appID:   "a/b",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    `backslash`,
+			appID:   `a\b`,
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:    "absolute path",
+			appID:   "/root/apps/com.acme.shop",
+			wantErr: `is invalid; use a valid app ID without path separators or ".."`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			appsDir := filepath.Join(tmpDir, "apps")
+			if err := os.Mkdir(appsDir, 0755); err != nil {
+				t.Fatalf("failed to create apps dir: %v", err)
+			}
+
+			if tt.createApp {
+				appDir := filepath.Join(appsDir, tt.appID)
+				if err := os.MkdirAll(filepath.Join(appDir, "actions"), 0755); err != nil {
+					t.Fatalf("failed to create actions dir: %v", err)
+				}
+				if err := os.MkdirAll(filepath.Join(appDir, "records"), 0755); err != nil {
+					t.Fatalf("failed to create records dir: %v", err)
+				}
+			}
+
+			countFiles := func() int {
+				count := 0
+				_ = filepath.Walk(tmpDir, func(_ string, info os.FileInfo, err error) error {
+					if err == nil && !info.IsDir() {
+						count++
+					}
+					return nil
+				})
+				return count
+			}
+
+			initialFileCount := countFiles()
+
+			oldWd, _ := os.Getwd()
+			_ = os.Chdir(tmpDir)
+			defer func() { _ = os.Chdir(oldWd) }()
+
+			args := []string{"new", "action", tt.appID, "test-action", "Test Action", "--scope", "mycompany"}
+			out, _, err := invokeCmd(args...)
+
+			if tt.wantSuccess {
+				if err != nil {
+					t.Fatalf("expected success, got error: %v", err)
+				}
+				if !strings.Contains(out, "Created action Test Action (test-action)") {
+					t.Fatalf("expected output to mention created action, got: %s", out)
+				}
+				actionIndex := filepath.Join(appsDir, tt.appID, "actions", "test-action", "src", "index.ts")
+				if _, err := os.Stat(actionIndex); err != nil {
+					t.Fatalf("expected action file to exist: %v", err)
+				}
+			} else {
+				if err == nil {
+					t.Fatalf("expected error for appID %q, got nil", tt.appID)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q does not contain %q", err.Error(), tt.wantErr)
+				}
+				if countFiles() != initialFileCount {
+					t.Fatalf("files were written on failure for appID %q (initial: %d, current: %d)", tt.appID, initialFileCount, countFiles())
+				}
 			}
 		})
 	}

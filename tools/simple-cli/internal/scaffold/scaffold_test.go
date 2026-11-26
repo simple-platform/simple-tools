@@ -260,8 +260,9 @@ func TestCreateActionStructure_AppNotExists(t *testing.T) {
 	if err == nil {
 		t.Error("Expected error for non-existent app")
 	}
-	if !strings.Contains(err.Error(), "app does not exist") {
-		t.Errorf("Expected 'app does not exist' error, got: %v", err)
+	want := `app nonexistent does not exist: run 'simple new app nonexistent "<Display name>"' first`
+	if !strings.Contains(err.Error(), want) {
+		t.Errorf("Expected %q, got: %v", want, err)
 	}
 }
 
@@ -878,5 +879,85 @@ func TestTheScaffoldedRustActionIsDescribedAsItsTemplateSays(t *testing.T) {
 
 	if strings.Contains(described.Description, "@") {
 		t.Fatalf("a tag reached a scaffolded action's description: %q", described.Description)
+	}
+}
+
+func TestExistingAppPath(t *testing.T) {
+	tests := []struct {
+		name     string
+		appID    string
+		existing map[string][]byte
+		wantPath string
+		wantErr  string
+	}{
+		{
+			name:     "uppercase letter accepted when exists",
+			appID:    "com.Acme.Shop",
+			existing: map[string][]byte{"/root/apps/com.Acme.Shop": []byte{}},
+			wantPath: "/root/apps/com.Acme.Shop",
+		},
+		{
+			name:     "missing app gets help message",
+			appID:    "com.acme.missing",
+			existing: map[string][]byte{},
+			wantErr:  `app com.acme.missing does not exist: run 'simple new app com.acme.missing "<Display name>"' first`,
+		},
+		{
+			name:     "empty id refused",
+			appID:    "",
+			existing: map[string][]byte{},
+			wantErr:  `app ID "" is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:     "dot-dot refused",
+			appID:    "..",
+			existing: map[string][]byte{},
+			wantErr:  `app ID ".." is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:     "dot-dot traversal refused",
+			appID:    "../../..",
+			existing: map[string][]byte{},
+			wantErr:  `app ID "../../.." is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:     "forward slash refused",
+			appID:    "a/b",
+			existing: map[string][]byte{},
+			wantErr:  `app ID "a/b" is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:     "backslash refused",
+			appID:    `a\b`,
+			existing: map[string][]byte{},
+			wantErr:  `app ID "a\\b" is invalid; use a valid app ID without path separators or ".."`,
+		},
+		{
+			name:     "absolute path refused",
+			appID:    "/root/apps/com.acme.shop",
+			existing: map[string][]byte{},
+			wantErr:  `app ID "/root/apps/com.acme.shop" is invalid; use a valid app ID without path separators or ".."`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := &fsx.MockFileSystem{Files: tt.existing}
+			path, err := ExistingAppPath(fsys, "/root", tt.appID)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error for appID %q, got nil", tt.appID)
+				}
+				if err.Error() != tt.wantErr {
+					t.Fatalf("error = %q, want %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if path != tt.wantPath {
+				t.Fatalf("path = %q, want %q", path, tt.wantPath)
+			}
+		})
 	}
 }

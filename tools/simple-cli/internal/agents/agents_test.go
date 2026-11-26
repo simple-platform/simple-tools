@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +21,16 @@ import (
 )
 
 const capturedParserFixtureGZIP = `H4sICNDdB2sAA2NvbXBsZXRlLWFwcC5qc29uAM1ZS0/rOBTez6+IIqSCREvSNH0tRrqb0SxGGunOEpBlEgO5dZMQJ2Uqhv8+dh4nLdg+4VKkywISPsc+x993HnGuX9yUbpm7dnNOy/us2JIyyzjJiyxiQpCYltS9dMt9rsbc8SzayNsN28u7HS3kdfSY8Lhgqbu+funGbXYS2FFeqZub1HGeKlbsnQdWEvMyzosa6Tg8e0iitROzHRHJNueMiL0o2ZaQGhHnzTDHeX5kBVt3j6kfmuc8iWiZZClJYgkR9rR2blw516SZa9LMdeO+XvaPqR3oB7c2jZVNclw3rL24cF6cJG7u6l+wHbWPzZ20NHLXLy5PUrkDvtykjLvr4LXdFD28en291TzttbAnn1aG6tHAf329BC6z55TQqN4GnmWbKj8phf3sX0hZlG0nNNpKwh6z3EZX9MiizTgrYlachq0ZQtfMzpcftLivJQzgaXDA2LX7bu8mmzR75ix+YNLKnBUiSykRVZ5nReneGvgUrBzC5z/NNM63B5aW8HCZlJzptmS6sG8J4KvaJd2KZ/cJZ+cj8Omq9WTcejbZxqMLsOQui7XcTJeIIR2+1HMznVu5ATj0jrg5YoLT/Z2MKVKwsipS8VkqvjfTON28OBvB1L4JgGNs3PSOXbXejDszJB83Lk5IECC2BHZCAt9KCMDBR4JFbBLOJT/3VRqTPJPpZf95ltRkTjsZThESMMHPBIzyatx4NW4MGRY0ARI0ARI0gT1oAA5nH+Corv73iSSoztyf5ecPOZPzdz0TSs4MiZ/Z0Pg5IEe5M1buNIVoGDEzJHhmSPDM7MED8Jts9p4Y2paB+u/X1pg4ESrFkNoYnU9I5ADuz43sfEvFs6wqqmMRqq8Qk355JqIiydV/tasjoQK4H5q1ITsamXwiKQSZYd8U7sOcmqSiLKq6jxKy9dHas0Ls6XDfrFXVqe1Yz15Jy0roFgs9+2KA+55Bj/ZEAfAMSxQlFRtS+yIl2F2fquB203SPmZQYIn0g4Evj1n9/s1TOq4Jyo/bDEFkxxNX3J01jzoTTejlY+eEcWXv+YeW/aZQOpQ+YXvYhkgQAtxnTpOjGHHGlZDRW40TX6kx+yMAcXTj//e6cqcvz3jwh3ym2VGsZkiAA9z20+dKYpoKTNZbJ7dKaVo/QmobkCsDNpgVzz+sWeqYbRpK0ZIUEiZC2prF23TmSNgCfhvq0EdpfmAAOp0PKGLEmDxKze1rxkjQl75Op5FDwo6PieVD9m//rhT5Hcgzg/nRg1L3z+DDsetBgDpKAALcUX/Yvi6oy6/uwItO3YXMk4wBuzK+yejIopkCtdi0koQDuz/Qands1CvAC02hPQd3PazUa0aJImCBt73BKlX5SIAvkKAtwi0AG90fQXZuMQfp4wM3G+JDu8kwkptq4QPp0wFWU6tSz8KzqAXgxuDEaop7uQOEXkg8ShosBzf3wJgPVD1LLATdbMx2mH6QyA27Uj72xBngRnlA/X3CKckIpLZGYBHywlDT+fkRNS6SUA242KBikpiVSpAE3qWk5taoJ4OV8sJrU8YdWTFv5qh9RfsqjnlOKCAlMwAeLqHfz0I76I4jBhhXSPgNupHNpp7ODF4sT0nn0efDXIXSFBOEKD0L3bEeL85H5M2X3yvh0PprUxF57t5Pk8LzPSjcSvSsself2ThTgxQqhu7ES6sDxeSzh0l2Zf05K7U8EBxKgq8PKOez96NjPj2R430NCtR+g5KUlzx6rAIeDyJNGni6t9ofX6MmY72GfSD38bExzYo+dDfseEjz9AEt8/yXbReFUuVM7O/yEzPeQF9Z+gOVYavBprO8hzXI/wHQe63vIp2jAZ76c4bf/ATWVJ0oMIgAA`
+
+const capturedInlineShapeParserOutput = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":5,"col":18},"value_loc":{"line":5,"col":23}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":16}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"name":"","type":"block","key":"output","children":[{"name":"","type":"block","key":"accepted","children":[{"type":"kv","value":"boolean","key":"type","key_loc":{"line":8,"col":18},"value_loc":{"line":8,"col":23}}],"key_loc":{"line":8,"col":7},"name_loc":{"line":8,"col":16}}],"key_loc":{"line":7,"col":5},"name_loc":{"line":7,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
+
+const capturedInlineShapeOutputNull = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":6,"col":9},"value_loc":{"line":6,"col":14}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":9}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"type":"kv","value":"null","key":"output","key_loc":{"line":9,"col":5},"value_loc":{"line":9,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
+
+const capturedInlineShapeOutputInvalidString = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":6,"col":9},"value_loc":{"line":6,"col":14}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":9}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"type":"kv","value":"string_output","key":"output","key_loc":{"line":9,"col":5},"value_loc":{"line":9,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
+
+const capturedNestedBlockListParserOutput = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":6,"col":9},"value_loc":{"line":6,"col":14}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":9}},{"type":"kv_multi","value":[{"line":8,"value":"a","col":16},{"line":8,"value":"b","col":21}],"key":"required","key_loc":{"line":8,"col":7}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"type":"kv","value":"null","key":"output","key_loc":{"line":10,"col":5},"value_loc":{"line":10,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
+
+const capturedNestedBlockThreeListParserOutput = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":6,"col":9},"value_loc":{"line":6,"col":14}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":9}},{"type":"kv_multi","value":[{"line":8,"value":"a","col":16},{"line":8,"value":"b","col":21},{"line":8,"value":"c","col":26}],"key":"required","key_loc":{"line":8,"col":7}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"type":"kv","value":"null","key":"output","key_loc":{"line":10,"col":5},"value_loc":{"line":10,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
 
 const fixtureAppID = "com.acme.shop"
 const fixtureRepoRoot = "/repo"
@@ -274,6 +285,8 @@ func TestCheckSkipsMalformedRecordsWithoutAgentDeclarationsAndKeepsMarkerScan(t 
 		{name: "unrelated record is ignored", record: "not valid SCL", wantParseCall: 0},
 		{name: "unrelated record still gets marker scan", record: "not valid SCL", actionMarker: true, wantParseCall: 0, wantProblem: true},
 		{name: "knowledge record alone does not declare agent work", record: "set dev_simple_system.knowledge, terms {\n", wantParseCall: 0},
+		{name: "kind of work for people does not declare agent work", record: "set dev_simple_system.task_type, task_type_returns {\n", wantParseCall: 0},
+		{name: "agent executor link declares agent work", record: "set dev_simple_system.agent_task_type, link {\n", parseErr: "line 1: parser rejected the record", wantParseCall: 1, wantErr: "other.scl: line 1"},
 		{name: "agent record parse error is reported", record: "set dev_simple_system.agent, agent_support {\n", parseErr: "line 1: parser rejected the record", wantParseCall: 1, wantErr: "other.scl: line 1"},
 	}
 	for _, test := range tests {
@@ -322,10 +335,17 @@ func TestHasAgentDeclarationsFindsAgentAndTaskTypeRecords(t *testing.T) {
 	}{
 		{name: "prefixed agent", record: "set dev_simple_system.agent, agent_support {\n", want: true},
 		{name: "quoted prefixed agent", record: "set \"dev_simple_system.agent\", agent_support {\n", want: true},
+		{name: "single-quoted prefixed agent", record: "set 'dev_simple_system.agent', agent_support {\n", want: true},
 		{name: "quoted bare agent", record: "set \"agent\", agent_support {\n", want: true},
-		{name: "bare kind of work", record: "set task_type, task_type_returns {\n", want: true},
-		{name: "quoted kind of work", record: "set \"task_type\", task_type_returns {\n", want: true},
-		{name: "link alone is not a declaration", record: "set agent_task_type, support_returns {\n"},
+		{name: "single-quoted bare agent", record: "set 'agent', agent_support {\n", want: true},
+		{name: "bare kind of work is not an agent declaration", record: "set task_type, task_type_returns {\n"},
+		{name: "quoted kind of work is not an agent declaration", record: "set \"task_type\", task_type_returns {\n"},
+		{name: "single-quoted kind of work is not an agent declaration", record: "set 'task_type', task_type_returns {\n"},
+		{name: "single-quoted prefixed kind of work is not an agent declaration", record: "set 'dev_simple_system.task_type', task_type_returns {\n"},
+		{name: "kind of work with an agent link", record: "set agent_task_type, task_type_returns_default_agent {\n", want: true},
+		{name: "single-quoted prefixed kind-of-work agent link", record: "set 'dev_simple_system.agent_task_type', task_type_returns_default_agent {\n", want: true},
+		{name: "two statements on one line", record: "set customer, c { name \"x\" } set agent, a {\n", want: true},
+		{name: "agent executor link is an agent declaration", record: "set agent_task_type, support_returns {\n", want: true},
 		{name: "unrelated record", record: "set customer, customer_one {\n"},
 	}
 	for _, test := range tests {
@@ -338,6 +358,349 @@ func TestHasAgentDeclarationsFindsAgentAndTaskTypeRecords(t *testing.T) {
 			}
 			if got != test.want {
 				t.Errorf("HasAgentDeclarations() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestAgentScanFormsDetectedBothScans(t *testing.T) {
+	tests := []struct {
+		name       string
+		record     string
+		wantDecl   bool
+		wantRecord bool
+	}{
+		{
+			name:       "single-quoted bare agent",
+			record:     "set 'agent', support {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:   "single-quoted prefixed task_type alone",
+			record: "set 'dev_simple_system.task_type', x {\n",
+		},
+		{
+			name:   "single-quoted bare task_type alone",
+			record: "set 'task_type', x {\n",
+		},
+		{
+			name:       "single-quoted prefixed agent",
+			record:     "set 'dev_simple_system.agent', support {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:       "two statements on one line bare agent",
+			record:     "set customer, c { name \"x\" } set agent, a {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:       "two statements on one line single-quoted agent",
+			record:     "set customer, c { name \"x\" } set 'agent', a {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:   "two statements on one line single-quoted prefixed task_type alone",
+			record: "set customer, c { name \"x\" } set 'dev_simple_system.task_type', x {\n",
+		},
+		{
+			name:       "bare agent",
+			record:     "set agent, support {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:       "double-quoted bare agent",
+			record:     "set \"agent\", support {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:       "prefixed agent",
+			record:     "set dev_simple_system.agent, support {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:       "double-quoted prefixed agent",
+			record:     "set \"dev_simple_system.agent\", support {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:   "bare task_type alone",
+			record: "set task_type, returns {\n",
+		},
+		{
+			name:   "prefixed task_type alone",
+			record: "set dev_simple_system.task_type, returns {\n",
+		},
+		{
+			name:   "double-quoted prefixed task_type alone",
+			record: "set \"dev_simple_system.task_type\", returns {\n",
+		},
+		{
+			name:       "single-quoted agent executor link counts",
+			record:     "set 'agent_task_type', link {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:   "single-quoted task_type_skill link",
+			record: "set 'task_type_skill', link {\n",
+		},
+		{
+			name:   "single-quoted task_type_tool link",
+			record: "set 'task_type_tool', link {\n",
+		},
+		{
+			name:   "single-quoted logic_skill link",
+			record: "set 'logic_skill', link {\n",
+		},
+		{
+			name:       "two statements on one line with agent executor link",
+			record:     "set customer, c { name \"x\" } set 'agent_task_type', link {\n",
+			wantDecl:   true,
+			wantRecord: true,
+		},
+		{
+			name:   "knowledge record alone",
+			record: "set dev_simple_system.knowledge, terms {\n",
+		},
+		{
+			name:       "unrelated bare record",
+			record:     "set customer, c { name \"x\" }\n",
+			wantDecl:   false,
+			wantRecord: false,
+		},
+		{
+			name:       "unrelated single-quoted record",
+			record:     "set 'customer', c { name \"x\" }\n",
+			wantDecl:   false,
+			wantRecord: false,
+		},
+		{
+			name:       "unrelated double-quoted record",
+			record:     "set \"customer\", c { name \"x\" }\n",
+			wantDecl:   false,
+			wantRecord: false,
+		},
+		{
+			name:       "unrelated var declaration",
+			record:     "var platform_tool_lookup { query \"foo\" }\n",
+			wantDecl:   false,
+			wantRecord: false,
+		},
+		{
+			name:       "empty file",
+			record:     "",
+			wantDecl:   false,
+			wantRecord: false,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newMemoryFS()
+			f.put("records/sample.scl", []byte(test.record))
+			gotDecl, err := HasAgentDeclarations(f, fixtureRepoRoot, fixtureAppID)
+			if err != nil {
+				t.Fatalf("HasAgentDeclarations() error = %v", err)
+			}
+			if gotDecl != test.wantDecl {
+				t.Errorf("HasAgentDeclarations() = %v, want %v", gotDecl, test.wantDecl)
+			}
+			gotRecord, err := hasAgentRelatedRecordsAt(f, fixtureRepoRoot, fixtureAppID, filepath.Join(fixtureRepoRoot, "apps", fixtureAppID))
+			if err != nil {
+				t.Fatalf("hasAgentRelatedRecordsAt() error = %v", err)
+			}
+			if gotRecord != test.wantRecord {
+				t.Errorf("hasAgentRelatedRecordsAt() = %v, want %v", gotRecord, test.wantRecord)
+			}
+		})
+	}
+}
+
+func TestReaderMapsSingleQuotedDeclarations(t *testing.T) {
+	tests := []struct {
+		name       string
+		recordText string
+		parsedName []any
+		verify     func(t *testing.T, a *App)
+	}{
+		{
+			name:       "single-quoted bare agent",
+			recordText: "set 'agent', support {\n  display_name \"Support Agent\"\n}\n",
+			parsedName: []any{"'agent'", "support"},
+			verify: func(t *testing.T, a *App) {
+				agent, ok := a.Agent("support")
+				if !ok || agent == nil {
+					t.Fatalf("expected agent 'support' to be mapped to AgentRecords")
+				}
+				if agent.DisplayName != "Support Agent" {
+					t.Errorf("agent.DisplayName = %q, want %q", agent.DisplayName, "Support Agent")
+				}
+				if agent.Line != 1 {
+					t.Errorf("agent.Line = %d, want 1", agent.Line)
+				}
+			},
+		},
+		{
+			name:       "single-quoted prefixed task_type",
+			recordText: "set 'dev_simple_system.task_type', returns {\n  name \"returns\"\n}\n",
+			parsedName: []any{"'dev_simple_system.task_type'", "returns"},
+			verify: func(t *testing.T, a *App) {
+				task, ok := a.TaskType("returns")
+				if !ok || task == nil {
+					t.Fatalf("expected task_type 'returns' to be mapped to TaskTypes")
+				}
+				if task.Name != "returns" {
+					t.Errorf("task.Name = %q, want %q", task.Name, "returns")
+				}
+				if task.Line != 1 {
+					t.Errorf("task.Line = %d, want 1", task.Line)
+				}
+			},
+		},
+		{
+			name:       "single-quoted bare task_type",
+			recordText: "set 'task_type', triage {\n  name \"triage\"\n}\n",
+			parsedName: []any{"'task_type'", "triage"},
+			verify: func(t *testing.T, a *App) {
+				task, ok := a.TaskType("triage")
+				if !ok || task == nil {
+					t.Fatalf("expected task_type 'triage' to be mapped to TaskTypes")
+				}
+				if task.Name != "triage" {
+					t.Errorf("task.Name = %q, want %q", task.Name, "triage")
+				}
+				if task.Line != 1 {
+					t.Errorf("task.Line = %d, want 1", task.Line)
+				}
+			},
+		},
+		{
+			name:       "single-quoted prefixed agent",
+			recordText: "set 'dev_simple_system.agent', billing {\n  display_name \"Billing Agent\"\n}\n",
+			parsedName: []any{"'dev_simple_system.agent'", "billing"},
+			verify: func(t *testing.T, a *App) {
+				agent, ok := a.Agent("billing")
+				if !ok || agent == nil {
+					t.Fatalf("expected agent 'billing' to be mapped to AgentRecords")
+				}
+				if agent.DisplayName != "Billing Agent" {
+					t.Errorf("agent.DisplayName = %q, want %q", agent.DisplayName, "Billing Agent")
+				}
+				if agent.Line != 1 {
+					t.Errorf("agent.Line = %d, want 1", agent.Line)
+				}
+			},
+		},
+		{
+			name:       "two statements on one line with single-quoted agent",
+			recordText: "set customer, c { name \"x\" } set 'agent', support {\n  display_name \"Support Agent\"\n}\n",
+			parsedName: []any{"'agent'", "support"},
+			verify: func(t *testing.T, a *App) {
+				agent, ok := a.Agent("support")
+				if !ok || agent == nil {
+					t.Fatalf("expected agent 'support' to be mapped to AgentRecords")
+				}
+				if agent.DisplayName != "Support Agent" {
+					t.Errorf("agent.DisplayName = %q, want %q", agent.DisplayName, "Support Agent")
+				}
+				if agent.Line != 1 {
+					t.Errorf("agent.Line = %d, want 1", agent.Line)
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			f := newMemoryFS()
+			f.put("records/agents.scl", []byte(test.recordText))
+			oldParser := parseSCL
+			parseSCL = func(string) ([]byte, error) {
+				var children []map[string]any
+				if strings.Contains(test.recordText, "display_name") {
+					name := "Support Agent"
+					if strings.Contains(test.recordText, "Billing Agent") {
+						name = "Billing Agent"
+					}
+					children = append(children, map[string]any{"key": "display_name", "value": name})
+				}
+				if strings.Contains(test.recordText, `name "returns"`) {
+					children = append(children, map[string]any{"key": "name", "value": "returns"})
+				}
+				if strings.Contains(test.recordText, `name "triage"`) {
+					children = append(children, map[string]any{"key": "name", "value": "triage"})
+				}
+				block := map[string]any{
+					"key":      "set",
+					"name":     test.parsedName,
+					"children": children,
+				}
+				blocks := []any{block}
+				if strings.Contains(test.recordText, "set customer, c") {
+					blocks = append([]any{map[string]any{
+						"key":      "set",
+						"name":     []any{"customer", "c"},
+						"children": []map[string]any{{"key": "name", "value": "x"}},
+					}}, blocks...)
+				}
+				return json.Marshal(blocks)
+			}
+			t.Cleanup(func() { parseSCL = oldParser })
+			a, err := Load(f, fixtureRepoRoot, fixtureAppID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			test.verify(t, a)
+		})
+	}
+}
+
+func TestBaseTableAndFindRecordLineSingleQuotes(t *testing.T) {
+	baseTableTests := []struct {
+		input string
+		want  string
+	}{
+		{"dev_simple_system.agent", "agent"},
+		{"knowledge", "knowledge"},
+		{"'agent'", "agent"},
+		{"\"agent\"", "agent"},
+		{"'dev_simple_system.task_type'", "task_type"},
+		{"\"dev_simple_system.task_type\"", "task_type"},
+		{"'dev_simple_system.agent'", "agent"},
+		{"'task_type'", "task_type"},
+		{"bare_table", "bare_table"},
+	}
+	for _, tc := range baseTableTests {
+		if got := baseTable(tc.input); got != tc.want {
+			t.Errorf("baseTable(%q) = %q, want %q", tc.input, got, tc.want)
+		}
+	}
+
+	findLineTests := []struct {
+		name  string
+		data  string
+		table string
+		key   string
+		want  int
+	}{
+		{"bare table", "set agent, right {}\n", "dev_simple_system.agent", "right", 1},
+		{"single-quoted table", "set 'agent', right {}\n", "dev_simple_system.agent", "right", 1},
+		{"single-quoted prefixed table", "set 'dev_simple_system.task_type', x {}\n", "task_type", "x", 1},
+		{"two statements bare", "set customer, c { name \"x\" } set agent, a {}\n", "agent", "a", 1},
+		{"two statements single-quoted", "set customer, c { name \"x\" } set 'agent', a {}\n", "agent", "a", 1},
+		{"two statements single-quoted prefixed", "set customer, c { name \"x\" } set 'dev_simple_system.task_type', x {}\n", "task_type", "x", 1},
+		{"missing key", "set agent, other {}\n", "agent", "right", 0},
+	}
+	for _, tc := range findLineTests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := findRecordLine([]byte(tc.data), tc.table, tc.key); got != tc.want {
+				t.Errorf("findRecordLine(%q, %q, %q) = %d, want %d", tc.data, tc.table, tc.key, got, tc.want)
 			}
 		})
 	}
@@ -609,8 +972,8 @@ func TestCheckRuleCases(t *testing.T) {
 		{name: "playbook not carried", want: "does not carry playbook", mutate: func(a *App, _ *memoryFS) {
 			a.TaskTypeSkillLinks = removeSkill(a.TaskTypeSkillLinks, "playbook_returns")
 		}},
-		{name: "shape reference unreadable", want: "no readable shape file", mutate: func(a *App, _ *memoryFS) { a.records["task_type_returns"].fields["schema"] = "expression" }},
-		{name: "shape file without json conversion", want: "no readable shape file", mutate: func(a *App, _ *memoryFS) {
+		{name: "inline scalar is not a shape object", want: "shape must be valid JSON with an object at its top level", mutate: func(a *App, _ *memoryFS) { a.records["task_type_returns"].fields["schema"] = "expression" }},
+		{name: "shape file without json conversion", want: "no readable shape", mutate: func(a *App, _ *memoryFS) {
 			a.records["task_type_returns"].fields["schema"] = "$file('records/task-types/returns.json')"
 		}},
 		{name: "shape file missing", want: "shape file is missing", mutate: func(_ *App, f *memoryFS) { f.delete("records/task-types/returns.json") }},
@@ -664,6 +1027,55 @@ func TestCheckRuleCases(t *testing.T) {
 	}
 }
 
+func TestCheckDefaultExecutorMessagesExplainTaskCreation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*App)
+		want   string
+	}{
+		{
+			name: "no default executor",
+			mutate: func(a *App) {
+				a.AgentTaskTypeLinks[0].Role = "reviewer"
+				a.AgentTaskTypeLinks[0].IsDefault = false
+			},
+			want: `kind of work "returns" has no default agent, so no task can be created for it: mark one executor link as the default`,
+		},
+		{
+			name: "multiple default executors",
+			mutate: func(a *App) {
+				duplicate := *a.AgentTaskTypeLinks[0]
+				duplicate.Key = "another_default"
+				a.AgentTaskTypeLinks = append(a.AgentTaskTypeLinks, &duplicate)
+			},
+			want: `kind of work "returns" has more than one default agent, so no task can be created for it: keep exactly one executor link marked as the default`,
+		},
+	}
+	oldInstructions, oldSkill := checkInstructions, checkSkill
+	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) { return nil, nil }
+	checkSkill = func(string) []structure.Finding { return nil }
+	t.Cleanup(func() { checkInstructions, checkSkill = oldInstructions, oldSkill })
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := loadFixtureModel(t)
+			test.mutate(a)
+			problems, err := a.check(fixtureFS(t))
+			if err != nil {
+				t.Fatalf("check() error = %v", err)
+			}
+			for _, problem := range problems {
+				if strings.Contains(problem.Rule, "default agent") {
+					if problem.Rule != test.want {
+						t.Fatalf("default executor rule = %q, want %q", problem.Rule, test.want)
+					}
+					return
+				}
+			}
+			t.Fatalf("no default executor problem: %#v", problems)
+		})
+	}
+}
+
 func TestCheckShapeAllowsNullOutput(t *testing.T) {
 	a := loadFixtureModel(t)
 	f := fixtureFS(t)
@@ -694,6 +1106,176 @@ func TestCheckShapeAllowsMissingOutput(t *testing.T) {
 	problems, err := a.check(f)
 	if err != nil || len(problems) != 0 {
 		t.Fatalf("missing output was refused: problems=%#v err=%v", problems, err)
+	}
+}
+
+func TestCheckCapturedInlineShapeParserOutput(t *testing.T) {
+	oldInstructions, oldSkill := checkInstructions, checkSkill
+	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) { return nil, nil }
+	checkSkill = func(string) []structure.Finding { return nil }
+	t.Cleanup(func() { checkInstructions, checkSkill = oldInstructions, oldSkill })
+	oldParser := parseSCL
+	parseSCL = func(string) ([]byte, error) { return []byte(capturedInlineShapeParserOutput), nil }
+	t.Cleanup(func() { parseSCL = oldParser })
+
+	fsys := fixtureFS(t)
+	a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	schema, ok := a.records["task_type_returns"].fields["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("parsed inline schema = %#v, want an object", a.records["task_type_returns"].fields["schema"])
+	}
+	input, ok := schema["input"].(map[string]any)
+	if !ok {
+		t.Fatalf("parsed input shape = %#v, want an object", schema["input"])
+	}
+	if _, ok := input["order_id"].(map[string]any); !ok {
+		t.Fatalf("parsed order_id shape = %#v, want an object", input["order_id"])
+	}
+	if _, ok := schema["output"].(map[string]any); !ok {
+		t.Fatalf("parsed output shape = %#v, want an object", schema["output"])
+	}
+
+	problems, err := a.check(fsys)
+	if err != nil {
+		t.Fatalf("check() error = %v", err)
+	}
+	for _, problem := range problems {
+		if strings.Contains(problem.Rule, "shape") {
+			t.Fatalf("valid inline shape was refused: %#v", problem)
+		}
+	}
+}
+
+func TestCheckCapturedInlineShapeOutput(t *testing.T) {
+	oldInstructions, oldSkill := checkInstructions, checkSkill
+	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) { return nil, nil }
+	checkSkill = func(string) []structure.Finding { return nil }
+	t.Cleanup(func() { checkInstructions, checkSkill = oldInstructions, oldSkill })
+
+	tests := []struct {
+		name        string
+		parserJSON  string
+		wantProblem string
+	}{
+		{
+			name:       "inline output null passes",
+			parserJSON: capturedInlineShapeOutputNull,
+		},
+		{
+			name:       "inline output object passes",
+			parserJSON: capturedInlineShapeParserOutput,
+		},
+		{
+			name:        "inline output string is refused",
+			parserJSON:  capturedInlineShapeOutputInvalidString,
+			wantProblem: `kind of work "returns" shape output must be an object or null`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldParser := parseSCL
+			parseSCL = func(string) ([]byte, error) { return []byte(tt.parserJSON), nil }
+			t.Cleanup(func() { parseSCL = oldParser })
+
+			fsys := fixtureFS(t)
+			a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			problems, err := a.check(fsys)
+			if err != nil {
+				t.Fatalf("check() error = %v", err)
+			}
+			var shapeProblems []Problem
+			for _, p := range problems {
+				if strings.Contains(p.Rule, "shape") {
+					shapeProblems = append(shapeProblems, p)
+				}
+			}
+			if tt.wantProblem == "" {
+				if len(shapeProblems) > 0 {
+					t.Fatalf("unexpected shape problems: %#v", shapeProblems)
+				}
+			} else {
+				if !problemContains(shapeProblems, tt.wantProblem) {
+					t.Fatalf("check() problems = %#v, want %q", shapeProblems, tt.wantProblem)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadCapturedNestedBlockList(t *testing.T) {
+	tests := []struct {
+		name         string
+		parserJSON   string
+		wantRequired []any
+	}{
+		{
+			name:         "two items in kv_multi unwrapped to plain values",
+			parserJSON:   capturedNestedBlockListParserOutput,
+			wantRequired: []any{"a", "b"},
+		},
+		{
+			name:         "three items in kv_multi unwrapped to plain values",
+			parserJSON:   capturedNestedBlockThreeListParserOutput,
+			wantRequired: []any{"a", "b", "c"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			oldParser := parseSCL
+			parseSCL = func(string) ([]byte, error) { return []byte(tt.parserJSON), nil }
+			t.Cleanup(func() { parseSCL = oldParser })
+
+			fsys := fixtureFS(t)
+			a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			schema, ok := a.records["task_type_returns"].fields["schema"].(map[string]any)
+			if !ok {
+				t.Fatalf("parsed schema = %#v, want map[string]any", a.records["task_type_returns"].fields["schema"])
+			}
+			input, ok := schema["input"].(map[string]any)
+			if !ok {
+				t.Fatalf("parsed input = %#v, want map[string]any", schema["input"])
+			}
+			gotRequired, ok := input["required"].([]any)
+			if !ok {
+				t.Fatalf("parsed required = %#v, want []any", input["required"])
+			}
+			if !reflect.DeepEqual(gotRequired, tt.wantRequired) {
+				t.Fatalf("input[required] = %#v, want %#v", gotRequired, tt.wantRequired)
+			}
+		})
+	}
+}
+
+func TestCheckAgentTaskTypeLinkWithoutOtherAgentRecords(t *testing.T) {
+	a := &App{
+		ID:       fixtureAppID,
+		RepoRoot: fixtureRepoRoot,
+		Dir:      filepath.Join(fixtureRepoRoot, "apps", fixtureAppID),
+		records:  map[string]record{},
+		lookups:  map[string]map[string]lookup{},
+		AgentTaskTypeLinks: []*AgentTaskTypeLink{{
+			Key: "broken_link", File: "apps/com.acme.shop/records/links.scl", Line: 4,
+			AgentRef:    Reference{Key: "missing_agent", Raw: `$app_record("missing_agent")`, Readable: true},
+			TaskTypeRef: Reference{Key: "missing_task", Raw: `$app_record("missing_task")`, Readable: true},
+		}},
+	}
+	problems, err := a.check(newMemoryFS())
+	if err != nil {
+		t.Fatalf("check() error = %v", err)
+	}
+	if !problemContains(problems, "not an agent of this app") || !problemContains(problems, "kind of work that does not exist in this app") {
+		t.Fatalf("check() problems = %#v, want both broken-link findings", problems)
 	}
 }
 

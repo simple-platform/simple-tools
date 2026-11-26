@@ -227,7 +227,11 @@ func (d *deployRun) loadConfig(steps ui.StepReporter) (string, error) {
 		}
 		if len(problems) > 0 {
 			d.agentProblems = problems
-			return "", fmt.Errorf("deploy stopped because %d agent problems remain", len(problems))
+			verb := "remain"
+			if len(problems) == 1 {
+				verb = "remains"
+			}
+			return "", fmt.Errorf("deploy stopped because %s %s", agentProblemCount(len(problems)), verb)
 		}
 	}
 	return fmt.Sprintf("%s · tenant %s", app.ID, target.cfg.Tenant), nil

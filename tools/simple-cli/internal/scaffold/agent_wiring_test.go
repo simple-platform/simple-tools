@@ -439,6 +439,60 @@ func TestNoOpAgentCommandsStillListReusedBodyMarkers(t *testing.T) {
 	}
 }
 
+func TestNoOpAgentAndTaskTypeCommandsStillListMarkers(t *testing.T) {
+	tests := []struct {
+		name   string
+		app    *agents.App
+		paths  []string
+		create func(*fsx.MockFileSystem) (WiringResult, error)
+	}{
+		{
+			name: "agent persona",
+			app: func() *agents.App {
+				app := appWithAgentDetails("Support Agent", "")
+				app.AgentRecords[0].Persona.Body = agents.Body{Path: "knowledge/support-persona.md", Readable: true}
+				return app
+			}(),
+			paths: []string{"knowledge/support-persona.md"},
+			create: func(fsys *fsx.MockFileSystem) (WiringResult, error) {
+				return CreateAgent(fsys, TemplatesFS, wiringRoot, AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Support Agent"})
+			},
+		},
+		{
+			name: "task type persona, playbook, and shape",
+			app: func() *agents.App {
+				app := appWithCompleteTask()
+				app.TaskTypes[0].ShapePath = "records/task-types/returns.json"
+				app.AgentRecords[0].Persona.Body = agents.Body{Path: "knowledge/support-persona.md", Readable: true}
+				app.TaskTypes[0].Playbook = &agents.Knowledge{Key: "playbook_returns", Body: agents.Body{Path: "knowledge/playbook-returns.md", Readable: true}}
+				return app
+			}(),
+			paths: []string{"knowledge/playbook-returns.md", "knowledge/support-persona.md", "records/task-types/returns.json"},
+			create: func(fsys *fsx.MockFileSystem) (WiringResult, error) {
+				return CreateTaskType(fsys, TemplatesFS, wiringRoot, TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support"})
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			withWiringApp(t, test.app)
+			fsys := wiringFS()
+			wantFillIn := make([]string, 0, len(test.paths))
+			for _, path := range test.paths {
+				fsys.Files[filepath.Join(wiringRoot, "apps", wiringAppID, filepath.FromSlash(path))] = []byte("TODO(simple): finish this body\n")
+				wantFillIn = append(wantFillIn, "apps/com.acme.shop/"+path)
+			}
+			got, err := test.create(fsys)
+			if err != nil {
+				t.Fatalf("repeat command error = %v", err)
+			}
+			if !got.NothingToAdd || !reflect.DeepEqual(got.FillIn, wantFillIn) || len(fsys.Files) != len(test.paths)+1 {
+				t.Fatalf("repeat command result = %#v, files = %#v; want no-op and markers %#v", got, fsys.Files, wantFillIn)
+			}
+		})
+	}
+}
+
 func withWiringApp(t *testing.T, app *agents.App) {
 	t.Helper()
 	original := loadAgentApp
@@ -454,13 +508,17 @@ func baseWiringApp() *agents.App {
 
 func TestCreateAgent(t *testing.T) {
 	tests := []struct {
-		name    string
-		app     func() *agents.App
-		cfg     AgentConfig
-		wantErr string
+		name     string
+		app      func() *agents.App
+		cfg      AgentConfig
+		wantErr  string
+		wantNoop bool
 	}{
 		{name: "writes persona and records", app: baseWiringApp, cfg: AgentConfig{AppID: wiringAppID, Name: "billing", DisplayName: "Billing Agent", Description: "Answers billing questions."}},
-		{name: "existing agent refuses", app: baseWiringApp, cfg: AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Support"}, wantErr: "already exists"},
+		{name: "matching agent is a no-op", app: func() *agents.App { return appWithAgentDetails("Support Agent", "Answers customer questions.") }, cfg: AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Support Agent", Description: "Answers customer questions."}, wantNoop: true},
+		{name: "omitted description reuses matching agent", app: func() *agents.App { return appWithAgentDetails("Support Agent", "Answers customer questions.") }, cfg: AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Support Agent"}, wantNoop: true},
+		{name: "different display name refuses", app: func() *agents.App { return appWithAgentDetails("Support Agent", "") }, cfg: AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Help Agent"}, wantErr: `display name "Support Agent", not "Help Agent"`},
+		{name: "different requested description refuses", app: func() *agents.App { return appWithAgentDetails("Support Agent", "Answers customer questions.") }, cfg: AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Support Agent", Description: "Answers billing questions."}, wantErr: `description "Answers customer questions.", not "Answers billing questions."`},
 		{name: "invalid name refuses", app: baseWiringApp, cfg: AgentConfig{AppID: wiringAppID, Name: "Bad_Name", DisplayName: "Name"}, wantErr: `agent "Bad_Name" has an invalid name`},
 		{name: "quoted text refuses", app: baseWiringApp, cfg: AgentConfig{AppID: wiringAppID, Name: "billing", DisplayName: `Billing "Team"`}, wantErr: "double quote"},
 		{name: "long name refuses", app: baseWiringApp, cfg: AgentConfig{AppID: wiringAppID, Name: "billing", DisplayName: strings.Repeat("a", 101)}, wantErr: "100 characters"},
@@ -482,6 +540,12 @@ func TestCreateAgent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateAgent() error = %v", err)
 			}
+			if tt.wantNoop {
+				if !got.NothingToAdd || len(fsys.Files) != 1 {
+					t.Fatalf("matching repeat result = %#v and wrote files %#v", got, fsys.Files)
+				}
+				return
+			}
 			if len(got.Created) != 3 || len(got.Records) != 2 || len(got.FillIn) != 1 {
 				t.Fatalf("unexpected result: %#v", got)
 			}
@@ -491,6 +555,75 @@ func TestCreateAgent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAgentCommandsRefuseUnsafeNamesAndAppIDsWithoutWriting(t *testing.T) {
+	commands := []struct {
+		name string
+		run  func(*fsx.MockFileSystem, string, string) error
+	}{
+		{name: "agent", run: func(f *fsx.MockFileSystem, appID, name string) error {
+			withWiringApp(t, baseWiringApp())
+			_, err := CreateAgent(f, TemplatesFS, wiringRoot, AgentConfig{AppID: appID, Name: name, DisplayName: "Support"})
+			return err
+		}},
+		{name: "task type", run: func(f *fsx.MockFileSystem, appID, name string) error {
+			withWiringApp(t, baseWiringApp())
+			_, err := CreateTaskType(f, TemplatesFS, wiringRoot, TaskTypeConfig{AppID: appID, Name: name, PluralName: "Returns", NoAgent: true})
+			return err
+		}},
+		{name: "skill", run: func(f *fsx.MockFileSystem, appID, name string) error {
+			withWiringApp(t, appWithTask())
+			_, err := CreateSkill(f, TemplatesFS, wiringRoot, SkillConfig{AppID: appID, Name: name, Title: "Support", TaskTypeName: "returns"})
+			return err
+		}},
+		{name: "knowledge", run: func(f *fsx.MockFileSystem, appID, name string) error {
+			withWiringApp(t, appWithTask())
+			_, err := CreateKnowledge(f, TemplatesFS, wiringRoot, KnowledgeConfig{AppID: appID, Name: name, Title: "Support", TaskTypeName: "returns"})
+			return err
+		}},
+		{name: "tool", run: func(f *fsx.MockFileSystem, appID, name string) error {
+			withWiringApp(t, appWithTask())
+			_, err := CreateTool(f, TemplatesFS, wiringRoot, ToolConfig{AppID: appID, Name: name})
+			return err
+		}},
+	}
+	unsafe := []string{"..", "../../..", "a/b", filepath.Join(string(filepath.Separator), "tmp", "escaped")}
+	for _, command := range commands {
+		for _, name := range unsafe {
+			t.Run(command.name+"/name/"+name, func(t *testing.T) {
+				fsys := wiringFS()
+				before := cloneWiringFiles(fsys.Files)
+				err := command.run(fsys, wiringAppID, name)
+				if err == nil {
+					t.Fatal("unsafe name was accepted")
+				}
+				if !reflect.DeepEqual(fsys.Files, before) {
+					t.Fatalf("refusal changed files: %#v", fsys.Files)
+				}
+			})
+		}
+		for _, appID := range append(append([]string{}, unsafe...), "com.acme.missing") {
+			t.Run(command.name+"/app/"+appID, func(t *testing.T) {
+				fsys := wiringFS()
+				before := cloneWiringFiles(fsys.Files)
+				if err := command.run(fsys, appID, "safe-name"); err == nil {
+					t.Fatal("invalid or missing app was accepted")
+				}
+				if !reflect.DeepEqual(fsys.Files, before) {
+					t.Fatalf("refusal changed files: %#v", fsys.Files)
+				}
+			})
+		}
+	}
+}
+
+func cloneWiringFiles(files map[string][]byte) map[string][]byte {
+	cloned := make(map[string][]byte, len(files))
+	for path, data := range files {
+		cloned[path] = append([]byte(nil), data...)
+	}
+	return cloned
 }
 
 func TestRenderedAgentTemplates(t *testing.T) {
@@ -549,7 +682,7 @@ func TestCreateAgentAppAndLoadRefusals(t *testing.T) {
 		loadErr error
 		want    string
 	}{
-		{name: "missing app", fsys: &fsx.MockFileSystem{Files: map[string][]byte{}}, want: "does not exist"},
+		{name: "missing app", fsys: &fsx.MockFileSystem{Files: map[string][]byte{}}, want: `app com.acme.shop does not exist: run 'simple new app com.acme.shop "<Display name>"' first`},
 		{name: "load fails", fsys: wiringFS(), loadErr: errors.New("parse failed"), want: "parse failed"},
 	}
 	for _, tt := range tests {
@@ -694,6 +827,7 @@ func TestCreateTaskType(t *testing.T) {
 		cfg              TaskTypeConfig
 		wantWakeInterval string
 		wantErr          string
+		wantNoop         bool
 	}{
 		{name: "creates complete task type with platform lookup", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support", Tools: []string{"process-data"}}},
 		{name: "writes requested wake interval", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", WakeIntervalSeconds: 90}, wantWakeInterval: "90"},
@@ -708,7 +842,19 @@ func TestCreateTaskType(t *testing.T) {
 		{name: "selected agent without persona", app: appWithoutPersona(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support"}, wantErr: "no readable persona"},
 		{name: "unknown tool", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support", Tools: []string{"missing-tool"}}, wantErr: "without --task-type, then run this command again"},
 		{name: "bad name", app: baseWiringApp(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "Bad_Name", PluralName: "Returns", AgentName: "support"}, wantErr: `kind of work "Bad_Name" has an invalid name`},
-		{name: "duplicate task type", app: appWithTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns"}, wantErr: "simple new skill"},
+		{name: "matching task type is a no-op", app: appWithCompleteTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support", Tools: []string{"process-data"}, WakeIntervalSeconds: 90}, wantNoop: true},
+		{name: "repeat uses its linked agent when the app has several agents", app: appWithTwoDefaultAgents(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", Tools: []string{"process-data"}, WakeIntervalSeconds: 90}, wantNoop: true},
+		{name: "unknown requested agent refuses on existing work", app: appWithCompleteTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "missing"}, wantErr: `agent "missing" does not exist`},
+		{name: "omitted description reuses matching task type", app: appWithDescribedTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support", Tools: []string{"process-data"}, WakeIntervalSeconds: 90}, wantNoop: true},
+		{name: "different plural name refuses", app: appWithCompleteTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returned Orders", AgentName: "support"}, wantErr: `plural name "Returns", not "Returned Orders"`},
+		{name: "different requested description refuses", app: appWithDescribedTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", Description: "Checks refunds.", AgentName: "support"}, wantErr: `description "Reviews returns.", not "Checks refunds."`},
+		{name: "different agent refuses", app: appWithTwoDefaultAgents(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "billing"}, wantErr: `default agent "Support Agent", not "Billing Agent"`},
+		{name: "missing requested tool refuses", app: appWithCompleteTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support", Tools: []string{"mutate-data"}}, wantErr: `tool "mutate-data"`},
+		{name: "different requested interval refuses", app: appWithCompleteTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support", WakeIntervalSeconds: 3600}, wantErr: `wake interval 90 seconds, not 3600 seconds`},
+		{name: "no-agent differs from agent-owned work", app: appWithCompleteTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", NoAgent: true}, wantErr: `agent-owned work, not people-only work`},
+		{name: "agent-owned work differs from no-agent task", app: appWithNoAgentTask(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support"}, wantErr: `people-only work, not agent-owned work`},
+		{name: "repeating task type with agent for work without default agent", app: appWithWorkWithoutDefaultAgent(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support"}, wantErr: `kind of work "returns" already exists in com.acme.shop without a default agent; repair its agent link before repeating the command`},
+		{name: "repeating task type without agent for work without default agent", app: appWithWorkWithoutDefaultAgent(), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns"}, wantErr: `kind of work "returns" already exists in com.acme.shop without a default agent; repair its agent link before repeating the command`},
 		{name: "bad persona structure", app: appWithPersona("# Not Support\n\n## Role\n\nRole.\n\n## Communication Style\n\nStyle.\n"), cfg: TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns", AgentName: "support"}, wantErr: "make the first heading match"},
 	}
 	for _, tt := range tests {
@@ -727,6 +873,12 @@ func TestCreateTaskType(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("CreateTaskType() error = %v", err)
+			}
+			if tt.wantNoop {
+				if !got.NothingToAdd || len(fsys.Files) != 1 {
+					t.Fatalf("matching repeat result = %#v and wrote files %#v", got, fsys.Files)
+				}
+				return
 			}
 			wantFillIn := 2
 			if tt.cfg.NoAgent {
@@ -1393,17 +1545,14 @@ func TestAgentWiringRealParserEndToEnd(t *testing.T) {
 	}
 	canonical := app.Canonical()
 	before := snapshotFiles(t, filepath.Join(root, "apps", wiringAppID))
-	_, repeatErr := CreateAgent(fsys, TemplatesFS, root, AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Support Agent"})
-	if err := expectNoWriteRefusal(repeatErr); err != nil {
-		t.Fatalf("repeat agent: %v", err)
+	if result, repeatErr := CreateAgent(fsys, TemplatesFS, root, AgentConfig{AppID: wiringAppID, Name: "support", DisplayName: "Support Agent"}); repeatErr != nil || !result.NothingToAdd {
+		t.Fatalf("repeat agent = %#v, %v; want a successful no-op", result, repeatErr)
 	}
-	_, repeatErr = CreateTaskType(fsys, TemplatesFS, root, TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns"})
-	if err := expectNoWriteRefusal(repeatErr); err != nil {
-		t.Fatalf("repeat task type: %v", err)
+	if result, repeatErr := CreateTaskType(fsys, TemplatesFS, root, TaskTypeConfig{AppID: wiringAppID, Name: "returns", PluralName: "Returns"}); repeatErr != nil || !result.NothingToAdd || !contains(result.FillIn, "apps/com.acme.shop/records/task-types/returns.json") {
+		t.Fatalf("repeat task type = %#v, %v; want a successful no-op", result, repeatErr)
 	}
-	_, repeatErr = CreateTaskType(fsys, TemplatesFS, root, TaskTypeConfig{AppID: wiringAppID, Name: "manual-review", PluralName: "Manual Reviews", NoAgent: true})
-	if err := expectNoWriteRefusal(repeatErr); err != nil {
-		t.Fatalf("repeat work for people: %v", err)
+	if result, repeatErr := CreateTaskType(fsys, TemplatesFS, root, TaskTypeConfig{AppID: wiringAppID, Name: "manual-review", PluralName: "Manual Reviews", NoAgent: true}); repeatErr != nil || !result.NothingToAdd || !contains(result.FillIn, "apps/com.acme.shop/records/task-types/manual_review.json") {
+		t.Fatalf("repeat work for people = %#v, %v; want a successful no-op", result, repeatErr)
 	}
 	if result, err := CreateSkill(fsys, TemplatesFS, root, SkillConfig{AppID: wiringAppID, Name: "refund-policy", TaskTypeName: "returns"}); err != nil || !result.NothingToAdd {
 		t.Fatalf("repeat skill = %#v, %v", result, err)
@@ -1450,13 +1599,6 @@ func TestAgentWiringRealParserEndToEnd(t *testing.T) {
 	if markerProblems == 0 || unbuiltProblems != 2 {
 		t.Fatalf("agents.Check() reported %d marker findings and %d unbuilt tools: %#v", markerProblems, unbuiltProblems, problems)
 	}
-}
-
-func expectNoWriteRefusal(err error) error {
-	if err == nil {
-		return errors.New("expected the existing agent or kind of work to be refused")
-	}
-	return nil
 }
 
 func snapshotFiles(t *testing.T, root string) map[string]string {
@@ -1545,6 +1687,53 @@ func appWithPersona(body string) *agents.App {
 func appWithTask() *agents.App {
 	app := baseWiringApp()
 	app.TaskTypes = []*agents.TaskType{{Key: "task_type_returns", Name: "returns"}}
+	return app
+}
+
+func appWithAgentDetails(displayName, description string) *agents.App {
+	app := baseWiringApp()
+	app.AgentRecords[0].DisplayName = displayName
+	app.AgentRecords[0].Description = description
+	return app
+}
+
+func appWithCompleteTask() *agents.App {
+	app := baseWiringApp()
+	task := &agents.TaskType{Key: "task_type_returns", Name: "returns", PluralName: "Returns", WakeIntervalSeconds: 90}
+	task.DefaultAgent = app.AgentRecords[0]
+	task.DefaultAgentRef = agents.Reference{Key: app.AgentRecords[0].Key, Readable: true}
+	app.TaskTypes = []*agents.TaskType{task}
+	app.AgentTaskTypeLinks = []*agents.AgentTaskTypeLink{{TaskTypeRef: agents.Reference{Key: task.Key}, AgentRef: agents.Reference{Key: app.AgentRecords[0].Key}, Role: "executor", IsDefault: true}}
+	app.TaskTypeToolLinks = []*agents.TaskTypeToolLink{{TaskTypeRef: agents.Reference{Key: task.Key}, Tool: agents.ToolRef{AppID: agents.PlatformAppID, Name: "process-data"}}}
+	return app
+}
+
+func appWithDescribedTask() *agents.App {
+	app := appWithCompleteTask()
+	app.TaskTypes[0].Description = "Reviews returns."
+	return app
+}
+
+func appWithTwoDefaultAgents() *agents.App {
+	app := appWithCompleteTask()
+	app.AgentRecords = append(app.AgentRecords, &agents.Agent{Key: "agent_billing", DisplayName: "Billing Agent"})
+	return app
+}
+
+func appWithNoAgentTask() *agents.App {
+	app := appWithCompleteTask()
+	app.TaskTypes[0].DefaultAgent = nil
+	app.TaskTypes[0].DefaultAgentRef = agents.Reference{}
+	app.AgentTaskTypeLinks = nil
+	app.TaskTypeToolLinks = nil
+	return app
+}
+
+func appWithWorkWithoutDefaultAgent() *agents.App {
+	app := appWithCompleteTask()
+	app.TaskTypes[0].DefaultAgent = nil
+	app.TaskTypes[0].DefaultAgentRef = agents.Reference{}
+	app.AgentTaskTypeLinks[0].IsDefault = false
 	return app
 }
 

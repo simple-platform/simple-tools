@@ -53,8 +53,8 @@ func TestBuildEmptyAppTargetAgentChecks(t *testing.T) {
 		wantText     string
 	}{
 		{name: "agents only is a valid target", withRecords: true, hasAgents: true, json: true, wantStatus: "complete"},
-		{name: "agent problems fail text build", withRecords: true, hasAgents: true, problems: []agents.Problem{problem}, wantErr: "1 agent problems", wantText: "com.acme.shop: 1 things left:\napps/com.acme.shop/records/71_agents.scl:8: replace the remaining guidance.\nBuild failed because of these agent problems.\n"},
-		{name: "agent problems fail JSON build", withRecords: true, hasAgents: true, problems: []agents.Problem{problem}, json: true, wantErr: "1 agent problems", wantStatus: "failed", wantProblemN: 1},
+		{name: "agent problems fail text build", withRecords: true, hasAgents: true, problems: []agents.Problem{problem}, wantErr: "1 agent problem", wantText: "com.acme.shop: 1 thing left:\napps/com.acme.shop/records/71_agents.scl:8: replace the remaining guidance.\nBuild failed because of 1 agent problem.\n"},
+		{name: "agent problems fail JSON build", withRecords: true, hasAgents: true, problems: []agents.Problem{problem}, json: true, wantErr: "1 agent problem", wantStatus: "failed", wantProblemN: 1},
 		{name: "empty app remains an invalid target", wantErr: "no actions or spaces found", wantStatus: ""},
 	}
 
@@ -107,6 +107,37 @@ func TestBuildEmptyAppTargetAgentChecks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestWriteAgentProblemsUsesSingularForOneFinding(t *testing.T) {
+	tests := []struct {
+		count int
+		want  string
+	}{
+		{count: 1, want: "com.acme.shop: 1 thing left:\n"},
+		{count: 2, want: "com.acme.shop: 2 things left:\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.want, func(t *testing.T) {
+			problems := make([]agents.Problem, test.count)
+			var out bytes.Buffer
+			writeAgentProblems(&out, "com.acme.shop", problems)
+			if !strings.HasPrefix(out.String(), test.want) {
+				t.Fatalf("writeAgentProblems() = %q, want prefix %q", out.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestAgentProblemCountUsesSingularForOne(t *testing.T) {
+	for _, test := range []struct {
+		count int
+		want  string
+	}{{1, "1 agent problem"}, {2, "2 agent problems"}} {
+		if got := agentProblemCount(test.count); got != test.want {
+			t.Errorf("agentProblemCount(%d) = %q, want %q", test.count, got, test.want)
+		}
 	}
 }
 
@@ -221,14 +252,19 @@ func TestBuildAllowsUnrelatedUnparseableRecordsWithoutAgentsAndKeepsMarkerCheck(
 	tests := []struct {
 		name    string
 		marker  bool
+		records string
 		wantErr string
 	}{
 		{name: "unrelated malformed record builds"},
-		{name: "action marker still blocks build", marker: true, wantErr: "1 agent problems"},
+		{name: "people-only work with inline shape skips agent checks", records: "set task_type, task_type_returns {\n  schema { input {} }\n}\n"},
+		{name: "action marker still blocks build", marker: true, wantErr: "1 agent problem"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fsys := newAgentCheckFS(tt.marker)
+			if tt.records != "" {
+				fsys.Files["apps/com.acme.crm/records/unrelated.scl"] = []byte(tt.records)
+			}
 			declared, declarationErr := appHasAgentDeclarations(fsys, "com.acme.crm")
 			if declarationErr != nil || declared {
 				t.Fatalf("appHasAgentDeclarations() = %v, %v; want no declarations", declared, declarationErr)
@@ -260,9 +296,14 @@ func TestAppHasAgentDeclarationsHandlesMissingRecordsAndScannerResults(t *testin
 	}{
 		{name: "missing records directory", fsys: &fsx.MockFileSystem{}},
 		{name: "unrelated malformed records", fsys: newAgentCheckFS(false)},
-		{name: "kind of work declaration", fsys: func() fsx.FileSystem {
+		{name: "kind of work for people is not an agent declaration", fsys: func() fsx.FileSystem {
 			f := newAgentCheckFS(false)
 			f.Files["apps/com.acme.crm/records/work.scl"] = []byte("set task_type, task_type_returns {\n")
+			return f
+		}()},
+		{name: "agent executor link declares agent work", fsys: func() fsx.FileSystem {
+			f := newAgentCheckFS(false)
+			f.Files["apps/com.acme.crm/records/work.scl"] = []byte("set agent_task_type, task_type_returns_default_agent {\n")
 			return f
 		}(), want: true},
 		{name: "record stat error", fsys: &fsx.MockFileSystem{StatErr: errors.New("stat denied")}, wantErr: "failed to find records"},

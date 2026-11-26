@@ -30,7 +30,7 @@ func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 	if err := a.checkMarkers(fsys, add); err != nil {
 		return nil, err
 	}
-	if len(a.AgentRecords) == 0 && len(a.TaskTypes) == 0 {
+	if len(a.AgentRecords) == 0 && len(a.TaskTypes) == 0 && len(a.AgentTaskTypeLinks) == 0 {
 		return uniqueProblems(problems), nil
 	}
 
@@ -64,9 +64,9 @@ func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 				}
 			}
 			if len(defaults) == 0 {
-				add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has no default agent: add one executor link and mark it as the default", display))
+				add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has no default agent, so no task can be created for it: mark one executor link as the default", display))
 			} else if len(defaults) > 1 {
-				add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has more than one default agent: keep one executor link and mark it as the default", display))
+				add(taskType.File, taskType.Line, fmt.Sprintf("kind of work %q has more than one default agent, so no task can be created for it: keep exactly one executor link marked as the default", display))
 			} else {
 				link := defaults[0]
 				if !link.AgentRef.Readable {
@@ -313,22 +313,35 @@ func (a *App) checkShape(fsys fsx.FileSystem, item *TaskType, add func(string, i
 	record := a.records[item.Key]
 	raw, exists := record.fields["schema"]
 	path, readable := parseFilePath(raw)
-	if !exists || !readable || path == "" {
-		add(item.File, item.Line, fmt.Sprintf("kind of work %q has no readable shape file: point it to `$file('records/task-types/%s.json') |> $json()`.", workName(item), Kebab(item.Name)))
+	var data []byte
+	shapeLabel := "shape"
+	if !exists {
+		add(item.File, item.Line, fmt.Sprintf("kind of work %q has no readable shape: provide an inline object or point it to `$file('records/task-types/%s.json') |> $json()`.", workName(item), Kebab(item.Name)))
 		return nil
 	}
-	file := filepath.Join(a.Dir, filepath.FromSlash(path))
-	data, err := fsys.ReadFile(file)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
-			add(item.File, item.Line, fmt.Sprintf("kind of work %q shape file is missing: add %s.", workName(item), path))
+	if readable && path != "" {
+		shapeLabel = "shape file"
+		file := filepath.Join(a.Dir, filepath.FromSlash(path))
+		var err error
+		data, err = fsys.ReadFile(file)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
+				add(item.File, item.Line, fmt.Sprintf("kind of work %q shape file is missing: add %s.", workName(item), path))
+				return nil
+			}
+			return fmt.Errorf("failed to read %s: %w", relative(a.RepoRoot, file), err)
+		}
+	} else {
+		var inline bool
+		data, inline = inlineShapeJSON(record.fields["schema"])
+		if !inline {
+			add(item.File, item.Line, fmt.Sprintf("kind of work %q has no readable shape: provide an inline object or point it to `$file('records/task-types/%s.json') |> $json()`.", workName(item), Kebab(item.Name)))
 			return nil
 		}
-		return fmt.Errorf("failed to read %s: %w", relative(a.RepoRoot, file), err)
 	}
 	var value map[string]json.RawMessage
 	if err := json.Unmarshal(data, &value); err != nil || value == nil {
-		add(item.File, item.Line, fmt.Sprintf("kind of work %q shape file must be valid JSON with an object at its top level.", workName(item)))
+		add(item.File, item.Line, fmt.Sprintf("kind of work %q %s must be valid JSON with an object at its top level.", workName(item), shapeLabel))
 		return nil
 	}
 	var input map[string]json.RawMessage
@@ -340,6 +353,9 @@ func (a *App) checkShape(fsys fsx.FileSystem, item *TaskType, add func(string, i
 		return nil
 	}
 	trimmed := strings.TrimSpace(string(output))
+	if shapeLabel != "shape file" && trimmed == `"null"` {
+		trimmed = "null"
+	}
 	if trimmed != "null" {
 		var outputObject map[string]json.RawMessage
 		if err := json.Unmarshal(output, &outputObject); err != nil || outputObject == nil {
@@ -347,6 +363,22 @@ func (a *App) checkShape(fsys fsx.FileSystem, item *TaskType, add func(string, i
 		}
 	}
 	return nil
+}
+
+func inlineShapeJSON(raw any) ([]byte, bool) {
+	if text, ok := raw.(string); ok {
+		trimmed := strings.TrimSpace(text)
+		if strings.HasPrefix(trimmed, "$") {
+			return nil, false
+		}
+		var value any
+		if json.Unmarshal([]byte(trimmed), &value) == nil {
+			data, err := json.Marshal(value)
+			return data, err == nil
+		}
+	}
+	data, err := json.Marshal(raw)
+	return data, err == nil
 }
 
 func (a *App) checkStates(fsys fsx.FileSystem, item *TaskType, add func(string, int, string)) error {

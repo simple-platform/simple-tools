@@ -12,6 +12,28 @@ import (
 	"text/template"
 )
 
+// ExistingAppPath resolves an existing app using the same app-root check used
+// by action scaffolding. App IDs are single path components under apps/.
+func ExistingAppPath(fsys fsx.FileSystem, rootPath, appID string) (string, error) {
+	if appID == "" || strings.Contains(appID, "/") || strings.Contains(appID, `\`) || strings.Contains(appID, "..") || filepath.IsAbs(appID) || filepath.VolumeName(appID) != "" {
+		return "", fmt.Errorf("app ID %q is invalid; use a valid app ID without path separators or \"..\"", appID)
+	}
+	root, err := filepath.Abs(rootPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve repository root: %w", err)
+	}
+	appsPath := filepath.Join(root, "apps")
+	appPath := filepath.Join(appsPath, appID)
+	relative, err := filepath.Rel(appsPath, appPath)
+	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || strings.Contains(relative, string(filepath.Separator)) || strings.Contains(relative, "/") || strings.Contains(relative, `\`) {
+		return "", fmt.Errorf("app ID %q is invalid; use a valid app ID without path separators or \"..\"", appID)
+	}
+	if !PathExists(fsys, appPath) {
+		return "", fmt.Errorf("app %s does not exist: run 'simple new app %s \"<Display name>\"' first", appID, appID)
+	}
+	return appPath, nil
+}
+
 //go:embed templates
 var TemplatesFS embed.FS
 
@@ -403,11 +425,9 @@ func createActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		return fmt.Errorf("unsupported action language: %s", language)
 	}
 
-	appPath := filepath.Join(rootPath, "apps", cfg.AppID)
-
-	// Validate: app must exist
-	if !PathExists(fsys, appPath) {
-		return fmt.Errorf("app does not exist: %s", cfg.AppID)
+	appPath, err := ExistingAppPath(fsys, rootPath, cfg.AppID)
+	if err != nil {
+		return err
 	}
 
 	// Check for duplicate action in SCL

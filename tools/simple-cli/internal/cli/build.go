@@ -381,7 +381,12 @@ func agentProblemsJSON(problems []agents.Problem) []agentProblemJSON {
 }
 
 func writeAgentProblems(w io.Writer, appID string, problems []agents.Problem) {
-	_, _ = fmt.Fprintf(w, "%s: %d things left:\n", appID, len(problems))
+	count := len(problems)
+	thing := "things"
+	if count == 1 {
+		thing = "thing"
+	}
+	_, _ = fmt.Fprintf(w, "%s: %d %s left:\n", appID, count, thing)
 	for _, problem := range problems {
 		if problem.Line == 0 {
 			_, _ = fmt.Fprintf(w, "%s: %s\n", problem.File, problem.Rule)
@@ -389,6 +394,14 @@ func writeAgentProblems(w io.Writer, appID string, problems []agents.Problem) {
 			_, _ = fmt.Fprintf(w, "%s:%d: %s\n", problem.File, problem.Line, problem.Rule)
 		}
 	}
+}
+
+func agentProblemCount(count int) string {
+	noun := "problems"
+	if count == 1 {
+		noun = "problem"
+	}
+	return fmt.Sprintf("%d agent %s", count, noun)
 }
 
 // buildResult is the outcome of building one action or space.
@@ -593,7 +606,7 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string, ag
 			}
 		}
 		if len(agentProblemList) > 0 {
-			fmt.Fprintln(os.Stderr, "Build failed because of these agent problems.")
+			fmt.Fprintf(os.Stderr, "Build failed because of %s.\n", agentProblemCount(len(agentProblemList)))
 		}
 	}
 
@@ -613,12 +626,12 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string, ag
 		}
 
 		if len(agentProblemList) > 0 {
-			return fmt.Errorf("%s failed to build; build failed because of %d agent problems", strings.Join(parts, " and "), len(agentProblemList))
+			return fmt.Errorf("%s failed to build; build failed because of %s", strings.Join(parts, " and "), agentProblemCount(len(agentProblemList)))
 		}
 		return fmt.Errorf("%s failed to build", strings.Join(parts, " and "))
 	}
 	if len(agentProblemList) > 0 {
-		return fmt.Errorf("build failed because of %d agent problems", len(agentProblemList))
+		return fmt.Errorf("build failed because of %s", agentProblemCount(len(agentProblemList)))
 	}
 
 	return nil
