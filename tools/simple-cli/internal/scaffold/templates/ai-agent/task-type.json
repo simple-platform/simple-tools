@@ -1,0 +1,16 @@
+{
+  "input": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "description": "TODO(simple): Say what this work is handed when it starts, then replace the request field with the real fields. Set output to a result shape when the work must answer in fixed fields; null leaves the answer as free text.",
+    "additionalProperties": false,
+    "required": ["request"],
+    "properties": {
+      "request": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "output": null
+}

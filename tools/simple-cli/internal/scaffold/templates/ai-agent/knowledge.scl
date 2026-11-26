@@ -1,0 +1,4 @@
+set dev_simple_system.knowledge, {{.Key}} {
+  title "{{.Title}}"
+  body `$file('{{.BodyPath}}')`
+}

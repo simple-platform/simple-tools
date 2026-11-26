@@ -1,0 +1,9 @@
+{
+  "queued": "queued",
+  "working": "in_progress",
+  "waiting_for_user": "waiting",
+  "waiting_for_event": "waiting",
+  "completed": "completed",
+  "cancelled": "cancelled",
+  "failed": "failed"
+}

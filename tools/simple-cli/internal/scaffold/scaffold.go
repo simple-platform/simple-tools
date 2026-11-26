@@ -197,6 +197,7 @@ type ActionConfig struct {
 	Description  string
 	Scope        string
 	ExecutionEnv string
+	Tool         bool
 
 	// Language selects which set of source files is written and what the SCL
 	// record advertises. An empty value means TypeScript, which is what every
@@ -388,6 +389,10 @@ func appendTriggerRecord(fsys fsx.FileSystem, tplFS fsx.TemplateFS, templatePath
 // and in both cases:
 //   - apps/<appID>/records/10_actions.scl (appended or created)
 func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string, cfg ActionConfig) error {
+	return createActionStructure(fsys, tplFS, rootPath, cfg, false)
+}
+
+func createActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string, cfg ActionConfig, deferActionRecord bool) error {
 	// Resolve the language before anything is written, so an action in a
 	// language this CLI cannot scaffold is refused with nothing left behind.
 	language := cfg.Language
@@ -426,29 +431,15 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		return fmt.Errorf("action already exists: %s", cfg.ActionName)
 	}
 
-	// Create action directory
-	if err := fsys.MkdirAll(actionPath, fsx.DirPerm); err != nil {
-		return fmt.Errorf("failed to create action directory: %w", err)
-	}
-
-	// Both languages keep their source under src/. Only TypeScript keeps its
-	// tests in a directory of their own: a Rust action's tests live in the
-	// `#[cfg(test)] mod tests` inside its source, and cargo reads tests/ as
-	// integration-test targets, so an empty one there would mean something else.
 	srcPath := filepath.Join(actionPath, "src")
-	if err := fsys.MkdirAll(srcPath, fsx.DirPerm); err != nil {
-		return fmt.Errorf("failed to create src directory: %w", err)
-	}
-
 	testsPath := filepath.Join(actionPath, "tests")
-	if language == LanguageTypeScript {
-		if err := fsys.MkdirAll(testsPath, fsx.DirPerm); err != nil {
-			return fmt.Errorf("failed to create tests directory: %w", err)
-		}
-	}
 
 	// Template data
 	// ActionNameScl replaces hyphens with underscores for SCL identifiers
+	toolMarker := ""
+	if cfg.Tool {
+		toolMarker = "tool"
+	}
 	data := map[string]string{
 		"ActionName":    cfg.ActionName,
 		"ActionNameScl": strings.ReplaceAll(cfg.ActionName, "-", "_"),
@@ -457,6 +448,7 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		"Scope":         cfg.Scope,
 		"ExecutionEnv":  cfg.ExecutionEnv,
 		"Language":      language,
+		"Tool":          toolMarker,
 	}
 
 	// Render action files
@@ -499,9 +491,37 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		}
 	}
 
-	for _, f := range actionFiles {
-		if err := renderTemplate(fsys, tplFS, f.src, f.dst, data); err != nil {
+	type renderedActionFile struct {
+		dst     string
+		content []byte
+	}
+	renderedFiles := make([]renderedActionFile, 0, len(actionFiles))
+	for _, file := range actionFiles {
+		content, err := renderTemplateContent(tplFS, file.src, data)
+		if err != nil {
 			return err
+		}
+		renderedFiles = append(renderedFiles, renderedActionFile{dst: file.dst, content: content})
+	}
+
+	// Both languages keep their source under src/. Only TypeScript keeps its
+	// tests in a directory of their own: a Rust action's tests live in the
+	// `#[cfg(test)] mod tests` inside its source, and cargo reads tests/ as
+	// integration-test targets, so an empty one there would mean something else.
+	if err := fsys.MkdirAll(actionPath, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create action directory: %w", err)
+	}
+	if err := fsys.MkdirAll(srcPath, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create src directory: %w", err)
+	}
+	if language == LanguageTypeScript {
+		if err := fsys.MkdirAll(testsPath, fsx.DirPerm); err != nil {
+			return fmt.Errorf("failed to create tests directory: %w", err)
+		}
+	}
+	for _, file := range renderedFiles {
+		if err := fsys.WriteFile(file.dst, file.content, fsx.FilePerm); err != nil {
+			return fmt.Errorf("failed to write %s: %w", file.dst, err)
 		}
 	}
 
@@ -510,8 +530,10 @@ func CreateActionStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath s
 		return fmt.Errorf("failed to create records directory: %w", err)
 	}
 
-	if err := appendActionRecord(fsys, tplFS, actionsScl, data); err != nil {
-		return err
+	if !deferActionRecord {
+		if err := appendActionRecord(fsys, tplFS, actionsScl, data); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -665,26 +687,32 @@ func copyTemplate(fsys fsx.FileSystem, tplFS fsx.TemplateFS, src, dst string) er
 
 // renderTemplate renders a Go template with data and writes to disk.
 func renderTemplate(fsys fsx.FileSystem, tplFS fsx.TemplateFS, src, dst string, data map[string]string) error {
+	rendered, err := renderTemplateContent(tplFS, src, data)
+	if err != nil {
+		return err
+	}
+	if err := fsys.WriteFile(dst, rendered, fsx.FilePerm); err != nil {
+		return fmt.Errorf("failed to write %s: %w", dst, err)
+	}
+	return nil
+}
+
+func renderTemplateContent(tplFS fsx.TemplateFS, src string, data map[string]string) ([]byte, error) {
 	content, err := tplFS.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("failed to read template %s: %w", src, err)
+		return nil, fmt.Errorf("failed to read template %s: %w", src, err)
 	}
 
 	tmpl, err := template.New(filepath.Base(src)).Parse(string(content))
 	if err != nil {
-		return fmt.Errorf("failed to parse template %s: %w", src, err)
+		return nil, fmt.Errorf("failed to parse template %s: %w", src, err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, data); err != nil {
-		return fmt.Errorf("failed to execute template %s: %w", src, err)
+		return nil, fmt.Errorf("failed to execute template %s: %w", src, err)
 	}
-
-	if err := fsys.WriteFile(dst, buf.Bytes(), fsx.FilePerm); err != nil {
-		return fmt.Errorf("failed to write %s: %w", dst, err)
-	}
-
-	return nil
+	return buf.Bytes(), nil
 }
 
 // BehaviorConfig holds configuration for creating a new record behavior.

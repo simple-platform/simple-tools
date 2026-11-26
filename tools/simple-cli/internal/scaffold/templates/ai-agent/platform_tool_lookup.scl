@@ -1,0 +1,14 @@
+var platform_tool_{{.VarName}} {
+  query ```
+  query get_platform_tool_{{.VarName}} {
+    logic: dev_simple_system__logics(
+      where: {
+        application_id: {_eq: "dev.simple.system"},
+        name: {_eq: "{{.Name}}"}
+      }
+    ) {
+      id
+    }
+  }
+  ```
+}
