@@ -1,0 +1,924 @@
+package agents
+
+import (
+	"bytes"
+	"compress/gzip"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"simple-cli/internal/agents/structure"
+)
+
+const capturedParserFixtureGZIP = `H4sICNDdB2sAA2NvbXBsZXRlLWFwcC5qc29uAM1ZS0/rOBTez6+IIqSCREvSNH0tRrqb0SxGGunOEpBlEgO5dZMQJ2Uqhv8+dh4nLdg+4VKkywISPsc+x993HnGuX9yUbpm7dnNOy/us2JIyyzjJiyxiQpCYltS9dMt9rsbc8SzayNsN28u7HS3kdfSY8Lhgqbu+funGbXYS2FFeqZub1HGeKlbsnQdWEvMyzosa6Tg8e0iitROzHRHJNueMiL0o2ZaQGhHnzTDHeX5kBVt3j6kfmuc8iWiZZClJYgkR9rR2blw516SZa9LMdeO+XvaPqR3oB7c2jZVNclw3rL24cF6cJG7u6l+wHbWPzZ20NHLXLy5PUrkDvtykjLvr4LXdFD28en291TzttbAnn1aG6tHAf329BC6z55TQqN4GnmWbKj8phf3sX0hZlG0nNNpKwh6z3EZX9MiizTgrYlachq0ZQtfMzpcftLivJQzgaXDA2LX7bu8mmzR75ix+YNLKnBUiSykRVZ5nReneGvgUrBzC5z/NNM63B5aW8HCZlJzptmS6sG8J4KvaJd2KZ/cJZ+cj8Omq9WTcejbZxqMLsOQui7XcTJeIIR2+1HMznVu5ATj0jrg5YoLT/Z2MKVKwsipS8VkqvjfTON28OBvB1L4JgGNs3PSOXbXejDszJB83Lk5IECC2BHZCAt9KCMDBR4JFbBLOJT/3VRqTPJPpZf95ltRkTjsZThESMMHPBIzyatx4NW4MGRY0ARI0ARI0gT1oAA5nH+Corv73iSSoztyf5ecPOZPzdz0TSs4MiZ/Z0Pg5IEe5M1buNIVoGDEzJHhmSPDM7MED8Jts9p4Y2paB+u/X1pg4ESrFkNoYnU9I5ADuz43sfEvFs6wqqmMRqq8Qk355JqIiydV/tasjoQK4H5q1ITsamXwiKQSZYd8U7sOcmqSiLKq6jxKy9dHas0Ls6XDfrFXVqe1Yz15Jy0roFgs9+2KA+55Bj/ZEAfAMSxQlFRtS+yIl2F2fquB203SPmZQYIn0g4Evj1n9/s1TOq4Jyo/bDEFkxxNX3J01jzoTTejlY+eEcWXv+YeW/aZQOpQ+YXvYhkgQAtxnTpOjGHHGlZDRW40TX6kx+yMAcXTj//e6cqcvz3jwh3ym2VGsZkiAA9z20+dKYpoKTNZbJ7dKaVo/QmobkCsDNpgVzz+sWeqYbRpK0ZIUEiZC2prF23TmSNgCfhvq0EdpfmAAOp0PKGLEmDxKze1rxkjQl75Op5FDwo6PieVD9m//rhT5Hcgzg/nRg1L3z+DDsetBgDpKAALcUX/Yvi6oy6/uwItO3YXMk4wBuzK+yejIopkCtdi0koQDuz/Qands1CvAC02hPQd3PazUa0aJImCBt73BKlX5SIAvkKAtwi0AG90fQXZuMQfp4wM3G+JDu8kwkptq4QPp0wFWU6tSz8KzqAXgxuDEaop7uQOEXkg8ShosBzf3wJgPVD1LLATdbMx2mH6QyA27Uj72xBngRnlA/X3CKckIpLZGYBHywlDT+fkRNS6SUA242KBikpiVSpAE3qWk5taoJ4OV8sJrU8YdWTFv5qh9RfsqjnlOKCAlMwAeLqHfz0I76I4jBhhXSPgNupHNpp7ODF4sT0nn0efDXIXSFBOEKD0L3bEeL85H5M2X3yvh0PprUxF57t5Pk8LzPSjcSvSsself2ThTgxQqhu7ES6sDxeSzh0l2Zf05K7U8EBxKgq8PKOez96NjPj2R430NCtR+g5KUlzx6rAIeDyJNGni6t9ofX6MmY72GfSD38bExzYo+dDfseEjz9AEt8/yXbReFUuVM7O/yEzPeQF9Z+gOVYavBprO8hzXI/wHQe63vIp2jAZ76c4bf/ATWVJ0oMIgAA`
+
+const fixtureAppID = "com.acme.shop"
+const fixtureRepoRoot = "/repo"
+
+func parserFixture(t *testing.T) []byte {
+	t.Helper()
+	encoded, err := base64.StdEncoding.DecodeString(capturedParserFixtureGZIP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := gzip.NewReader(bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := reader.Close(); err != nil {
+			t.Errorf("close parser fixture: %v", err)
+		}
+	}()
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func fixtureSource(t *testing.T) []byte {
+	t.Helper()
+	var blocks []struct {
+		Key  string `json:"key"`
+		Name any    `json:"name"`
+	}
+	if err := json.Unmarshal(parserFixture(t), &blocks); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, block := range blocks {
+		if block.Key == "var" {
+			lines = append(lines, "var "+block.Name.(string)+" {")
+			continue
+		}
+		if block.Key != "set" {
+			continue
+		}
+		parts := block.Name.([]any)
+		lines = append(lines, fmt.Sprintf("set %s, %s {", parts[0], parts[1]))
+	}
+	return []byte(strings.Join(lines, "\n") + "\n")
+}
+
+func TestLoadFixtureAndPublicQueries(t *testing.T) {
+	fsys := fixtureFS(t)
+	oldParser := parseSCL
+	parseSCL = func(string) ([]byte, error) { return parserFixture(t), nil }
+	t.Cleanup(func() { parseSCL = oldParser })
+	a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !a.DeclaresAgents() {
+		t.Fatal("DeclaresAgents() = false")
+	}
+	if got := len(a.Agents()); got != 1 {
+		t.Fatalf("Agents() length = %d", got)
+	}
+	secondAgent := *a.AgentRecords[0]
+	secondAgent.DisplayName = "Another Agent"
+	a.AgentRecords = append(a.AgentRecords, &secondAgent)
+	if got := a.Agents(); len(got) != 2 || got[0].DisplayName != "Another Agent" {
+		t.Fatalf("Agents() is not sorted: %#v", got)
+	}
+	a.AgentRecords = a.AgentRecords[:1]
+	if agent, ok := a.Agent("support"); !ok || agent.DisplayName != "Support Agent" {
+		t.Fatalf("Agent(support) = %#v, %v", agent, ok)
+	}
+	if _, ok := a.Agent("missing"); ok {
+		t.Fatal("Agent(missing) unexpectedly exists")
+	}
+	if task, ok := a.TaskType("returns"); !ok || task.Name != "returns" || task.DefaultAgent == nil {
+		t.Fatalf("TaskType(returns) = %#v, %v", task, ok)
+	}
+	if task, ok := a.TaskType("return-s"); ok || task != nil {
+		t.Fatalf("TaskType(missing) = %#v, %v", task, ok)
+	}
+	if skill, ok := a.Skill("refund-policy"); !ok || skill.Title != "Refund policy" {
+		t.Fatalf("Skill(refund-policy) = %#v, %v", skill, ok)
+	}
+	if action, ok := a.Action("find-order"); !ok || action.DisplayName != "Find Order" {
+		t.Fatalf("Action(find-order) = %#v, %v", action, ok)
+	}
+	if _, ok := a.Action("missing"); ok {
+		t.Fatal("Action(missing) unexpectedly exists")
+	}
+	if file, line, ok := a.KeyTaken("agent_support"); !ok || line < 1 || !strings.HasSuffix(file, "records/all.scl") {
+		t.Fatalf("KeyTaken() = %q, %d, %v", file, line, ok)
+	}
+	if _, _, ok := a.KeyTaken("unknown"); ok {
+		t.Fatal("unknown key is taken")
+	}
+	if !a.HasSkillLink("task_type_returns", "persona_support") || !a.HasSkillLink("task_type_returns", "skill_refund_policy") {
+		t.Fatal("HasSkillLink() missed a parsed link")
+	}
+	if a.HasSkillLink("unknown", "persona_support") {
+		t.Fatal("HasSkillLink() matched unknown task type")
+	}
+	if !a.HasToolLink("task_type_returns", ToolRef{ActionKey: "find_order", OwnAction: true}) {
+		t.Fatal("HasToolLink() missed own action")
+	}
+	if !a.HasToolLink("task_type_returns", ToolRef{AppID: PlatformAppID, Name: "process-data"}) {
+		t.Fatal("HasToolLink() missed platform tool")
+	}
+	if a.HasToolLink("unknown", ToolRef{AppID: PlatformAppID, Name: "process-data"}) {
+		t.Fatal("HasToolLink() matched unknown kind of work")
+	}
+	if lesson, ok := a.Lesson("find_order"); !ok || lesson.Title != "Find Order" {
+		t.Fatalf("Lesson() = %#v, %v", lesson, ok)
+	}
+	if _, ok := a.Lesson("unknown"); ok {
+		t.Fatal("Lesson(unknown) unexpectedly exists")
+	}
+	if got := a.NextSkillPosition("task_type_returns"); got != 40 {
+		t.Fatalf("NextSkillPosition() = %d", got)
+	}
+	if got := a.NextSkillPosition("unknown"); got != 10 {
+		t.Fatalf("empty NextSkillPosition() = %d", got)
+	}
+	a.TaskTypeSkillLinks = append(a.TaskTypeSkillLinks, &TaskTypeSkillLink{TaskTypeRef: Reference{Key: "negative"}, Position: -3})
+	if got := a.NextSkillPosition("negative"); got != 7 {
+		t.Fatalf("negative NextSkillPosition() = %d", got)
+	}
+	if !a.HasLookup("records/all.scl", "platform_tool_process_data") || !a.HasLookup("apps/com.acme.shop/records/all.scl", "own_action_lookup") {
+		t.Fatal("HasLookup() missed a variable")
+	}
+	if a.HasLookup("records/other.scl", "own_action_lookup") {
+		t.Fatal("HasLookup() matched the wrong file")
+	}
+	if !a.HasLookup("/repo/apps/com.acme.shop/records/all.scl", "own_action_lookup") {
+		t.Fatal("HasLookup() missed an absolute path")
+	}
+	if path, ok := a.StatesFile(); !ok || path != "apps/com.acme.shop/records/task-types/states.json" {
+		t.Fatalf("StatesFile() = %q, %v", path, ok)
+	}
+	if got := (ToolRef{OwnAction: true, Name: "find-order"}).String(); got != "find-order" {
+		t.Fatalf("own ToolRef.String() = %q", got)
+	}
+	if got := (ToolRef{AppID: PlatformAppID, Name: "process-data"}).String(); got != "dev.simple.system/process-data" {
+		t.Fatalf("platform ToolRef.String() = %q", got)
+	}
+	inline := *a.Knowledge[0]
+	inline.Body = Body{Inline: "inline body", Readable: true}
+	if got := bodyMeaning(&inline); got != "title:"+inline.Title {
+		t.Fatalf("inline body meaning = %q", got)
+	}
+	pathKnowledge := &Knowledge{Key: "other", Title: "Alternate", Body: Body{Path: "knowledge/skill-special.md", Readable: true}}
+	a.Knowledge = append(a.Knowledge, pathKnowledge)
+	if got, ok := a.Skill("special"); !ok || got != pathKnowledge {
+		t.Fatalf("Skill() body path lookup = %#v, %v", got, ok)
+	}
+	keyKnowledge := &Knowledge{Key: "named", Title: "Named", Body: Body{Inline: "body", Readable: true}}
+	a.Knowledge = append(a.Knowledge, keyKnowledge)
+	if got, ok := a.Skill("named"); !ok || got != keyKnowledge {
+		t.Fatalf("Skill() direct key lookup = %#v, %v", got, ok)
+	}
+}
+
+func TestLoadMissingRecordsAndParserErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		fsys    *memoryFS
+		parser  func(string) ([]byte, error)
+		wantErr string
+	}{
+		{name: "missing records is empty", fsys: newMemoryFS(), parser: func(string) ([]byte, error) { return nil, nil }},
+		{name: "parser error names file", fsys: fixtureFS(t), parser: func(string) ([]byte, error) { return nil, errors.New("refused") }, wantErr: "apps/com.acme.shop/records/all.scl"},
+		{name: "invalid parser output names file", fsys: fixtureFS(t), parser: func(string) ([]byte, error) { return []byte("{"), nil }, wantErr: "apps/com.acme.shop/records/all.scl"},
+		{name: "file read error names file", fsys: func() *memoryFS {
+			f := fixtureFS(t)
+			f.readErr[filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "records/all.scl")] = errors.New("disk read failed")
+			return f
+		}(), parser: func(string) ([]byte, error) { return parserFixture(t), nil }, wantErr: "failed to read apps/com.acme.shop/records/all.scl"},
+		{name: "directory read error is wrapped", fsys: func() *memoryFS {
+			f := fixtureFS(t)
+			f.readDirErr[filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "records")] = errors.New("directory failed")
+			return f
+		}(), parser: func(string) ([]byte, error) { return parserFixture(t), nil }, wantErr: "failed to list records"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			old := parseSCL
+			parseSCL = test.parser
+			t.Cleanup(func() { parseSCL = old })
+			a, err := Load(test.fsys, fixtureRepoRoot, fixtureAppID)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("Load() error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if a.DeclaresAgents() || len(a.TaskTypes) != 0 {
+				t.Fatalf("missing records yielded declarations: %#v", a)
+			}
+			if _, ok := a.StatesFile(); ok {
+				t.Fatal("missing records unexpectedly have a states file")
+			}
+		})
+	}
+}
+
+func TestReferenceFormsAndNameConversions(t *testing.T) {
+	tests := []struct {
+		name, raw string
+		want      string
+		readable  bool
+	}{
+		{name: "double quoted record", raw: `$app_record("record_key")`, want: "record_key", readable: true},
+		{name: "single quoted record", raw: `$app_record('record_key')`, want: "record_key", readable: true},
+		{name: "unsupported expression", raw: `$file('x')`, readable: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := refFor(test.raw, nil, fixtureAppID, nil)
+			if got.Key != test.want || got.Readable != test.readable {
+				t.Fatalf("refFor() = %#v", got)
+			}
+		})
+	}
+	vars := map[string]lookup{"platform": {appID: PlatformAppID, name: "process-data"}, "own": {appID: fixtureAppID, name: "check-order"}}
+	for _, test := range []struct {
+		name, raw, wantKey string
+		own                bool
+	}{
+		{name: "jq selection", raw: `$var('platform') |> $jq('.logic[] | select(.name == "mutate-data") | .id')`, own: false},
+		{name: "query name fallback", raw: `$var("platform") |> $jq('.logic[0].id')`, own: false},
+		{name: "same app lookup", raw: `$var('own') |> $jq('.logic[0].id')`, wantKey: "check_order", own: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got := refFor(test.raw, vars, fixtureAppID, map[string]string{"check-order": "check_order"})
+			if !got.Readable || got.Key != test.wantKey || (got.AppID == fixtureAppID) != test.own {
+				t.Fatalf("refFor() = %#v", got)
+			}
+		})
+	}
+	if Snake("price-check") != "price_check" || Kebab("price_check") != "price-check" {
+		t.Fatal("name conversion failed")
+	}
+	if got := refFor(42, nil, fixtureAppID, nil); got.Readable {
+		t.Fatalf("non-string reference became readable: %#v", got)
+	}
+}
+
+func TestLoadHandlesBareAndPrefixedTablesAndRecordLines(t *testing.T) {
+	fys := fixtureFS(t)
+	old := parseSCL
+	parseSCL = func(string) ([]byte, error) { return parserFixture(t), nil }
+	t.Cleanup(func() { parseSCL = old })
+	a, err := Load(fys, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := a.Skill("refund_policy"); !ok {
+		t.Fatal("underscore task name did not match hyphen spelling")
+	}
+	if _, _, ok := a.KeyTaken("playbook_returns"); !ok {
+		t.Fatal("bare table record was not loaded")
+	}
+	for _, item := range a.TaskTypes {
+		if item.Line == 0 {
+			t.Errorf("record %q has no source line", item.Key)
+		}
+	}
+}
+
+func TestLoadSkipsMalformedBlocksAndVisitsNestedSCL(t *testing.T) {
+	f := newMemoryFS()
+	f.put("records/a.scl", []byte("var empty_query {\n"))
+	f.put("records/nested/b.scl", []byte("set logic, sample_action {\n"))
+	outputs := map[string][]byte{
+		filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "records/a.scl"):        []byte(`[{"key":"set","name":"wrong"},{"key":"set","name":["only_one"]},{"key":"ignored","name":"x"},{"key":"var","name":4},{"key":"var","name":"empty_query","children":[]}]`),
+		filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "records/nested/b.scl"): []byte(`[{"key":"set","name":["logic","sample_action"],"children":[{"key":"name","value":"sample-action"}]}]`),
+	}
+	old := parseSCL
+	parseSCL = func(path string) ([]byte, error) {
+		output, ok := outputs[path]
+		if !ok {
+			return nil, fmt.Errorf("unexpected parser path %s", path)
+		}
+		return output, nil
+	}
+	t.Cleanup(func() { parseSCL = old })
+	a, err := Load(f, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(a.Actions) != 1 || a.Actions[0].Name != "sample-action" {
+		t.Fatalf("nested action = %#v", a.Actions)
+	}
+	if _, _, ok := a.KeyTaken("sample_action"); !ok {
+		t.Fatal("nested SCL record was not indexed")
+	}
+	if !a.HasLookup("records/a.scl", "empty_query") {
+		t.Fatal("var without a query was not indexed")
+	}
+}
+
+func TestCheckValidFixtureAndAppOnlyTarget(t *testing.T) {
+	oldParser := parseSCL
+	parseSCL = func(string) ([]byte, error) { return parserFixture(t), nil }
+	t.Cleanup(func() { parseSCL = oldParser })
+	oldInstructions, oldSkill := checkInstructions, checkSkill
+	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) { return nil, nil }
+	checkSkill = func(string) []structure.Finding { return nil }
+	t.Cleanup(func() { checkInstructions = oldInstructions; checkSkill = oldSkill })
+	fsys := fixtureFS(t)
+	problems, err := Check(fsys, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("Check() problems = %#v", problems)
+	}
+	a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.TaskTypes = nil
+	a.Actions = nil
+	a.AgentTaskTypeLinks = nil
+	a.TaskTypeSkillLinks = nil
+	a.TaskTypeToolLinks = nil
+	a.LogicSkillLinks = nil
+	problems, err = a.check(fsys)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(problems) != 0 {
+		t.Fatalf("app-only target problems = %#v", problems)
+	}
+}
+
+func TestCheckRuleCases(t *testing.T) {
+	tests := []struct {
+		name, want string
+		mutate     func(*App, *memoryFS)
+	}{
+		{name: "marker in knowledge", want: "still holds a line", mutate: func(_ *App, f *memoryFS) {
+			f.put("knowledge/skill-refund-policy.md", []byte("TODO(simple): write this"))
+		}},
+		{name: "marker in record", want: "still holds a line", mutate: func(_ *App, f *memoryFS) {
+			file := filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "records/all.scl")
+			f.put("records/all.scl", append(f.files[file], []byte("TODO(simple): complete the record\n")...))
+		}},
+		{name: "marker in shape", want: "still holds a line", mutate: func(_ *App, f *memoryFS) {
+			f.put("records/task-types/returns.json", []byte("{\n  \"input\": {},\n  \"output\": null,\n  \"note\": \"TODO(simple): finish\"\n}"))
+		}},
+		{name: "marker in action source", want: "still holds a line", mutate: func(_ *App, f *memoryFS) {
+			f.put("actions/find-order/src/main.ts", []byte("TODO(simple): finish tool\n"))
+		}},
+		{name: "agent reference unreadable", want: "unreadable persona reference", mutate: func(a *App, _ *memoryFS) { a.AgentRecords[0].Instructions.Readable = false }},
+		{name: "agent reference missing knowledge", want: "no persona body", mutate: func(a *App, _ *memoryFS) { a.AgentRecords[0].Instructions.Key = "missing" }},
+		{name: "agent body file missing", want: "persona body cannot be read", mutate: func(a *App, _ *memoryFS) {
+			a.AgentRecords[0].Persona.Body = Body{Path: "knowledge/absent.md", Readable: true}
+		}},
+		{name: "agent persona body absent", want: "no persona body", mutate: func(a *App, _ *memoryFS) { a.AgentRecords[0].Persona.Body = Body{} }},
+		{name: "default absent", want: "has no default agent", mutate: func(a *App, _ *memoryFS) { a.AgentTaskTypeLinks = nil; a.TaskTypes[0].DefaultAgent = nil }},
+		{name: "multiple defaults", want: "more than one default agent", mutate: func(a *App, _ *memoryFS) {
+			duplicate := *a.AgentTaskTypeLinks[0]
+			duplicate.Key = "another_default"
+			a.AgentTaskTypeLinks = append(a.AgentTaskTypeLinks, &duplicate)
+		}},
+		{name: "default reference unreadable", want: "unreadable default agent", mutate: func(a *App, _ *memoryFS) { a.AgentTaskTypeLinks[0].AgentRef.Readable = false }},
+		{name: "default is not app agent", want: "not an agent of this app", mutate: func(a *App, _ *memoryFS) { a.AgentTaskTypeLinks[0].AgentRef.Key = "missing" }},
+		{name: "agent task type missing", want: "kind of work that does not exist", mutate: func(a *App, _ *memoryFS) { a.AgentTaskTypeLinks[0].TaskTypeRef.Key = "missing" }},
+		{name: "agent task type reference unreadable", want: "unreadable kind of work link", mutate: func(a *App, _ *memoryFS) { a.AgentTaskTypeLinks[0].TaskTypeRef.Readable = false }},
+		{name: "playbook reference unreadable", want: "unreadable playbook reference", mutate: func(a *App, _ *memoryFS) { a.TaskTypes[0].PlaybookRef.Readable = false }},
+		{name: "playbook reference missing", want: "no playbook body", mutate: func(a *App, _ *memoryFS) { a.TaskTypes[0].PlaybookRef.Key = "missing" }},
+		{name: "playbook body absent", want: "no playbook body", mutate: func(a *App, _ *memoryFS) { a.TaskTypes[0].Playbook.Body = Body{} }},
+		{name: "persona not carried", want: "does not carry its default agent's persona", mutate: func(a *App, _ *memoryFS) { a.TaskTypeSkillLinks = removeSkill(a.TaskTypeSkillLinks, "persona_support") }},
+		{name: "playbook not carried", want: "does not carry its playbook", mutate: func(a *App, _ *memoryFS) {
+			a.TaskTypeSkillLinks = removeSkill(a.TaskTypeSkillLinks, "playbook_returns")
+		}},
+		{name: "shape reference unreadable", want: "no readable shape file", mutate: func(a *App, _ *memoryFS) { a.records["task_type_returns"].fields["schema"] = "expression" }},
+		{name: "shape file without json conversion", want: "no readable shape file", mutate: func(a *App, _ *memoryFS) {
+			a.records["task_type_returns"].fields["schema"] = "$file('records/task-types/returns.json')"
+		}},
+		{name: "shape file missing", want: "shape file is missing", mutate: func(_ *App, f *memoryFS) { f.delete("records/task-types/returns.json") }},
+		{name: "shape invalid json", want: "valid JSON", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/returns.json", []byte("{")) }},
+		{name: "shape top level is not object", want: "top level", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/returns.json", []byte("[]")) }},
+		{name: "shape input absent", want: "input object", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/returns.json", []byte(`{"output":{}}`)) }},
+		{name: "shape input not object", want: "input object", mutate: func(_ *App, f *memoryFS) {
+			f.put("records/task-types/returns.json", []byte(`{"input":[],"output":{}}`))
+		}},
+		{name: "shape output absent", want: "output object or null", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/returns.json", []byte(`{"input":{}}`)) }},
+		{name: "shape output not object", want: "output must be an object", mutate: func(_ *App, f *memoryFS) {
+			f.put("records/task-types/returns.json", []byte(`{"input":{},"output":[]}`))
+		}},
+		{name: "states reference unreadable", want: "unreadable states file reference", mutate: func(a *App, _ *memoryFS) { a.records["task_type_returns"].fields["states"] = "bad expression" }},
+		{name: "states file missing", want: "states file is missing", mutate: func(_ *App, f *memoryFS) { f.delete("records/task-types/states.json") }},
+		{name: "states invalid json", want: "must be valid JSON", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/states.json", []byte("{")) }},
+		{name: "state missing", want: "does not name failed", mutate: func(_ *App, f *memoryFS) {
+			f.put("records/task-types/states.json", []byte(`{"queued":true,"working":true,"waiting_for_user":true,"waiting_for_event":true,"completed":true,"cancelled":true}`))
+		}},
+		{name: "tool reference unreadable", want: "unreadable tool reference", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[0].LogicRef.Readable = false }},
+		{name: "tool task type invalid", want: "kind of work that does not exist", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[0].TaskTypeRef.Key = "missing" }},
+		{name: "own tool does not exist", want: "not an action of this app", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[0].Tool.ActionKey = "missing" }},
+		{name: "own tool not built", want: "has not been built yet", mutate: func(_ *App, f *memoryFS) { f.delete("actions/find-order/action.json") }},
+		{name: "own action not marked tool", want: "source is not marked as one", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte(`{"ai":{"tool":false}}`)) }},
+		{name: "own action json invalid", want: "source is not marked as one", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte("{")) }},
+		{name: "unknown platform tool", want: "not a platform tool this version", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[1].Tool.Name = "future-tool" }},
+		{name: "foreign app lookup", want: "not a platform tool this version", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[1].Tool.AppID = "com.other.app" }},
+		{name: "task skill task reference unreadable", want: "unreadable skill link", mutate: func(a *App, _ *memoryFS) { a.TaskTypeSkillLinks[0].TaskTypeRef.Readable = false }},
+		{name: "task skill task missing", want: "kind of work that does not exist", mutate: func(a *App, _ *memoryFS) { a.TaskTypeSkillLinks[0].TaskTypeRef.Key = "missing" }},
+		{name: "task skill knowledge unreadable", want: "unreadable skill reference", mutate: func(a *App, _ *memoryFS) { a.TaskTypeSkillLinks[2].KnowledgeRef.Readable = false }},
+		{name: "task skill knowledge missing", want: "knowledge record that does not exist", mutate: func(a *App, _ *memoryFS) { a.TaskTypeSkillLinks[2].KnowledgeRef.Key = "missing" }},
+		{name: "skill body missing", want: `skill "Refund policy" has no body`, mutate: func(a *App, _ *memoryFS) { a.Knowledge[2].Body = Body{} }},
+		{name: "logic skill action unreadable", want: "unreadable action reference", mutate: func(a *App, _ *memoryFS) { a.LogicSkillLinks[0].LogicRef.Readable = false }},
+		{name: "logic skill action missing", want: "refers to an action that does not exist", mutate: func(a *App, _ *memoryFS) { a.LogicSkillLinks[0].LogicRef.Key = "missing" }},
+		{name: "logic skill knowledge unreadable", want: "unreadable knowledge reference", mutate: func(a *App, _ *memoryFS) { a.LogicSkillLinks[0].KnowledgeRef.Readable = false }},
+		{name: "logic skill knowledge missing", want: "knowledge record that does not exist", mutate: func(a *App, _ *memoryFS) { a.LogicSkillLinks[0].KnowledgeRef.Key = "missing" }},
+		{name: "lesson body missing", want: `tool lesson "Find Order" has no body`, mutate: func(a *App, _ *memoryFS) { a.Knowledge[3].Body = Body{} }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := loadFixtureModel(t)
+			f := fixtureFS(t)
+			test.mutate(a, f)
+			problems, err := a.check(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !problemContains(problems, test.want) {
+				t.Fatalf("no problem containing %q: %#v", test.want, problems)
+			}
+		})
+	}
+}
+
+func TestCheckShapeAllowsNullOutput(t *testing.T) {
+	a := loadFixtureModel(t)
+	f := fixtureFS(t)
+	f.put("records/task-types/returns.json", []byte(`{"input":{},"output":null}`))
+	oldInstructions, oldSkill := checkInstructions, checkSkill
+	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) { return nil, nil }
+	checkSkill = func(string) []structure.Finding { return nil }
+	t.Cleanup(func() { checkInstructions = oldInstructions; checkSkill = oldSkill })
+	problems, err := a.check(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range problems {
+		if strings.Contains(item.Rule, "shape") {
+			t.Fatalf("null output caused a shape problem: %#v", item)
+		}
+	}
+}
+
+func TestCheckStructureLocationsAndDeduplication(t *testing.T) {
+	a := loadFixtureModel(t)
+	f := fixtureFS(t)
+	oldInstructions, oldSkill := checkInstructions, checkSkill
+	checkInstructions = func(_ string, _, _ string) ([]structure.Finding, []structure.Finding) {
+		return []structure.Finding{{Line: 2, Rule: "persona finding"}}, []structure.Finding{{Line: 3, Rule: "playbook finding"}}
+	}
+	checkSkill = func(string) []structure.Finding { return []structure.Finding{{Line: 4, Rule: "skill finding"}} }
+	t.Cleanup(func() { checkInstructions = oldInstructions; checkSkill = oldSkill })
+	second := *a.TaskTypes[0]
+	second.Key = "task_type_followup"
+	second.Name = "followup"
+	second.File = "apps/com.acme.shop/records/another.scl"
+	second.Playbook = a.TaskTypes[0].Playbook
+	second.DefaultAgent = a.TaskTypes[0].DefaultAgent
+	a.TaskTypes = append(a.TaskTypes, &second)
+	defaultLink := *a.AgentTaskTypeLinks[0]
+	defaultLink.Key = "followup_default"
+	defaultLink.TaskTypeRef.Key = second.Key
+	a.AgentTaskTypeLinks = append(a.AgentTaskTypeLinks, &defaultLink)
+	personaLink := *a.TaskTypeSkillLinks[0]
+	personaLink.TaskTypeRef.Key = second.Key
+	a.TaskTypeSkillLinks = append(a.TaskTypeSkillLinks, &personaLink)
+	playbookLink := *a.TaskTypeSkillLinks[1]
+	playbookLink.TaskTypeRef.Key = second.Key
+	a.TaskTypeSkillLinks = append(a.TaskTypeSkillLinks, &playbookLink)
+	a.records[second.Key] = record{table: "task_type", key: second.Key, file: second.File, line: 2, fields: map[string]any{"schema": "$file('records/task-types/returns.json') |> $json()", "states": "$file('records/task-types/states.json') |> $json()"}}
+	problems, err := a.check(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countRule(problems, "persona finding") != 1 {
+		t.Fatalf("persona finding repeated: %#v", problems)
+	}
+	if !problemAt(problems, "apps/com.acme.shop/knowledge/support-persona.md", 2, "persona finding") {
+		t.Fatalf("persona finding location missing: %#v", problems)
+	}
+	if !problemAt(problems, "apps/com.acme.shop/knowledge/returns-playbook.md", 3, "playbook finding") {
+		t.Fatalf("playbook finding location missing: %#v", problems)
+	}
+	if !problemAt(problems, "apps/com.acme.shop/knowledge/skill-refund-policy.md", 4, "skill finding") {
+		t.Fatalf("skill finding location missing: %#v", problems)
+	}
+}
+
+func TestCheckInlineStructureFindingUsesRecordLine(t *testing.T) {
+	a := loadFixtureModel(t)
+	f := fixtureFS(t)
+	a.AgentRecords[0].Persona.Body = Body{Inline: "inline", Readable: true}
+	a.AgentRecords[0].Persona.File = "apps/com.acme.shop/records/agent.scl"
+	a.AgentRecords[0].Persona.Line = 12
+	old := checkInstructions
+	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) {
+		return []structure.Finding{{Line: 6, Rule: "inline finding"}}, nil
+	}
+	t.Cleanup(func() { checkInstructions = old })
+	problems, err := a.check(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !problemAt(problems, "apps/com.acme.shop/records/agent.scl", 12, "inline finding") {
+		t.Fatalf("inline finding location = %#v", problems)
+	}
+}
+
+func TestCanonicalIgnoresRecordKeysFilesCommentsAndOrder(t *testing.T) {
+	left, right := loadFixtureModel(t), loadFixtureModel(t)
+	left.AgentRecords[0].File = "apps/com.acme.shop/records/71_agents.scl"
+	right.AgentRecords[0].File = "apps/com.acme.shop/records/other.scl"
+	left.TaskTypes[0].File = "apps/com.acme.shop/records/71_agents.scl"
+	right.TaskTypes[0].File = "apps/com.acme.shop/records/other.scl"
+	right.AgentRecords[0].Key = "human_support"
+	right.AgentRecords[0].Persona.Key = "persona_different"
+	right.AgentRecords[0].Instructions.Key = "persona_different"
+	right.TaskTypes[0].Key = "kind_return"
+	right.TaskTypes[0].Playbook.Key = "playbook_different"
+	right.TaskTypes[0].PlaybookRef.Key = "playbook_different"
+	right.TaskTypes[0].DefaultAgentRef.Key = "human_support"
+	right.TaskTypes[0].DefaultAgent = right.AgentRecords[0]
+	for _, link := range right.AgentTaskTypeLinks {
+		link.AgentRef.Key = "human_support"
+		link.TaskTypeRef.Key = "kind_return"
+	}
+	for _, link := range right.TaskTypeSkillLinks {
+		link.TaskTypeRef.Key = "kind_return"
+		if link.KnowledgeRef.Key == "persona_support" {
+			link.KnowledgeRef.Key = "persona_different"
+		}
+		if link.KnowledgeRef.Key == "playbook_returns" {
+			link.KnowledgeRef.Key = "playbook_different"
+		}
+		if k := right.knowledgeByKey(link.KnowledgeRef.Key); k != nil {
+			link.KnowledgeRef.Key = k.Key
+		}
+	}
+	for _, item := range right.Knowledge {
+		if item.Key == "persona_support" {
+			item.Key = "persona_different"
+		}
+		if item.Key == "playbook_returns" {
+			item.Key = "playbook_different"
+		}
+	}
+	for _, link := range right.TaskTypeSkillLinks {
+		if link.KnowledgeRef.Key == "persona_support" {
+			link.KnowledgeRef.Key = "persona_different"
+		}
+		if link.KnowledgeRef.Key == "playbook_returns" {
+			link.KnowledgeRef.Key = "playbook_different"
+		}
+	}
+	right.TaskTypeSkillLinks[2].TaskTypeRef.Key = "kind_return"
+	right.TaskTypeToolLinks[0].TaskTypeRef.Key = "kind_return"
+	right.TaskTypeToolLinks[1].TaskTypeRef.Key = "kind_return"
+	right.LogicSkillLinks[0].KnowledgeRef.Key = "tool_find_order"
+	remapped := make(map[string]record, len(right.records))
+	keyNames := map[string]string{"agent_support": "human_support", "task_type_returns": "kind_return", "persona_support": "persona_different", "playbook_returns": "playbook_different"}
+	for key, item := range right.records {
+		if replacement, ok := keyNames[key]; ok {
+			item.key = replacement
+			remapped[replacement] = item
+		} else {
+			remapped[key] = item
+		}
+	}
+	right.records = remapped
+	sort.Slice(right.TaskTypeSkillLinks, func(i, j int) bool {
+		return right.TaskTypeSkillLinks[i].Position > right.TaskTypeSkillLinks[j].Position
+	})
+	if left.Canonical() != right.Canonical() {
+		t.Fatalf("canonical descriptions differ:\nleft:\n%s\nright:\n%s", left.Canonical(), right.Canonical())
+	}
+}
+
+func TestProblemOrderingAndRuleSentence(t *testing.T) {
+	got := uniqueProblems([]Problem{{File: "b", Line: 3, Rule: "b"}, {File: "a", Line: 2, Rule: "z"}, {File: "a", Line: 1, Rule: "a"}, {File: "a", Line: 1, Rule: "a"}})
+	if len(got) != 3 || got[0].File != "a" || got[1].Line != 2 || got[2].File != "b" {
+		t.Fatalf("uniqueProblems() = %#v", got)
+	}
+	if ensureSentence("A plain sentence") != "A plain sentence." || ensureSentence("Already!") != "Already!" {
+		t.Fatal("ensureSentence() did not normalize punctuation")
+	}
+	if ensureSentence("") != "" {
+		t.Fatal("ensureSentence(empty) should stay empty")
+	}
+}
+
+func TestParserAndPathHelpers(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     any
+		readable bool
+		path     string
+	}{
+		{name: "file body", body: "$file('knowledge/guide.md')", readable: true, path: "knowledge/guide.md"},
+		{name: "inline body", body: "Some inline text", readable: true},
+		{name: "unreadable expression", body: "$var('body')", readable: false},
+		{name: "non-string body", body: 3, readable: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := parseBody(test.body)
+			if got.Readable != test.readable || got.Path != test.path {
+				t.Fatalf("parseBody() = %#v", got)
+			}
+		})
+	}
+	if path, ok := parseFilePath("$file('shape.json') |> $json()"); !ok || path != "shape.json" {
+		t.Fatalf("parseFilePath() = %q,%v", path, ok)
+	}
+	for _, raw := range []any{"$file('shape.json')", "$file('shape.json') |> $trim()", 4} {
+		if _, ok := parseFilePath(raw); ok {
+			t.Errorf("parseFilePath(%v) unexpectedly succeeded", raw)
+		}
+	}
+	if baseTable("dev_simple_system.agent") != "agent" || baseTable("knowledge") != "knowledge" {
+		t.Fatal("baseTable() failed")
+	}
+	if findRecordLine([]byte("set agent, right {}\n"), "dev_simple_system.agent", "right") != 1 {
+		t.Fatal("findRecordLine() missed a prefixed/bare table match")
+	}
+	if findRecordLine([]byte("set agent, other {}\n"), "agent", "right") != 0 {
+		t.Fatal("findRecordLine() matched a missing key")
+	}
+	if str(7) != "" || num(float64(4)) != 4 || num(5) != 5 || num(json.Number("6")) != 6 || num("bad") != 0 || boolValue(true) != true || boolValue("true") {
+		t.Fatal("scalar helpers did not preserve parsed values")
+	}
+	if first("", "second", "third") != "second" || first() == "x" {
+		t.Fatal("first() failed")
+	}
+	if _, ok := resolveRecord(map[string]record{}, Reference{Key: "missing", Readable: true}); ok {
+		t.Fatal("resolveRecord() found a missing record")
+	}
+	if _, ok := resolveRecord(nil, Reference{Key: "missing"}); ok {
+		t.Fatal("resolveRecord() accepted an unreadable reference")
+	}
+	if !sameFile("apps/com.acme.shop/records/a.scl", "records/a.scl", "/repo/apps/com.acme.shop", "/repo") {
+		t.Fatal("sameFile() missed an app-relative path")
+	}
+	if !sameFile("apps/com.acme.shop/records/a.scl", "/repo/apps/com.acme.shop/records/a.scl", "/repo/apps/com.acme.shop", "/repo") {
+		t.Fatal("sameFile() missed an absolute repository path")
+	}
+	if sameFile("apps/com.acme.shop/records/a.scl", "/other/records/a.scl", "/repo/apps/com.acme.shop", "/repo") {
+		t.Fatal("sameFile() matched an unrelated absolute path")
+	}
+}
+
+func TestStatesFileAbsentAndCheckLoadError(t *testing.T) {
+	a := &App{}
+	if _, ok := a.StatesFile(); ok {
+		t.Fatal("StatesFile() succeeded without a kind of work")
+	}
+	old := parseSCL
+	parseSCL = func(string) ([]byte, error) { return nil, errors.New("refused") }
+	t.Cleanup(func() { parseSCL = old })
+	if _, err := Check(fixtureFS(t), fixtureRepoRoot, fixtureAppID); err == nil || !strings.Contains(err.Error(), "records/all.scl") {
+		t.Fatalf("Check() error = %v", err)
+	}
+}
+
+func TestCheckReadFailuresAndMarkerLineTrimming(t *testing.T) {
+	oldParser := parseSCL
+	parseSCL = func(string) ([]byte, error) { return parserFixture(t), nil }
+	t.Cleanup(func() { parseSCL = oldParser })
+	f := fixtureFS(t)
+	longLine := "  " + Marker + strings.Repeat("x", 140)
+	f.put("knowledge/skill-refund-policy.md", []byte(longLine))
+	a, err := Load(f, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	problems, err := a.check(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, problem := range problems {
+		if strings.Contains(problem.Rule, "still holds a line") {
+			line := strings.Split(problem.Rule, `"`)[3]
+			if len([]rune(line)) != 100 {
+				t.Fatalf("marker quote length = %d", len([]rune(line)))
+			}
+			break
+		}
+	}
+	f = fixtureFS(t)
+	f.readErr[filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "knowledge/support-persona.md")] = errors.New("body read failed")
+	a, err = Load(f, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.check(f); err == nil || !strings.Contains(err.Error(), "failed to read apps/com.acme.shop/knowledge/support-persona.md") {
+		t.Fatalf("check marker read error = %v", err)
+	}
+	f = fixtureFS(t)
+	f.readErr[filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "actions/find-order/action.json")] = errors.New("action read failed")
+	a, err = Load(f, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.check(f); err == nil || !strings.Contains(err.Error(), "failed to read apps/com.acme.shop/actions/find-order/action.json") {
+		t.Fatalf("action read error = %v", err)
+	}
+	f = fixtureFS(t)
+	f.readDirErr[filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, "knowledge")] = errors.New("directory read failed")
+	a, err = Load(f, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = a.check(f); err == nil || !strings.Contains(err.Error(), "failed to list apps/com.acme.shop/knowledge") {
+		t.Fatalf("marker directory error = %v", err)
+	}
+	if markerFile("unknown", "file.scl") || markerFile("actions", "actions/a/action.json") || markerFile("records", "records/readme.txt") || markerFile("knowledge", "knowledge/readme.txt") {
+		t.Fatal("markerFile() accepted a file outside the marker rules")
+	}
+}
+
+func loadFixtureModel(t *testing.T) *App {
+	t.Helper()
+	old := parseSCL
+	parseSCL = func(string) ([]byte, error) { return parserFixture(t), nil }
+	t.Cleanup(func() { parseSCL = old })
+	a, err := Load(fixtureFS(t), fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a
+}
+
+func fixtureFS(t *testing.T) *memoryFS {
+	t.Helper()
+	f := newMemoryFS()
+	f.put("records/all.scl", fixtureSource(t))
+	f.put("records/task-types/returns.json", []byte(`{"input":{},"output":{}}`))
+	f.put("records/task-types/states.json", []byte(`{"queued":true,"working":true,"waiting_for_user":true,"waiting_for_event":true,"completed":true,"cancelled":true,"failed":true}`))
+	f.put("knowledge/support-persona.md", []byte("# Persona\nBe useful.\n"))
+	f.put("knowledge/returns-playbook.md", []byte("# Playbook\nFollow steps.\n"))
+	f.put("knowledge/skill-refund-policy.md", []byte("# Skill\nUse carefully.\n"))
+	f.put("knowledge/tool-find-order.md", []byte("# Tool lesson\nFind a record.\n"))
+	f.put("actions/find-order/action.json", []byte(`{"ai":{"tool":true}}`))
+	f.put("actions/find-order/src/main.ts", []byte("export {};\n"))
+	return f
+}
+
+func removeSkill(items []*TaskTypeSkillLink, key string) []*TaskTypeSkillLink {
+	result := items[:0]
+	for _, item := range items {
+		if item.KnowledgeRef.Key != key {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+func problemContains(items []Problem, part string) bool {
+	for _, item := range items {
+		if strings.Contains(item.Rule, part) {
+			return true
+		}
+	}
+	return false
+}
+func problemAt(items []Problem, file string, line int, part string) bool {
+	for _, item := range items {
+		if item.File == file && item.Line == line && strings.Contains(item.Rule, part) {
+			return true
+		}
+	}
+	return false
+}
+func countRule(items []Problem, part string) int {
+	total := 0
+	for _, item := range items {
+		if strings.Contains(item.Rule, part) {
+			total++
+		}
+	}
+	return total
+}
+
+type memoryFS struct {
+	files      map[string][]byte
+	readErr    map[string]error
+	readDirErr map[string]error
+}
+
+func newMemoryFS() *memoryFS {
+	return &memoryFS{files: map[string][]byte{}, readErr: map[string]error{}, readDirErr: map[string]error{}}
+}
+func (f *memoryFS) path(name string) string { return filepath.Clean(name) }
+func (f *memoryFS) put(name string, data []byte) {
+	f.files[f.path(filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, name))] = append([]byte(nil), data...)
+}
+func (f *memoryFS) delete(name string) {
+	delete(f.files, f.path(filepath.Join(fixtureRepoRoot, "apps", fixtureAppID, name)))
+}
+func (f *memoryFS) Stat(name string) (fs.FileInfo, error) {
+	name = f.path(name)
+	if _, ok := f.files[name]; ok {
+		return fakeInfo(filepath.Base(name), false), nil
+	}
+	for file := range f.files {
+		if strings.HasPrefix(file, name+string(filepath.Separator)) {
+			return fakeInfo(filepath.Base(name), true), nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+func (f *memoryFS) MkdirAll(string, os.FileMode) error { return nil }
+func (f *memoryFS) WriteFile(name string, data []byte, _ os.FileMode) error {
+	f.files[f.path(name)] = append([]byte(nil), data...)
+	return nil
+}
+func (f *memoryFS) ReadFile(name string) ([]byte, error) {
+	name = f.path(name)
+	if err := f.readErr[name]; err != nil {
+		return nil, err
+	}
+	data, ok := f.files[name]
+	if !ok {
+		return nil, os.ErrNotExist
+	}
+	return append([]byte(nil), data...), nil
+}
+func (f *memoryFS) ReadDir(name string) ([]os.DirEntry, error) {
+	name = f.path(name)
+	if err := f.readDirErr[name]; err != nil {
+		return nil, err
+	}
+	children := map[string]bool{}
+	for file := range f.files {
+		if !strings.HasPrefix(file, name+string(filepath.Separator)) {
+			continue
+		}
+		rest := strings.TrimPrefix(file, name+string(filepath.Separator))
+		part := strings.SplitN(rest, string(filepath.Separator), 2)
+		children[part[0]] = len(part) > 1
+	}
+	if len(children) == 0 {
+		return nil, os.ErrNotExist
+	}
+	names := make([]string, 0, len(children))
+	for child := range children {
+		names = append(names, child)
+	}
+	sort.Strings(names)
+	result := make([]os.DirEntry, 0, len(names))
+	for _, child := range names {
+		result = append(result, fakeEntry{name: child, dir: children[child]})
+	}
+	return result, nil
+}
+func (f *memoryFS) Remove(name string) error { delete(f.files, f.path(name)); return nil }
+
+type fakeEntry struct {
+	name string
+	dir  bool
+}
+
+func (f fakeEntry) Name() string { return f.name }
+func (f fakeEntry) IsDir() bool  { return f.dir }
+func (f fakeEntry) Type() fs.FileMode {
+	if f.dir {
+		return fs.ModeDir
+	}
+	return 0
+}
+func (f fakeEntry) Info() (fs.FileInfo, error) { return fakeInfo(f.name, f.dir), nil }
+
+type fakeFileInfo struct {
+	name string
+	dir  bool
+}
+
+func fakeInfo(name string, dir bool) fs.FileInfo { return fakeFileInfo{name: name, dir: dir} }
+func (f fakeFileInfo) Name() string              { return f.name }
+func (f fakeFileInfo) Size() int64               { return 0 }
+func (f fakeFileInfo) Mode() os.FileMode {
+	if f.dir {
+		return os.ModeDir | 0755
+	}
+	return 0644
+}
+func (f fakeFileInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeFileInfo) IsDir() bool        { return f.dir }
+func (f fakeFileInfo) Sys() any           { return nil }
