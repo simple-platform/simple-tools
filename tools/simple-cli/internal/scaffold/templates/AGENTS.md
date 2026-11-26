@@ -79,6 +79,7 @@ Use these commands to build and deploy your work.
 >
 > - Schema/configuration: `data-modeling`, `data-seeding`, `configure-metadata`.
 > - Actions/Behaviors: `develop-logic`, `sdk-reference`, `testing`.
+> - Agents: `build-agents` and `.simple/context/13-agents.md`.
 > - Queries: `query-data`; expression details: `scl-expressions`.
 > - UI: `create-view`; custom Spaces: `build-spaces` + `space-frontend-design`;
 >   record composition: `record-space-builder`.
@@ -142,6 +143,7 @@ Consult these documents for detailed syntax and behavior.
 - [Record Behaviors](./.simple/context/08-record-behaviors.md) - Client/Form Logic
 - [SDK Reference](./.simple/context/11-sdk-reference.md) - TypeScript API (`@simpleplatform/sdk`)
 - [Tasks](./.simple/context/12-tasks.md) - Task types, creating tasks, `start_after` scheduling, `read-task-output`
+- [Agents](./.simple/context/13-agents.md) - Agents, kinds of work, tools, skills, and build checks
 
 **UI Layer**
 
@@ -166,6 +168,11 @@ Consult these documents for detailed syntax and behavior.
 
 - **Ref:** `.agent/workflows/add-logic.md`
 - Decision tree for implementing Record Behaviors, Triggers, and Actions.
+
+### 🤖 Recipe: Create an Agent
+
+- **Ref:** `.agent/workflows/create-agent.md`
+- Create an agent, its kinds of work, tools, playbooks, and skills.
 
 ### 🚀 Recipe: Deploy Application
 

@@ -18,6 +18,10 @@ A Simple Platform monorepo.
 | :----------------------------------------------- | :---------------------------------- |
 | `simple new app <app> <name>`                    | Create a new application            |
 | `simple new action <app> <name> --lang ts\|rust` | Scaffold a new Action               |
+| `simple new agent <app> <name> <display-name>`    | Create an agent and persona         |
+| `simple new task-type <app> <name> <plural-name>` | Create a kind of work               |
+| `simple new tool <app> <name> --task-type <type>` | Add a tool to a kind of work        |
+| `simple new skill <app> <name> --task-type <type>` | Add a skill to a kind of work       |
 | `simple build <app>`                             | Build all Actions in an app         |
 | `simple deploy <app>`                            | Deploy application (Schema + Logic) |
 

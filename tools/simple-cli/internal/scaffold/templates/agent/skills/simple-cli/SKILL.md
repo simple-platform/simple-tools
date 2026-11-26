@@ -38,6 +38,92 @@ tests as written.
   - `--env <string>`: Execution environment (`server`, `client`, `both`). Defaults to `server`.
   - `--desc <string>`: Description of the logic.
 
+### `simple new agent`
+
+Create an agent and its persona file and knowledge record.
+
+- **Usage:** `simple new agent <app-id> <name> "<Display name>" [--desc <description>] [--json]`
+- **Args:**
+  - `<app-id>`: Existing target app.
+  - `<name>`: Lowercase name using letters, digits, and hyphens; it starts with a letter.
+  - `<Display name>`: Required, one line, no double quote, up to 100 characters.
+- **Flags:**
+  - `--desc <description>`: Optional description, one line, no double quote, up to 1,000 characters.
+  - `--json`: Use the root JSON output format.
+
+The command reports files that need their TODO lines completed. It refuses an existing agent and does not duplicate records on a retry.
+
+### `simple new task-type`
+
+Create a kind of work for an agent or for people. Agent-owned work gets `knowledge/playbook-<kind-of-work>.md`, input and output shapes, a default agent, and tool links.
+
+- **Usage:** `simple new task-type <app-id> <name> "<Plural name>" [--agent <agent-name>] [--tools a,b] [--every <duration>] [--no-agent] [--desc <description>] [--json]`
+- **Args:**
+  - `<app-id>`: Existing target app.
+  - `<name>`: Lowercase name using letters, digits, hyphens, or underscores; it starts with a letter.
+  - `<Plural name>`: Required, one line, no double quote, up to 100 characters.
+- **Flags:**
+  - `--agent <agent-name>`: Default agent. May be omitted only when the app has exactly one agent.
+  - `--tools a,b`: Comma-separated known platform tools or existing app actions.
+  - `--every <duration>`: Optional interval such as `90s`, `30m`, or `1h`; whole seconds, at least one second.
+  - `--no-agent`: Create work only people do. It creates the kind-of-work record, shape file, and states file. It creates no playbook, agent link, or carried links. Do not combine this flag with `--agent`, `--tools`, or `--every`.
+  - `--desc <description>`: Optional description, one line, no double quote, up to 1,000 characters.
+  - `--json`: Use the root JSON output format.
+
+If the kind of work exists, use `simple new skill` or `simple new tool` to add to it. If a tool is not known, create it with `simple new tool`. Interval work needs a tool that reports changes since its last turn.
+
+For a free-text answer, set the shape file's `output` to `null` or leave that field out. The build treats both the same way.
+
+### `simple new skill`
+
+Create a skill and link it to a kind of work, or add a missing link for an existing skill.
+
+- **Usage:** `simple new skill <app-id> <name> ["<Title>"] --task-type <task-type-name> [--desc <description>] [--json]`
+- **Args:**
+  - `<app-id>`: Existing target app.
+  - `<name>`: Lowercase name using letters, digits, and hyphens; it starts with a letter.
+  - `<Title>`: Required for a new skill, one line, no double quote, up to 255 characters. Omit for an existing skill.
+- **Flags:**
+  - `--task-type <task-type-name>`: Required kind of work to receive the skill.
+  - `--desc <description>`: Optional description; for a new skill this becomes its Purpose paragraph.
+  - `--json`: Use the root JSON output format.
+
+New skills need the eight sections in order: Purpose, When To Use, Required Context, Procedure, Good Examples, Bad Examples And Why, Error Recovery, Completion Checklist. Keep the generated `Slug:` line. Do not put scripts, queries, or code in a skill.
+
+### `simple new knowledge`
+
+Create reference knowledge and link it to a kind of work, or add a missing link for an existing body.
+
+- **Usage:** `simple new knowledge <app-id> <name> ["<Title>"] --task-type <task-type-name> [--json]`
+- **Args:**
+  - `<app-id>`: Existing target app.
+  - `<name>`: Lowercase name using letters, digits, and hyphens; it starts with a letter. It must not start with `skill-`, `tool-`, or `playbook-`.
+  - `<Title>`: Required for a new body; omit it for an existing body. One line, no double quote, up to 255 characters.
+- **Flags:**
+  - `--task-type <task-type-name>`: Required kind of work to receive the knowledge.
+  - `--json`: Use the root JSON output format.
+
+The command creates `knowledge/<name>.md` with a title line and a `TODO(simple):` line, its knowledge record, and a link at the next position. Reference knowledge is plain written material for the agent to read, such as a list of terms or standing answers. It has no required sections. Use a skill for a way of working; skills have the eight sections above. An existing body gets only a missing link. If both already exist, the command succeeds and says there was nothing to add.
+
+### `simple new tool`
+
+Set up a tool and its lesson. Optionally link an app action to a kind of work.
+
+- **Usage:** `simple new tool <app-id> <name> ["<Display name>"] [--task-type <task-type-name>] [--lang ts|rust] [--scope <org>] [--env <env>] [--desc <description>] [--json]`
+- **Args:**
+  - `<app-id>`: Existing target app.
+  - `<name>`: Platform tool or app action name; an unknown name can be created as a new action.
+  - `<Display name>`: Optional for a known platform tool or action; required for a new action. One line, no double quote, up to 100 characters.
+- **Flags:**
+  - `--task-type <task-type-name>`: Optional kind of work to receive the tool. A platform tool requires this flag.
+  - `--lang <string>`: Language for a new action (`ts`, `rust`); defaults to `ts`.
+  - `--scope <string>`: NPM package scope; required for a new TypeScript action and unused for Rust.
+  - `--env <string>`: New action environment (`server`, `client`, `both`); defaults to `server`.
+  - `--desc <description>`: Optional one-line description, no double quote, up to 1,000 characters.
+  - `--json`: Use the root JSON output format.
+
+Without `--task-type`, the command sets up the tool and its lesson without linking it to a kind of work. A platform tool without `--task-type` is refused because there is no app action to set up. An unknown name without a display name is refused with the command needed to create it. A tool lesson uses the eight sections listed for `simple new skill` and says what the tool takes, refuses, and returns. Do not put scripts, queries, or code in a lesson.
+
 ### `simple new behavior`
 
 Create a client-side record behavior script.
@@ -125,7 +211,11 @@ Compile all SCL files, Actions (WASM), and Spaces (Vite/React).
 - **Flags:**
   - `--all`: Build all actions in all apps.
   - `--concurrency <int>`: Number of parallel builds (default: 4).
-- **Description:** Validates schema integrity, transpiles TypeScript to WASM, and bundles spaces.
+- **Description:** Validates schema integrity, transpiles TypeScript to WASM, bundles spaces, and checks agent guidance for app or all-app builds. A single action or space build does not run agent checks. An app with agent records and no actions or spaces is still a valid build target.
+
+The marker scan reports each `TODO(simple):` line in `knowledge/**/*.md`, `records/**/*.scl`, `records/**/*.json`, and app action sources under `actions/*/src/**`. Wiring and structure checks run when an app has an agent or kind-of-work record. A kind of work with no linked agent is left out of the default-agent, playbook, and carried-link checks. Other kinds of work need exactly one default agent, a playbook, and links to both the agent's persona and playbook. Every shape needs an object `input`; `output` may be an object, `null`, or absent. Referenced state files must name all seven standard states. Tool links must point to known platform tools or app actions marked as tools, and every app action marked as a tool needs a lesson.
+
+The build checks a carried body as a skill only when its file name starts with `skill-` or it contains a `Slug:` line. The file name and slug must agree; a `skill-` file without a `Slug:` line is a problem. Other carried bodies are reference knowledge and only need non-empty, valid text. Every tool lesson gets the full skill check. Problems show the file, line, and rule to fix. `simple deploy` runs the same checks before it collects files.
 
 ### `simple install`
 
