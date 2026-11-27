@@ -43,6 +43,16 @@ func DocumentationFiles(tplFS fsx.TemplateFS) ([]DocumentationFile, error) {
 			return nil, err
 		}
 	}
+	for _, rootCopy := range [][2]string{
+		{"templates/AGENTS.md", ".simple/context/AGENTS.template.md"},
+		{"templates/cursorrules", ".simple/context/cursorrules.template"},
+	} {
+		content, err := tplFS.ReadFile(rootCopy[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to read root guidance template %s: %w", rootCopy[0], err)
+		}
+		files = append(files, DocumentationFile{Path: rootCopy[1], Content: content})
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
 }

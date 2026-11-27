@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -46,8 +47,16 @@ func init() {
 	docsCmd.AddCommand(docsUpdateCmd)
 }
 
+// docsUpdateFS adds the two link-aware reads the update needs to keep every
+// write and removal inside the repository.
+type docsUpdateFS interface {
+	fsx.FileSystem
+	EvalSymlinks(name string) (string, error)
+	Lstat(name string) (fs.FileInfo, error)
+}
+
 type docsUpdateDeps struct {
-	fsys       fsx.FileSystem
+	fsys       docsUpdateFS
 	templates  fsx.TemplateFS
 	cwd        string
 	cliVersion string
@@ -57,7 +66,6 @@ type docsUpdateResult struct {
 	Updated         []string `json:"updated"`
 	Removed         []string `json:"removed"`
 	RemovalFailures []string `json:"removalFailures,omitempty"`
-	Differs         []string `json:"differs"`
 	UpToDate        bool     `json:"upToDate"`
 }
 
@@ -67,6 +75,10 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 		return fmt.Errorf("run simple docs update inside a repository made with simple init")
 	}
 	root = filepath.Dir(root)
+	realRoot, err := deps.fsys.EvalSymlinks(root)
+	if err != nil {
+		return fmt.Errorf("failed to find the repository's real location, so simple docs update changed nothing: %w", err)
+	}
 
 	files, err := scaffold.DocumentationFiles(deps.templates)
 	if err != nil {
@@ -75,28 +87,46 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 	fingerprint := scaffold.FingerprintDocumentationFiles(files)
 
 	stampPath := filepath.Join(root, ".simple", "docs.json")
-	oldStamp, stampErr := deps.fsys.ReadFile(stampPath)
-	if stampErr != nil && !os.IsNotExist(stampErr) {
-		return fmt.Errorf("failed to read documentation stamp: %w", stampErr)
+	if err := ensureDocumentationPath(deps.fsys, realRoot, root, ".simple/docs.json"); err != nil {
+		return err
+	}
+	oldStamp, err := deps.fsys.ReadFile(stampPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read documentation stamp: %w", err)
 	}
 	var previous scaffold.DocumentationStamp
-	if stampErr == nil {
-		_ = json.Unmarshal(oldStamp, &previous)
+	stampReadable := err == nil && json.Unmarshal(oldStamp, &previous) == nil
+	if !stampReadable {
+		previous = scaffold.DocumentationStamp{}
+	}
+	if documentationStampIsNewer(previous.CLIVersion, deps.cliVersion) {
+		return fmt.Errorf("this repository's docs were written by simple %s, which is newer than this one (%s). Run simple version update, then run simple docs update again", previous.CLIVersion, deps.cliVersion)
 	}
 
 	shipped := make(map[string]bool, len(files))
-	for _, file := range files {
+	shippedPaths := make([]string, len(files))
+	for i, file := range files {
 		shipped[file.Path] = true
+		shippedPaths[i] = file.Path
 	}
-	result := docsUpdateResult{Updated: []string{}, Removed: []string{}, RemovalFailures: []string{}, Differs: []string{}}
-	oldPaths := append([]string(nil), previous.Files...)
-	sort.Strings(oldPaths)
-	for _, oldPath := range oldPaths {
-		if !managedDocumentationPath(oldPath) || shipped[oldPath] {
-			continue
+	var removable []string
+	for _, oldPath := range previous.Files {
+		if managedDocumentationPath(oldPath) && !shipped[oldPath] {
+			removable = append(removable, oldPath)
 		}
+	}
+	sort.Strings(removable)
+	// Check every path before changing any, so a refusal leaves the repository as it was.
+	for _, rel := range slices.Concat(removable, shippedPaths) {
+		if err := ensureDocumentationPath(deps.fsys, realRoot, root, rel); err != nil {
+			return err
+		}
+	}
+
+	result := docsUpdateResult{Updated: []string{}, Removed: []string{}, RemovalFailures: []string{}}
+	for _, oldPath := range removable {
 		destination := filepath.Join(root, filepath.FromSlash(oldPath))
-		info, err := deps.fsys.Stat(destination)
+		info, err := deps.fsys.Lstat(destination)
 		if err != nil {
 			if os.IsNotExist(err) {
 				continue
@@ -104,12 +134,8 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 			result.RemovalFailures = append(result.RemovalFailures, oldPath)
 			continue
 		}
-		isSymlink, err := documentationPathIsSymlink(deps.fsys, destination)
-		if err != nil {
-			result.RemovalFailures = append(result.RemovalFailures, oldPath)
-			continue
-		}
-		if isSymlink || !info.Mode().IsRegular() {
+		// A link is never removed, nor a folder: only a regular file the tool once shipped.
+		if !info.Mode().IsRegular() {
 			continue
 		}
 		if err := deps.fsys.Remove(destination); err != nil {
@@ -137,35 +163,11 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 		result.Updated = append(result.Updated, file.Path)
 	}
 
-	for _, rootFile := range []struct {
-		path     string
-		template string
-	}{
-		{path: "AGENTS.md", template: "templates/AGENTS.md"},
-		{path: ".cursorrules", template: "templates/cursorrules"},
-	} {
-		expected, err := deps.templates.ReadFile(rootFile.template)
-		if err != nil {
-			return fmt.Errorf("failed to read root guidance template %s: %w", rootFile.template, err)
-		}
-		current, err := deps.fsys.ReadFile(filepath.Join(root, filepath.FromSlash(rootFile.path)))
-		if err != nil {
-			if os.IsNotExist(err) {
-				result.Differs = append(result.Differs, rootFile.path)
-				continue
-			}
-			return fmt.Errorf("failed to read root guidance %s: %w", rootFile.path, err)
-		}
-		if !bytes.Equal(current, expected) {
-			result.Differs = append(result.Differs, rootFile.path)
-		}
-	}
-
 	stamp, err := scaffold.MarshalDocumentationStamp(fingerprint, deps.cliVersion, files)
 	if err != nil {
 		return err
 	}
-	if stampErr != nil || !bytes.Equal(oldStamp, stamp) {
+	if !stampReadable || previous.Fingerprint != fingerprint || !slices.Equal(previous.Files, shippedPaths) {
 		if err := deps.fsys.MkdirAll(filepath.Dir(stampPath), fsx.DirPerm); err != nil {
 			return fmt.Errorf("failed to create documentation stamp directory: %w", err)
 		}
@@ -175,7 +177,7 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 		result.Updated = append(result.Updated, ".simple/docs.json")
 	}
 
-	result.UpToDate = len(result.Updated) == 0 && len(result.Removed) == 0 && len(result.RemovalFailures) == 0 && len(result.Differs) == 0
+	result.UpToDate = len(result.Updated) == 0 && len(result.Removed) == 0 && len(result.RemovalFailures) == 0
 	if jsonMode {
 		return printJSONTo(out, result)
 	}
@@ -192,39 +194,53 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 	for _, name := range result.RemovalFailures {
 		_, _ = fmt.Fprintf(out, "Could not remove %s\n", name)
 	}
-	for _, name := range result.Differs {
-		_, _ = fmt.Fprintf(out, "%s differs from the current template. Compare it by hand; it was not changed.\n", name)
+	_, _ = fmt.Fprintln(out, docsUpdateSummary(len(result.Updated), len(result.Removed)))
+	for _, name := range result.Updated {
+		if name == ".simple/context/AGENTS.template.md" || name == ".simple/context/cursorrules.template" {
+			_, _ = fmt.Fprintln(out, "AGENTS.md and .cursorrules are your team's own files and were not changed. Current templates are in .simple/context/AGENTS.template.md and .simple/context/cursorrules.template.")
+			break
+		}
 	}
-	_, _ = fmt.Fprintln(out, docsUpdateSummary(len(result.Updated), len(result.Removed), len(result.Differs)))
 	return nil
 }
 
-func documentationPathIsSymlink(fsys fsx.FileSystem, name string) (bool, error) {
-	entries, err := fsys.ReadDir(filepath.Dir(name))
-	if err != nil {
-		return false, err
-	}
-	for _, entry := range entries {
-		if entry.Name() != filepath.Base(name) {
-			continue
-		}
-		if entry.Type()&fs.ModeSymlink != 0 {
-			return true, nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return false, err
-		}
-		return info.Mode()&fs.ModeSymlink != 0, nil
-	}
-	return false, nil
+func documentationStampIsNewer(stampVersion, runningVersion string) bool {
+	stamp, stampIsRelease := selfupdate.ParseVersion(stampVersion)
+	running, runningIsRelease := selfupdate.ParseVersion(runningVersion)
+	return stampIsRelease && runningIsRelease && stamp.NewerThan(running)
 }
 
-func docsUpdateSummary(updated, removed, differs int) string {
-	return fmt.Sprintf("Summary: updated %s, removed %s, %s.",
+// ensureDocumentationPath refuses a guidance path whose real location is not
+// inside the repository, so a link can never lead a write or a removal
+// elsewhere. A path that does not exist yet is judged by the folder it would be
+// created in. A link that leads nowhere is refused, since writing to it would
+// create its target wherever it points.
+func ensureDocumentationPath(fsys docsUpdateFS, realRoot, root, rel string) error {
+	for candidate := filepath.Join(root, filepath.FromSlash(rel)); ; candidate = filepath.Dir(candidate) {
+		resolved, err := fsys.EvalSymlinks(candidate)
+		if err == nil {
+			if pathIsWithinRoot(realRoot, resolved) {
+				return nil
+			}
+			break
+		}
+		_, lstatErr := fsys.Lstat(candidate)
+		if !os.IsNotExist(err) || !os.IsNotExist(lstatErr) || filepath.Dir(candidate) == candidate {
+			break
+		}
+	}
+	return fmt.Errorf("%s leads outside this repository or to nothing, so simple docs update changed nothing; replace the link with a folder or file inside the repository", rel)
+}
+
+func pathIsWithinRoot(root, name string) bool {
+	relative, err := filepath.Rel(root, name)
+	return err == nil && relative != ".." && !filepath.IsAbs(relative) && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func docsUpdateSummary(updated, removed int) string {
+	return fmt.Sprintf("Summary: updated %s, removed %s.",
 		pluralFiles(updated),
 		pluralFiles(removed),
-		pluralRootFiles(differs),
 	)
 }
 
@@ -233,13 +249,6 @@ func pluralFiles(count int) string {
 		return "1 file"
 	}
 	return fmt.Sprintf("%d files", count)
-}
-
-func pluralRootFiles(count int) string {
-	if count == 1 {
-		return "1 root file differs"
-	}
-	return fmt.Sprintf("%d root files differ", count)
 }
 
 func managedDocumentationPath(name string) bool {
@@ -277,8 +286,10 @@ func announceDocsUpdateTo(out io.Writer, version string, jsonMode, errIsTerminal
 	}
 	stamp, err := fsys.ReadFile(filepath.Join(filepath.Dir(rootMarker), ".simple", "docs.json"))
 	var recorded scaffold.DocumentationStamp
-	if err == nil && json.Unmarshal(stamp, &recorded) == nil && recorded.Fingerprint == fingerprint {
-		return
+	if err == nil && json.Unmarshal(stamp, &recorded) == nil {
+		if documentationStampIsNewer(recorded.CLIVersion, version) || recorded.Fingerprint == fingerprint {
+			return
+		}
 	}
 	_, _ = fmt.Fprint(out, docsUpdateNotice)
 }

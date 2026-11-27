@@ -4,6 +4,8 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -33,6 +35,38 @@ func (m *MockFileSystem) Stat(name string) (fs.FileInfo, error) {
 	}
 	// Return os.ErrNotExist if file not found
 	return nil, os.ErrNotExist
+}
+
+// Lstat reports mock file or inferred directory information without following
+// links. The plain mock has no links; specialized test filesystems can provide
+// them by overriding this method.
+func (m *MockFileSystem) Lstat(name string) (fs.FileInfo, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if m.StatErr != nil {
+		return nil, m.StatErr
+	}
+	clean := filepath.Clean(name)
+	if _, ok := m.Files[clean]; ok {
+		return &mockFileInfo{name: filepath.Base(clean)}, nil
+	}
+	for file := range m.Files {
+		if strings.HasPrefix(filepath.Clean(file), clean+string(filepath.Separator)) {
+			return &mockFileInfo{name: filepath.Base(clean), isDir: true}, nil
+		}
+	}
+	return nil, os.ErrNotExist
+}
+
+// EvalSymlinks returns the clean mock path when it exists. The plain mock has
+// no links; specialized test filesystems can provide link resolution by
+// overriding this method.
+func (m *MockFileSystem) EvalSymlinks(name string) (string, error) {
+	if _, err := m.Lstat(name); err != nil {
+		return "", err
+	}
+	return filepath.Clean(name), nil
 }
 
 func (m *MockFileSystem) MkdirAll(path string, perm os.FileMode) error {
@@ -113,9 +147,14 @@ type mockFileInfo struct {
 	isDir bool
 }
 
-func (m *mockFileInfo) Name() string       { return m.name }
-func (m *mockFileInfo) Size() int64        { return 0 }
-func (m *mockFileInfo) Mode() os.FileMode  { return 0755 }
+func (m *mockFileInfo) Name() string { return m.name }
+func (m *mockFileInfo) Size() int64  { return 0 }
+func (m *mockFileInfo) Mode() os.FileMode {
+	if m.isDir {
+		return os.ModeDir | 0755
+	}
+	return 0644
+}
 func (m *mockFileInfo) ModTime() time.Time { return time.Time{} }
 func (m *mockFileInfo) IsDir() bool        { return m.isDir }
 func (m *mockFileInfo) Sys() any           { return nil }

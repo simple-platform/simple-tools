@@ -74,6 +74,171 @@ type docsRemovalFS struct {
 	removeFailurePath string
 }
 
+type docsRootAccessFS struct {
+	*fsx.MockFileSystem
+	accessed []string
+}
+
+type docsMappedFS struct {
+	*fsx.MockFileSystem
+	links         map[string]string
+	dirs          map[string]bool
+	writes        []string
+	reads         []string
+	evalErrorPath string
+}
+
+func newDocsMappedFS(base *fsx.MockFileSystem) *docsMappedFS {
+	return &docsMappedFS{
+		MockFileSystem: base,
+		links:          make(map[string]string),
+		dirs: map[string]bool{
+			"/repo": true, "/repo/.simple": true, "/repo/.simple/context": true,
+			"/repo/.agent": true, "/repo/inside-agent": true,
+			"/outside": true, "/outside/agent": true,
+		},
+	}
+}
+
+func (f *docsMappedFS) mapped(name string) (string, error) {
+	mapped := filepath.Clean(name)
+	seen := make(map[string]bool)
+	for attempt := 0; attempt <= len(f.links); attempt++ {
+		parts := strings.Split(strings.TrimPrefix(mapped, string(filepath.Separator)), string(filepath.Separator))
+		prefix := string(filepath.Separator)
+		changed := false
+		for i, part := range parts {
+			prefix = filepath.Join(prefix, part)
+			if target, ok := f.links[prefix]; ok {
+				if seen[prefix] {
+					return "", fs.ErrInvalid
+				}
+				seen[prefix] = true
+				mapped = filepath.Join(append([]string{target}, parts[i+1:]...)...)
+				changed = true
+				break
+			}
+		}
+		if !changed {
+			return mapped, nil
+		}
+	}
+	return "", fs.ErrInvalid
+}
+
+func (f *docsMappedFS) exists(name string) (bool, bool) {
+	if f.dirs[name] {
+		return true, true
+	}
+	if _, ok := f.Files[name]; ok {
+		return true, false
+	}
+	for file := range f.Files {
+		if strings.HasPrefix(file, name+string(filepath.Separator)) {
+			return true, true
+		}
+	}
+	for dir := range f.dirs {
+		if strings.HasPrefix(dir, name+string(filepath.Separator)) {
+			return true, true
+		}
+	}
+	return false, false
+}
+
+func (f *docsMappedFS) EvalSymlinks(name string) (string, error) {
+	if name == f.evalErrorPath {
+		return "", fs.ErrPermission
+	}
+	mapped, err := f.mapped(name)
+	if err != nil {
+		return "", err
+	}
+	if exists, _ := f.exists(mapped); !exists {
+		return "", fs.ErrNotExist
+	}
+	return mapped, nil
+}
+
+func (f *docsMappedFS) Lstat(name string) (fs.FileInfo, error) {
+	name = filepath.Clean(name)
+	if _, ok := f.links[name]; ok {
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeSymlink | 0777}, nil
+	}
+	mapped, err := f.mapped(name)
+	if err != nil {
+		return nil, err
+	}
+	exists, isDir := f.exists(mapped)
+	if !exists {
+		return nil, fs.ErrNotExist
+	}
+	if isDir {
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeDir | 0755}, nil
+	}
+	return docsTestFileInfo{name: filepath.Base(name), mode: 0644}, nil
+}
+
+func (f *docsMappedFS) Stat(name string) (fs.FileInfo, error) {
+	mapped, err := f.mapped(name)
+	if err != nil {
+		return nil, err
+	}
+	if exists, isDir := f.exists(mapped); exists && isDir {
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeDir | 0755}, nil
+	}
+	return f.MockFileSystem.Stat(mapped)
+}
+
+func (f *docsMappedFS) MkdirAll(name string, perm os.FileMode) error {
+	mapped, err := f.mapped(name)
+	if err != nil {
+		return err
+	}
+	f.dirs[mapped] = true
+	return f.MockFileSystem.MkdirAll(mapped, perm)
+}
+
+func (f *docsMappedFS) ReadFile(name string) ([]byte, error) {
+	mapped, err := f.mapped(name)
+	if err != nil {
+		return nil, err
+	}
+	f.reads = append(f.reads, mapped)
+	return f.MockFileSystem.ReadFile(mapped)
+}
+
+func (f *docsMappedFS) WriteFile(name string, data []byte, perm os.FileMode) error {
+	mapped, err := f.mapped(name)
+	if err != nil {
+		return err
+	}
+	f.writes = append(f.writes, mapped)
+	return f.MockFileSystem.WriteFile(mapped, data, perm)
+}
+
+func (f *docsMappedFS) Remove(name string) error {
+	mapped, err := f.mapped(name)
+	if err != nil {
+		return err
+	}
+	return f.MockFileSystem.Remove(mapped)
+}
+
+func (f *docsRootAccessFS) ReadFile(name string) ([]byte, error) {
+	if name == "/repo/AGENTS.md" || name == "/repo/.cursorrules" {
+		f.accessed = append(f.accessed, "read "+name)
+	}
+	return f.MockFileSystem.ReadFile(name)
+}
+
+func (f *docsRootAccessFS) WriteFile(name string, data []byte, perm os.FileMode) error {
+	if name == "/repo/AGENTS.md" || name == "/repo/.cursorrules" {
+		f.accessed = append(f.accessed, "write "+name)
+	}
+	return f.MockFileSystem.WriteFile(name, data, perm)
+}
+
 func (f *docsRemovalFS) Stat(name string) (fs.FileInfo, error) {
 	if name == f.statFailurePath {
 		return nil, fs.ErrPermission
@@ -85,6 +250,22 @@ func (f *docsRemovalFS) Stat(name string) (fs.FileInfo, error) {
 		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeDevice | 0600}, nil
 	default:
 		return f.MockFileSystem.Stat(name)
+	}
+}
+
+func (f *docsRemovalFS) Lstat(name string) (fs.FileInfo, error) {
+	if name == f.statFailurePath {
+		return nil, fs.ErrPermission
+	}
+	switch name {
+	case f.directoryPath:
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeDir | 0755}, nil
+	case f.nonRegularPath:
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeDevice | 0600}, nil
+	case f.symlinkPath:
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeSymlink | 0777}, nil
+	default:
+		return f.MockFileSystem.Lstat(name)
 	}
 }
 
@@ -135,12 +316,11 @@ func (f *docsFailureFS) ReadFile(name string) ([]byte, error) {
 
 func TestRunDocsUpdate(t *testing.T) {
 	tests := []struct {
-		name        string
-		stamp       bool
-		wantDiffers []string
+		name  string
+		stamp bool
 	}{
-		{name: "writes changed docs, removes only recorded obsolete docs, and preserves additions", stamp: true, wantDiffers: []string{"AGENTS.md"}},
-		{name: "missing stamp removes nothing and reports both changed root files", wantDiffers: []string{"AGENTS.md", ".cursorrules"}},
+		{name: "writes changed docs, removes only recorded obsolete docs, and preserves additions", stamp: true},
+		{name: "missing stamp removes nothing", stamp: false},
 	}
 
 	for _, tt := range tests {
@@ -207,10 +387,8 @@ func TestRunDocsUpdate(t *testing.T) {
 			if strings.Contains(out.String(), "nested/reference.txt") {
 				t.Errorf("matching nested documentation was reported as updated: %q", out.String())
 			}
-			for _, path := range tt.wantDiffers {
-				if !strings.Contains(out.String(), path+" differs from the current template. Compare it by hand; it was not changed.") {
-					t.Errorf("output = %q, missing difference for %s", out.String(), path)
-				}
+			if strings.Contains(out.String(), "differs") || strings.Contains(out.String(), "AGENTS.md differs") {
+				t.Errorf("output reports team-owned root files: %q", out.String())
 			}
 			if !strings.Contains(out.String(), "Updated .simple/context/guide.md") || !strings.Contains(out.String(), "Updated .simple/docs.json") {
 				t.Errorf("output did not list updated files: %q", out.String())
@@ -226,7 +404,7 @@ func TestRunDocsUpdateSecondRun(t *testing.T) {
 		want string
 	}{
 		{name: "text", want: "Docs are already up to date.\n"},
-		{name: "JSON", json: true, want: "{\n  \"updated\": [],\n  \"removed\": [],\n  \"differs\": [],\n  \"upToDate\": true\n}\n"},
+		{name: "JSON", json: true, want: "{\n  \"updated\": [],\n  \"removed\": [],\n  \"upToDate\": true\n}\n"},
 	}
 
 	for _, tt := range tests {
@@ -264,6 +442,277 @@ func TestRunDocsUpdateOutsideRepository(t *testing.T) {
 	if err == nil || err.Error() != "run simple docs update inside a repository made with simple init" {
 		t.Errorf("runDocsUpdate() error = %v, want one plain repository instruction", err)
 	}
+}
+
+func TestDocsUpdateRefusesStampFromNewerVersion(t *testing.T) {
+	templates := docsTestTemplates()
+	disk := docsTestDisk(t, templates)
+	stampPath := "/repo/.simple/docs.json"
+	disk.Files[stampPath] = docsStampJSON("different", "9.0.0", ".simple/context/guide.md")
+	before := make(map[string][]byte, len(disk.Files))
+	for name, content := range disk.Files {
+		before[name] = append([]byte(nil), content...)
+	}
+
+	err := runDocsUpdate(new(bytes.Buffer), docsUpdateDeps{
+		fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0",
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "9.0.0") || !strings.Contains(err.Error(), "2.0.0") || !strings.Contains(err.Error(), "simple version update") {
+		t.Fatalf("runDocsUpdate() error = %v, want newer-version instruction naming both versions", err)
+	}
+	if !equalFileMaps(disk.Files, before) {
+		t.Error("files changed after refusing a stamp from a newer CLI")
+	}
+}
+
+func TestDocsReminderSilentWhenStampIsNewer(t *testing.T) {
+	disk := &fsx.MockFileSystem{Files: map[string][]byte{
+		"/repo/simple.scl":        []byte("workspace"),
+		"/repo/.simple/docs.json": docsStampJSON("newer-docs", "9.0.0"),
+	}}
+	out := new(bytes.Buffer)
+	announceDocsUpdateTo(out, "2.0.0", false, true, "", "simple build", disk,
+		func() (string, error) { return "/repo", nil }, func() (string, error) { return "older-docs", nil })
+	if out.Len() != 0 {
+		t.Errorf("docs reminder for a newer stamp = %q, want nothing", out.String())
+	}
+}
+
+func TestDocumentationStampIsNewer(t *testing.T) {
+	tests := []struct {
+		name           string
+		stampVersion   string
+		runningVersion string
+		want           bool
+	}{
+		{name: "newer release", stampVersion: "9.0.0", runningVersion: "2.0.0", want: true},
+		{name: "older release", stampVersion: "1.0.0", runningVersion: "2.0.0"},
+		{name: "unknown stamp", stampVersion: "", runningVersion: "2.0.0"},
+		{name: "development stamp", stampVersion: "dev", runningVersion: "2.0.0"},
+		{name: "development running version", stampVersion: "9.0.0", runningVersion: "dev"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := documentationStampIsNewer(tt.stampVersion, tt.runningVersion); got != tt.want {
+				t.Errorf("documentationStampIsNewer(%q, %q) = %v, want %v", tt.stampVersion, tt.runningVersion, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDocsUpdateLeavesStampWhenNothingChanged(t *testing.T) {
+	templates := docsTestTemplates()
+	disk := docsTestDisk(t, templates)
+	files, err := scaffold.DocumentationFiles(templates)
+	if err != nil {
+		t.Fatalf("DocumentationFiles() error = %v", err)
+	}
+	fingerprint := scaffold.FingerprintDocumentationFiles(files)
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, file.Path)
+	}
+	stampPath := "/repo/.simple/docs.json"
+	disk.Files[stampPath] = docsStampJSON(fingerprint, "1.0.0", paths...)
+	before := append([]byte(nil), disk.Files[stampPath]...)
+	out := new(bytes.Buffer)
+	if err := runDocsUpdate(out, docsUpdateDeps{
+		fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0",
+	}, false); err != nil {
+		t.Fatalf("runDocsUpdate() error = %v", err)
+	}
+	if !bytes.Equal(disk.Files[stampPath], before) {
+		t.Errorf("stamp changed from %q to %q", before, disk.Files[stampPath])
+	}
+	if out.String() != "Docs are already up to date.\n" {
+		t.Errorf("output = %q, want up-to-date message", out.String())
+	}
+}
+
+func TestDocsUpdateRewritesStampWhenFileListDiffers(t *testing.T) {
+	templates := docsTestTemplates()
+	disk := docsTestDisk(t, templates)
+	files, err := scaffold.DocumentationFiles(templates)
+	if err != nil {
+		t.Fatalf("DocumentationFiles() error = %v", err)
+	}
+	stampPath := "/repo/.simple/docs.json"
+	disk.Files[stampPath] = docsStampJSON(scaffold.FingerprintDocumentationFiles(files), "1.0.0", files[0].Path)
+	if err := runDocsUpdate(new(bytes.Buffer), docsUpdateDeps{
+		fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0",
+	}, false); err != nil {
+		t.Fatalf("runDocsUpdate() error = %v", err)
+	}
+	var stamp scaffold.DocumentationStamp
+	if err := json.Unmarshal(disk.Files[stampPath], &stamp); err != nil {
+		t.Fatalf("stamp is invalid: %v", err)
+	}
+	if len(stamp.Files) != len(files) || stamp.CLIVersion != "2.0.0" {
+		t.Errorf("stamp = %+v, want every shipped file and version 2.0.0", stamp)
+	}
+}
+
+func TestDocsUpdateLeavesRootFilesAlone(t *testing.T) {
+	templates := docsTestTemplates()
+	base := docsTestDisk(t, templates)
+	base.Files["/repo/AGENTS.md"] = []byte("team-owned AGENTS")
+	base.Files["/repo/.cursorrules"] = []byte("team-owned cursor rules")
+	base.Files["/repo/.simple/context/AGENTS.template.md"] = []byte("old root reference")
+	base.Files["/repo/.simple/context/cursorrules.template"] = []byte("old cursor reference")
+	base.Files["/repo/.simple/docs.json"] = docsStampJSON("old fingerprint", "1.0.0",
+		".simple/context/AGENTS.template.md", ".simple/context/cursorrules.template")
+	disk := &docsRootAccessFS{MockFileSystem: base}
+	deps := docsUpdateDeps{fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0"}
+	out := new(bytes.Buffer)
+	if err := runDocsUpdate(out, deps, false); err != nil {
+		t.Fatalf("first runDocsUpdate() error = %v", err)
+	}
+	if got := string(disk.Files["/repo/AGENTS.md"]); got != "team-owned AGENTS" {
+		t.Errorf("AGENTS.md = %q, want team content", got)
+	}
+	if got := string(disk.Files["/repo/.cursorrules"]); got != "team-owned cursor rules" {
+		t.Errorf(".cursorrules = %q, want team content", got)
+	}
+	for path, want := range map[string]string{
+		"/repo/.simple/context/AGENTS.template.md":   "current agents",
+		"/repo/.simple/context/cursorrules.template": "current cursor rules",
+	} {
+		if got := string(disk.Files[path]); got != want {
+			t.Errorf("reference copy %s = %q, want %q", path, got, want)
+		}
+	}
+	if len(disk.accessed) != 0 {
+		t.Errorf("root guidance files were accessed: %v", disk.accessed)
+	}
+	const closing = "AGENTS.md and .cursorrules are your team's own files and were not changed. Current templates are in .simple/context/AGENTS.template.md and .simple/context/cursorrules.template.\n"
+	if !strings.HasSuffix(out.String(), closing) {
+		t.Errorf("first run output does not end with root template guidance: %q", out.String())
+	}
+	second := new(bytes.Buffer)
+	if err := runDocsUpdate(second, deps, false); err != nil {
+		t.Fatalf("second runDocsUpdate() error = %v", err)
+	}
+	if second.String() != "Docs are already up to date.\n" {
+		t.Errorf("second run output = %q, want up-to-date message", second.String())
+	}
+	if len(disk.accessed) != 0 {
+		t.Errorf("root guidance files were accessed: %v", disk.accessed)
+	}
+}
+
+func TestDocsUpdateRefusesPathsOutsideRepository(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*testing.T, *docsMappedFS)
+		wantPath  string
+		inside    bool
+	}{
+		{
+			name: "managed folder leads outside and old stamp lists victim",
+			configure: func(t *testing.T, disk *docsMappedFS) {
+				disk.links["/repo/.agent"] = "/outside/agent"
+				disk.Files["/outside/agent/victim"] = []byte("keep outside victim")
+				disk.Files["/repo/.simple/docs.json"] = docsStampJSON("old", "1.0.0", ".agent/victim")
+			},
+			wantPath: ".agent/victim",
+		},
+		{
+			name: "shipped file link leads outside",
+			configure: func(t *testing.T, disk *docsMappedFS) {
+				disk.links["/repo/.simple/context/guide.md"] = "/outside/guide.md"
+				disk.Files["/outside/guide.md"] = []byte("outside target")
+			},
+			wantPath: ".simple/context/guide.md",
+		},
+		{
+			name: "stamp link leads outside",
+			configure: func(t *testing.T, disk *docsMappedFS) {
+				disk.links["/repo/.simple/docs.json"] = "/outside/docs.json"
+				disk.Files["/outside/docs.json"] = docsStampJSON("old", "1.0.0")
+			},
+			wantPath: ".simple/docs.json",
+		},
+		{
+			name: "dangling shipped file link",
+			configure: func(t *testing.T, disk *docsMappedFS) {
+				disk.links["/repo/.agent/skills/tool/SKILL.md"] = "/outside/missing"
+			},
+			wantPath: ".agent/skills/tool/SKILL.md",
+		},
+		{
+			name: "cannot resolve shipped file",
+			configure: func(_ *testing.T, disk *docsMappedFS) {
+				disk.evalErrorPath = "/repo/.simple/context/guide.md"
+			},
+			wantPath: ".simple/context/guide.md",
+		},
+		{
+			name: "cannot resolve repository root",
+			configure: func(_ *testing.T, disk *docsMappedFS) {
+				disk.evalErrorPath = "/repo"
+			},
+			wantPath: "repository's real location",
+		},
+		{
+			name: "managed folder links inside repository",
+			configure: func(_ *testing.T, disk *docsMappedFS) {
+				disk.links["/repo/.agent"] = "/repo/inside-agent"
+			},
+			inside: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			templates := docsTestTemplates()
+			base := docsTestDisk(t, templates)
+			disk := newDocsMappedFS(base)
+			tt.configure(t, disk)
+			before := make(map[string][]byte, len(disk.Files))
+			for name, content := range disk.Files {
+				before[name] = append([]byte(nil), content...)
+			}
+			out := new(bytes.Buffer)
+			err := runDocsUpdate(out, docsUpdateDeps{
+				fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0",
+			}, false)
+			if tt.inside {
+				if err != nil {
+					t.Fatalf("runDocsUpdate() error = %v, want internal link to work", err)
+				}
+				if _, ok := disk.Files["/repo/inside-agent/skills/tool/SKILL.md"]; !ok {
+					t.Error("shipped files were not written through the internal link")
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantPath) || !strings.Contains(err.Error(), "changed nothing") {
+				t.Fatalf("runDocsUpdate() error = %v, want one refusal naming %s and saying nothing changed", err, tt.wantPath)
+			}
+			if strings.Contains(err.Error(), "\n") {
+				t.Errorf("refusal is not one plain line: %q", err.Error())
+			}
+			if len(disk.writes) != 0 || !equalFileMaps(disk.Files, before) {
+				t.Errorf("files were changed or written after refusal; writes = %v", disk.writes)
+			}
+			if tt.name == "managed folder leads outside and old stamp lists victim" {
+				if got := string(disk.Files["/outside/agent/victim"]); got != "keep outside victim" {
+					t.Errorf("outside victim = %q, want preserved", got)
+				}
+			}
+		})
+	}
+}
+
+func equalFileMaps(left, right map[string][]byte) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for name, content := range left {
+		if !bytes.Equal(content, right[name]) {
+			return false
+		}
+	}
+	return true
 }
 
 func TestRunDocsUpdateJSONChanges(t *testing.T) {
@@ -400,54 +849,43 @@ func TestRunDocsUpdateSkipsUnremovableStampEntries(t *testing.T) {
 	}
 }
 
-func TestRunDocsUpdateStampAndRemovalErrors(t *testing.T) {
-	tests := []struct {
-		name string
-		fs   *fsx.MockFileSystem
-		want string
-	}{
-		{name: "stamp read fails", fs: &fsx.MockFileSystem{Files: map[string][]byte{"/repo/simple.scl": []byte("workspace")}, ReadFileErr: fs.ErrPermission}, want: "failed to read documentation stamp"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := runDocsUpdate(new(bytes.Buffer), docsUpdateDeps{fsys: tt.fs, templates: docsTestTemplates(), cwd: "/repo"}, false)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Errorf("runDocsUpdate() error = %v, want %q", err, tt.want)
-			}
-		})
+func TestRunDocsUpdateStampReadFails(t *testing.T) {
+	templates := docsTestTemplates()
+	base := docsTestDisk(t, templates)
+	stampPath := "/repo/.simple/docs.json"
+	base.Files[stampPath] = docsStampJSON("unreadable", "1.0.0")
+	disk := &docsFailureFS{MockFileSystem: base, readFailurePath: stampPath}
+	err := runDocsUpdate(new(bytes.Buffer), docsUpdateDeps{
+		fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0",
+	}, false)
+	if err == nil || !strings.Contains(err.Error(), "failed to read documentation stamp") {
+		t.Fatalf("runDocsUpdate() error = %v, want the stamp read failure reported", err)
 	}
 }
 
 func TestRunDocsUpdateFilesystemErrors(t *testing.T) {
 	tests := []struct {
 		name string
-		fs   func(*testing.T, *fstest.MapFS) fsx.FileSystem
+		fs   func(*testing.T, *fstest.MapFS) docsUpdateFS
 		want string
 	}{
 		{
 			name: "shipped doc read fails",
-			fs: func(t *testing.T, templates *fstest.MapFS) fsx.FileSystem {
+			fs: func(t *testing.T, templates *fstest.MapFS) docsUpdateFS {
 				return &docsFailureFS{MockFileSystem: docsTestDisk(t, templates), readFailurePath: "/repo/.simple/context/guide.md"}
 			},
 			want: "failed to read documentation .simple/context/guide.md",
 		},
 		{
-			name: "root guidance read fails",
-			fs: func(t *testing.T, templates *fstest.MapFS) fsx.FileSystem {
-				return &docsFailureFS{MockFileSystem: docsTestDisk(t, templates), readFailurePath: "/repo/AGENTS.md"}
-			},
-			want: "failed to read root guidance AGENTS.md",
-		},
-		{
 			name: "documentation directory creation fails",
-			fs: func(_ *testing.T, _ *fstest.MapFS) fsx.FileSystem {
+			fs: func(_ *testing.T, _ *fstest.MapFS) docsUpdateFS {
 				return &fsx.MockFileSystem{Files: map[string][]byte{"/repo/simple.scl": []byte("workspace")}, MkdirAllErr: fs.ErrPermission}
 			},
 			want: "failed to create documentation directory",
 		},
 		{
 			name: "stamp directory creation fails",
-			fs: func(t *testing.T, templates *fstest.MapFS) fsx.FileSystem {
+			fs: func(t *testing.T, templates *fstest.MapFS) docsUpdateFS {
 				base := docsTestDisk(t, templates)
 				base.MkdirAllErr = fs.ErrPermission
 				return base
@@ -456,7 +894,7 @@ func TestRunDocsUpdateFilesystemErrors(t *testing.T) {
 		},
 		{
 			name: "stamp write fails",
-			fs: func(t *testing.T, templates *fstest.MapFS) fsx.FileSystem {
+			fs: func(t *testing.T, templates *fstest.MapFS) docsUpdateFS {
 				base := docsTestDisk(t, templates)
 				base.WriteFileErr = fs.ErrPermission
 				return base
@@ -473,20 +911,6 @@ func TestRunDocsUpdateFilesystemErrors(t *testing.T) {
 				t.Errorf("runDocsUpdate() error = %v, want %q", err, tt.want)
 			}
 		})
-	}
-}
-
-func TestRunDocsUpdateMissingRootFilesDiffer(t *testing.T) {
-	templates := docsTestTemplates()
-	disk := docsTestDisk(t, templates)
-	delete(disk.Files, "/repo/AGENTS.md")
-	delete(disk.Files, "/repo/.cursorrules")
-	out := new(bytes.Buffer)
-	if err := runDocsUpdate(out, docsUpdateDeps{fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0"}, false); err != nil {
-		t.Fatalf("runDocsUpdate() error = %v", err)
-	}
-	if !strings.Contains(out.String(), "AGENTS.md differs") || !strings.Contains(out.String(), ".cursorrules differs") {
-		t.Errorf("output = %q, want both missing root files reported", out.String())
 	}
 }
 
@@ -702,58 +1126,51 @@ func TestDocsUpdateSummary(t *testing.T) {
 		name    string
 		updated int
 		removed int
-		differs int
 		want    string
 	}{
 		{
 			name:    "count 0 for all fields",
 			updated: 0,
 			removed: 0,
-			differs: 0,
-			want:    "Summary: updated 0 files, removed 0 files, 0 root files differ.",
+			want:    "Summary: updated 0 files, removed 0 files.",
 		},
 		{
 			name:    "count 1 for all fields",
 			updated: 1,
 			removed: 1,
-			differs: 1,
-			want:    "Summary: updated 1 file, removed 1 file, 1 root file differs.",
+			want:    "Summary: updated 1 file, removed 1 file.",
 		},
 		{
 			name:    "count 2 for all fields",
 			updated: 2,
 			removed: 2,
-			differs: 2,
-			want:    "Summary: updated 2 files, removed 2 files, 2 root files differ.",
+			want:    "Summary: updated 2 files, removed 2 files.",
 		},
 		{
-			name:    "singular update with zero removal and singular differs",
+			name:    "singular update with zero removal",
 			updated: 1,
 			removed: 0,
-			differs: 1,
-			want:    "Summary: updated 1 file, removed 0 files, 1 root file differs.",
+			want:    "Summary: updated 1 file, removed 0 files.",
 		},
 		{
-			name:    "plural update with singular removal and plural differs",
+			name:    "plural update with singular removal",
 			updated: 2,
 			removed: 1,
-			differs: 2,
-			want:    "Summary: updated 2 files, removed 1 file, 2 root files differ.",
+			want:    "Summary: updated 2 files, removed 1 file.",
 		},
 		{
-			name:    "zero update with plural removal and singular differs",
+			name:    "zero update with plural removal",
 			updated: 0,
 			removed: 2,
-			differs: 1,
-			want:    "Summary: updated 0 files, removed 2 files, 1 root file differs.",
+			want:    "Summary: updated 0 files, removed 2 files.",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := docsUpdateSummary(tt.updated, tt.removed, tt.differs)
+			got := docsUpdateSummary(tt.updated, tt.removed)
 			if got != tt.want {
-				t.Errorf("docsUpdateSummary(%d, %d, %d) = %q, want %q", tt.updated, tt.removed, tt.differs, got, tt.want)
+				t.Errorf("docsUpdateSummary(%d, %d) = %q, want %q", tt.updated, tt.removed, got, tt.want)
 			}
 		})
 	}

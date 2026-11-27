@@ -29,6 +29,34 @@ func TestOSFileSystem_Stat(t *testing.T) {
 	}
 }
 
+func TestOSFileSystem_EvalSymlinksAndLstat(t *testing.T) {
+	fsys := OSFileSystem{}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.txt")
+	link := filepath.Join(dir, "link.txt")
+	if err := os.WriteFile(target, []byte("target"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("Symlink() unavailable: %v", err)
+	}
+	got, err := fsys.EvalSymlinks(link)
+	want, wantErr := filepath.EvalSymlinks(target)
+	if err != nil || wantErr != nil || got != want {
+		t.Errorf("EvalSymlinks(%q) = %q, %v; want %q", link, got, err, want)
+	}
+	info, err := fsys.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat() error = %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("Lstat() mode = %v, want symlink", info.Mode())
+	}
+	if _, err := fsys.EvalSymlinks(filepath.Join(dir, "missing")); err == nil {
+		t.Error("EvalSymlinks() for missing path succeeded")
+	}
+}
+
 func TestOSFileSystem_MkdirAll(t *testing.T) {
 	fs := OSFileSystem{}
 	tmpDir := t.TempDir()
@@ -95,6 +123,25 @@ func TestOSFileSystem_ReadFile(t *testing.T) {
 	}
 }
 
+func TestOSFileSystem_ReadDirAndRemove(t *testing.T) {
+	fsys := OSFileSystem{}
+	dir := t.TempDir()
+	name := filepath.Join(dir, "remove.txt")
+	if err := os.WriteFile(name, []byte("remove"), 0644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	entries, err := fsys.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "remove.txt" {
+		t.Fatalf("ReadDir() = %v, %v; want remove.txt", entries, err)
+	}
+	if err := fsys.Remove(name); err != nil {
+		t.Fatalf("Remove(existing) error = %v", err)
+	}
+	if err := fsys.Remove(name); err != nil {
+		t.Errorf("Remove(missing) error = %v, want nil", err)
+	}
+}
+
 func TestMockFileSystem_ReadFile(t *testing.T) {
 	// Test with ReadFileErr
 	mock := &MockFileSystem{ReadFileErr: os.ErrPermission}
@@ -140,6 +187,27 @@ func TestMockFileSystem_Stat(t *testing.T) {
 	}
 }
 
+func TestMockFileSystem_EvalSymlinksAndLstat(t *testing.T) {
+	mock := &MockFileSystem{Files: map[string][]byte{
+		"/repo/.simple/docs.json": []byte("stamp"),
+	}}
+	resolved, err := mock.EvalSymlinks("/repo")
+	if err != nil || resolved != "/repo" {
+		t.Errorf("EvalSymlinks(/repo) = %q, %v; want /repo", resolved, err)
+	}
+	info, err := mock.Lstat("/repo/.simple")
+	if err != nil || !info.IsDir() {
+		t.Errorf("Lstat(/repo/.simple) = %v, %v; want inferred directory", info, err)
+	}
+	info, err = mock.Lstat("/repo/.simple/docs.json")
+	if err != nil || info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Errorf("Lstat(file) = %v, %v; want regular file", info, err)
+	}
+	if _, err := mock.EvalSymlinks("/repo/missing"); !os.IsNotExist(err) {
+		t.Errorf("EvalSymlinks(missing) error = %v, want not-exist", err)
+	}
+}
+
 func TestMockFileSystem_WriteFile(t *testing.T) {
 	mock := &MockFileSystem{WriteFileErr: os.ErrPermission}
 	err := mock.WriteFile("any", []byte{}, 0644)
@@ -164,7 +232,7 @@ func TestMockFileInfo(t *testing.T) {
 	if m.Size() != 0 {
 		t.Error("Size() incorrect")
 	}
-	if m.Mode() != 0755 {
+	if m.Mode() != (os.ModeDir | 0755) {
 		t.Error("Mode() incorrect")
 	}
 	if !m.ModTime().IsZero() {

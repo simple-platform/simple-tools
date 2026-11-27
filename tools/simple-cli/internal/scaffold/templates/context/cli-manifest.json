@@ -194,7 +194,7 @@
     },
     "docs update": {
       "usage": "simple docs update",
-      "description": "Update the guidance shipped for coding assistants; leaves packages alone",
+      "description": "Update shipped guidance in .simple/context/ and .agent/; leaves root team guidance and packages alone",
       "flags": [
         { "name": "--json", "type": "boolean", "description": "Output one JSON document" }
       ]

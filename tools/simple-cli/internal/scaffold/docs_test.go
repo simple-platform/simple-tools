@@ -25,10 +25,13 @@ func TestDocumentationFiles(t *testing.T) {
 				"templates/agent/skills/build/SKILL.md": {Data: []byte("skill")},
 				"templates/README.md":                   {Data: []byte("excluded")},
 				"templates/AGENTS.md":                   {Data: []byte("excluded")},
+				"templates/cursorrules":                 {Data: []byte("excluded")},
 			},
 			want: []string{
 				".agent/skills/build/SKILL.md",
+				".simple/context/AGENTS.template.md",
 				".simple/context/a.md",
+				".simple/context/cursorrules.template",
 				".simple/context/z.md",
 			},
 		},
@@ -54,6 +57,46 @@ func TestDocumentationFiles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDocumentationFilesIncludeRootTemplateCopies(t *testing.T) {
+	files, err := DocumentationFiles(TemplatesFS)
+	if err != nil {
+		t.Fatalf("DocumentationFiles() error = %v", err)
+	}
+	want := map[string]string{
+		".simple/context/AGENTS.template.md":   "templates/AGENTS.md",
+		".simple/context/cursorrules.template": "templates/cursorrules",
+	}
+	for path, template := range want {
+		expected, err := TemplatesFS.ReadFile(template)
+		if err != nil {
+			t.Fatalf("reading %s: %v", template, err)
+		}
+		found := false
+		for _, file := range files {
+			if file.Path == path {
+				found = true
+				if string(file.Content) != string(expected) {
+					t.Errorf("%s content differs from %s", path, template)
+				}
+				break
+			}
+		}
+		if !found {
+			t.Errorf("DocumentationFiles() omitted root template copy %s", path)
+		}
+	}
+}
+
+func TestDocumentationFilesRootTemplateReadError(t *testing.T) {
+	fsys := &fsx.MockTemplateFS{ReadErrors: map[string]error{
+		"templates/AGENTS.md": errors.New("template unavailable"),
+	}}
+	_, err := DocumentationFiles(fsys)
+	if err == nil || !strings.Contains(err.Error(), "failed to read root guidance template templates/AGENTS.md") {
+		t.Errorf("DocumentationFiles() error = %v, want root template read error", err)
 	}
 }
 
@@ -91,7 +134,7 @@ func TestFingerprintDocumentationFilesChangesWithDocumentSet(t *testing.T) {
 			delete(*files, "templates/context/guide.md")
 			(*files)["templates/context/renamed.md"] = file
 		}},
-		{name: "non documentation template edit", change: func(files *fstest.MapFS) { (*files)["templates/AGENTS.md"].Data = []byte("different root guidance") }},
+		{name: "root template edit", change: func(files *fstest.MapFS) { (*files)["templates/AGENTS.md"].Data = []byte("different root guidance") }},
 	}
 
 	for _, tt := range tests {
@@ -101,6 +144,7 @@ func TestFingerprintDocumentationFilesChangesWithDocumentSet(t *testing.T) {
 				"templates/context/keep.md":  {Data: []byte("keep")},
 				"templates/agent/skill.md":   {Data: []byte("skill")},
 				"templates/AGENTS.md":        {Data: []byte("root guidance")},
+				"templates/cursorrules":      {Data: []byte("cursor rules")},
 			}
 			baseFiles, err := DocumentationFiles(base)
 			if err != nil {
@@ -123,11 +167,7 @@ func TestFingerprintDocumentationFilesChangesWithDocumentSet(t *testing.T) {
 				t.Fatalf("changed DocumentationFiles() error = %v", err)
 			}
 			changed := FingerprintDocumentationFiles(changedFiles)
-			if tt.name == "non documentation template edit" {
-				if changed != first {
-					t.Errorf("fingerprint changed for a non-documentation template: %q != %q", changed, first)
-				}
-			} else if changed == first {
+			if changed == first {
 				t.Errorf("fingerprint did not change after %s", tt.name)
 			}
 		})
@@ -184,6 +224,14 @@ func TestCreateMonorepoStructureWritesDocsStamp(t *testing.T) {
 			if stamp.Fingerprint == "" || stamp.CLIVersion != tt.version || len(stamp.Files) == 0 {
 				t.Errorf("stamp = %+v, want fingerprint, version %q, and docs paths", stamp, tt.version)
 			}
+			for _, path := range []string{".simple/context/AGENTS.template.md", ".simple/context/cursorrules.template"} {
+				if _, ok := disk.Files[filepath.Join(root, filepath.FromSlash(path))]; !ok {
+					t.Errorf("root template copy %s was not written", path)
+				}
+				if !containsPath(stamp.Files, path) {
+					t.Errorf("stamp omits root template copy %s: %v", path, stamp.Files)
+				}
+			}
 			if raw[len(raw)-1] != '\n' {
 				t.Error("stamp does not end with a newline")
 			}
@@ -195,6 +243,15 @@ func TestCreateMonorepoStructureWritesDocsStamp(t *testing.T) {
 			}
 		})
 	}
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMarshalDocumentationStamp(t *testing.T) {
