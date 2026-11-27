@@ -1,7 +1,7 @@
 /**
  * Tests for Record Behavior: {{.TableName}}
  */
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import behavior from './{{.TableName}}.js'
 
 describe('record Behavior: {{.TableName}}', () => {
@@ -31,22 +31,34 @@ describe('record Behavior: {{.TableName}}', () => {
     },
   }
 
-  it('should handle load event', async () => {
+  // Each test starts with no recorded calls, whatever ran before it.
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // A new behavior has no rules yet: it changes no field and blocks no save.
+  // When you add a rule to the script, replace the matching check below with
+  // one that states the rule. Example:
+  //   expect(mockContext.$form).toHaveBeenCalledWith('status')
+
+  it('should change nothing on load', async () => {
     mockContext.$form.event = 'load'
     await behavior(mockContext)
-    // Example assertion: verify a field was updated
-    expect(mockContext.$form).toHaveBeenCalled()
+    expect(mockContext.$form).not.toHaveBeenCalled()
   })
 
-  it('should handle update event', async () => {
+  it('should change nothing on update', async () => {
     mockContext.$form.event = 'update'
     await behavior(mockContext)
-    expect(mockContext.$form).toHaveBeenCalled()
+    expect(mockContext.$form).not.toHaveBeenCalled()
   })
 
-  it('should handle submit event', async () => {
+  // A save is blocked by an error on the whole form or on one of its fields,
+  // so neither may have been asked for.
+  it('should block no save on submit', async () => {
     mockContext.$form.event = 'submit'
     await behavior(mockContext)
-    expect(mockContext.$form).toHaveBeenCalled()
+    expect(mockContext.$form.error).not.toHaveBeenCalled()
+    expect(mockContext.$form).not.toHaveBeenCalled()
   })
 })
