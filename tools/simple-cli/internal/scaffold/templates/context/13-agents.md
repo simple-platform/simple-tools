@@ -149,7 +149,7 @@ The playbook file is `knowledge/playbook-<kind-of-work>.md`. It has no title and
 
 Under `Collaboration`, say what the agent completes, which decisions it brings to a person, what the person sees when asked, and which tool supplies each fact. Use business words for the person who maintains the playbook. Name the tables and fields to narrow by. Do not put a script, query, or code in a playbook or skill.
 
-The shape file's `input` must be an object. Set `output` to the fixed result object, or use `null` for a free-text answer. You may leave `output` out; the build treats that the same as `null`.
+The shape file's `input` may be left out, set to `null` or `true`, or set to an empty object `{}` for free input. Any other input object must have `"type": "object"`; other input values fail. Set `output` to an object with `"type": "object"` for a fixed result. Leave it out for any answer; `null` means free input or any answer.
 
 A skill and a tool lesson use these eight sections in order:
 
@@ -188,7 +188,7 @@ Agent wiring and structure checks run when the app has at least one `agent` or `
 - Each agent points to a knowledge record in the app with a body.
 - A kind of work with no linked agent has no default-agent, playbook, or carried-link checks. It may be work for people or have its agent chosen when the task starts.
 - Other kinds of work have exactly one default link with role `executor` and `is_default true`, and that agent is in the app. They point to a playbook knowledge record with a body and carry both the default agent's persona and the playbook.
-- Each shape file exists and is valid JSON. Its `input` must be an object. Its `output`, when present, must be an object or `null`; missing `output` means the same as `null`. A referenced states file must be valid JSON and name `queued`, `working`, `waiting_for_user`, `waiting_for_event`, `completed`, `cancelled`, and `failed`.
+- Each kind of work's shape exists and is valid JSON with an object at the top level. Its `input` may be absent, `null`, `true`, or `{}` for free input, or an object whose `type` is `object`; other values fail. Its `output` may be absent for any answer, or an object whose `type` is `object`; `null` means free input or any answer. A referenced states file must be valid JSON and name `queued`, `working`, `waiting_for_user`, `waiting_for_event`, `completed`, `cancelled`, and `failed`.
 - Each tool link names a kind of work in the app and a known platform tool or an app action whose `action.json` marks it as a tool. Each app action marked as a tool has a lesson with a body.
 - Each skill and lesson link points to a record that exists. An unreadable reference is reported with a rule that explains how to write it.
 - Persona and playbook structure are checked together for each kind of work, with the persona first. A carried body that is neither half is checked as a skill only when its file name starts with `skill-` or it has a `Slug:` line. The file name and slug must agree; a `skill-` file without a `Slug:` line is a problem. Other linked bodies are reference knowledge and need only be non-empty, valid text. Every tool lesson gets the full skill check.

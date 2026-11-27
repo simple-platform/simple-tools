@@ -284,6 +284,73 @@ func TestBuildAllowsUnrelatedUnparseableRecordsWithoutAgentsAndKeepsMarkerCheck(
 	}
 }
 
+func TestBuildUsesParsedAgentRecordKinds(t *testing.T) {
+	oldJSON, oldCheck := jsonOutput, checkBuildAgents
+	defer func() { jsonOutput, checkBuildAgents = oldJSON, oldCheck }()
+	jsonOutput = true
+	tests := []struct {
+		name         string
+		record       string
+		parserOutput string
+		wantErr      string
+		wantProblems int
+	}{
+		{
+			name:         "comment above people work does not run agent checks",
+			record:       "# We do not set agent, ever.\nset task_type, task_type_human {\n  name \"human\"\n}\n",
+			parserOutput: `[{"name":["task_type","task_type_human"],"type":"block","key":"set","children":[{"type":"kv","value":"human","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}}],"key_loc":{"line":0,"col":0},"name_loc":{"line":0,"col":31}}]`,
+		},
+		{
+			name:         "description mentioning an agent does not run agent checks",
+			record:       "set task_type, task_type_human {\n  name \"human\"\n  description \"We do not set agent, ever.\"\n}\n",
+			parserOutput: `[{"name":["task_type","task_type_human"],"type":"block","key":"set","children":[{"type":"kv","value":"human","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"type":"kv","value":"We do not set agent, ever.","key":"description","key_loc":{"line":3,"col":3},"value_loc":{"line":3,"col":15}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":32}}]`,
+		},
+		{
+			name:         "agent record runs agent checks",
+			record:       "set agent, agent_support {}\n",
+			parserOutput: `[{"name":["agent","agent_support"],"type":"block","key":"set","children":[],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":26}}]`,
+			wantErr:      "1 agent problem",
+			wantProblems: 1,
+		},
+		{
+			name:         "agent task link by itself runs agent checks",
+			record:       "set agent_task_type, link_people {}\n",
+			parserOutput: `[{"name":["agent_task_type","link_people"],"type":"block","key":"set","children":[],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":34}}]`,
+			wantErr:      "2 agent problems",
+			wantProblems: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := newAgentCheckFS(false)
+			fsys.Files["apps/com.acme.crm/records/unrelated.scl"] = []byte(tt.record)
+			checkBuildAgents = func(fsys fsx.FileSystem, repoRoot, appID string) ([]agents.Problem, error) {
+				parser := func(string) ([]byte, error) { return []byte(tt.parserOutput), nil }
+				return agents.CheckWithParser(fsys, repoRoot, appID, parser)
+			}
+			var stdout string
+			var runErr error
+			stdout = captureStdout(t, func() {
+				runErr = runBuildAll(build.NewBuildManager(build.BuildOptions{Concurrency: 1}), nil, nil,
+					buildAgentTarget{appID: "com.acme.crm", fsys: fsys})
+			})
+			if (runErr != nil) != (tt.wantErr != "") || runErr != nil && !strings.Contains(runErr.Error(), tt.wantErr) {
+				t.Fatalf("runBuildAll() error = %v, want containing %q", runErr, tt.wantErr)
+			}
+			var result struct {
+				Status        string             `json:"status"`
+				AgentProblems []agentProblemJSON `json:"agent_problems"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+				t.Fatalf("build output is not JSON: %v: %s", err, stdout)
+			}
+			if len(result.AgentProblems) != tt.wantProblems {
+				t.Errorf("build reported %d agent problems, want %d: %#v", len(result.AgentProblems), tt.wantProblems, result)
+			}
+		})
+	}
+}
+
 func TestAppHasAgentDeclarationsHandlesMissingRecordsAndScannerResults(t *testing.T) {
 	oldDeclarations := hasBuildAgentDeclarations
 	defer func() { hasBuildAgentDeclarations = oldDeclarations }()
@@ -305,7 +372,9 @@ func TestAppHasAgentDeclarationsHandlesMissingRecordsAndScannerResults(t *testin
 			f := newAgentCheckFS(false)
 			f.Files["apps/com.acme.crm/records/work.scl"] = []byte("set agent_task_type, task_type_returns_default_agent {\n")
 			return f
-		}(), want: true},
+		}(), check: func() {
+			hasBuildAgentDeclarations = func(fsx.FileSystem, string, string) (bool, error) { return true, nil }
+		}, want: true},
 		{name: "record stat error", fsys: &fsx.MockFileSystem{StatErr: errors.New("stat denied")}, wantErr: "failed to find records"},
 		{name: "declaration scan error", fsys: &fsx.MockFileSystem{Files: map[string][]byte{"apps/com.acme.crm/records": nil}},
 			check: func() {

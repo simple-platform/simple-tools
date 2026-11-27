@@ -57,7 +57,7 @@ If a command refuses, read its reason and provide the missing app, agent, kind o
 - The persona has the display name as its title, then `Role` and `Communication Style`.
 - Agent-owned work has a playbook with `Collaboration`, `Domain Boundaries`, and `Completion Voice`. It says which tool supplies each needed fact.
 - People-only work was created with `--no-agent` and has no agent, playbook, or carried links.
-- The shape file defines the handed-in input and fixed output. A missing or null `output` means a free-text answer.
+- The shape file defines the handed-in input and fixed output. Its `input` may be left out, set to `null` or `true`, set to `{}`, or be an object with `"type": "object"`; other values fail. Its `output` may be left out for any answer or be an object with `"type": "object"`; `null` means free input or any answer.
 - Every fact comes from an available tool, and each kind of work has only the tools it needs.
 - Each tool lesson and skill has the eight sections in order and retains its generated `Slug:` line.
 - Reference knowledge contains useful written material without a required section layout.

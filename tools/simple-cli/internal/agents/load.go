@@ -46,6 +46,9 @@ type parsedChild struct {
 	Children []parsedChild `json:"children"`
 }
 
+// SCLParser parses one SCL file into the parser's JSON output.
+type SCLParser func(filePath string) ([]byte, error)
+
 func (child parsedChild) value() any {
 	if child.Type != "block" {
 		if child.Type == "kv_multi" {
@@ -107,15 +110,23 @@ func LoadAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, error) {
 	return loadFromDir(fsys, repoRoot, appID, filepath.Clean(appDir))
 }
 
-// HasAgentDeclarations finds agent and executor-link records without invoking
-// the parser, so people-only work does not trigger agent checks.
+// HasAgentDeclarations uses a loose text scan to avoid parsing unrelated apps,
+// then decides from parsed records whether agent checks apply.
 func HasAgentDeclarations(fsys fsx.FileSystem, repoRoot, appID string) (bool, error) {
 	repoRoot, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return false, fmt.Errorf("failed to resolve repository root: %w", err)
 	}
 	appDir := filepath.Join(repoRoot, "apps", filepath.FromSlash(appID))
-	return hasAgentDeclarationsAt(fsys, repoRoot, appID, appDir)
+	candidate, err := hasAgentDeclarationsAt(fsys, repoRoot, appID, appDir)
+	if err != nil || !candidate {
+		return false, err
+	}
+	app, err := loadFromDir(fsys, repoRoot, appID, appDir)
+	if err != nil {
+		return false, fmt.Errorf("failed to parse declarations for app %q: %w", appID, err)
+	}
+	return app.hasAgentCheckRecords(), nil
 }
 
 func hasAgentDeclarationsAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) (bool, error) {
@@ -144,6 +155,13 @@ func recordTextMatches(fsys fsx.FileSystem, repoRoot, appID, appDir string, patt
 }
 
 func loadFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, error) {
+	return loadFromDirWithParser(fsys, repoRoot, appID, appDir, parseSCL)
+}
+
+func loadFromDirWithParser(fsys fsx.FileSystem, repoRoot, appID, appDir string, parser SCLParser) (*App, error) {
+	if parser == nil {
+		parser = parseSCL
+	}
 	recordsDir := filepath.Join(appDir, "records")
 	files, err := sclFiles(fsys, recordsDir)
 	if err != nil {
@@ -156,7 +174,7 @@ func loadFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, err
 		if readErr != nil {
 			return nil, fmt.Errorf("failed to read %s: %w", relative(repoRoot, filePath), readErr)
 		}
-		output, parseErr := parseSCL(filePath)
+		output, parseErr := parser(filePath)
 		if parseErr != nil {
 			return nil, fmt.Errorf("failed to parse %s: %w", relative(repoRoot, filePath), parseErr)
 		}
@@ -216,12 +234,17 @@ func loadFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) (*App, err
 
 // Check parses agent records when present and scans every app for unfinished markers.
 func Check(fsys fsx.FileSystem, repoRoot, appID string) ([]Problem, error) {
+	return CheckWithParser(fsys, repoRoot, appID, parseSCL)
+}
+
+// CheckWithParser checks an app using the supplied parser.
+func CheckWithParser(fsys fsx.FileSystem, repoRoot, appID string, parser SCLParser) ([]Problem, error) {
 	repoRoot, err := filepath.Abs(repoRoot)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve repository root: %w", err)
 	}
 	appDir := filepath.Join(repoRoot, "apps", filepath.FromSlash(appID))
-	return checkFromDir(fsys, repoRoot, appID, appDir)
+	return checkFromDir(fsys, repoRoot, appID, appDir, parser)
 }
 
 // CheckAt checks an app from the supplied directory while preserving its app ID.
@@ -233,17 +256,17 @@ func CheckAt(fsys fsx.FileSystem, repoRoot, appID, appDir string) ([]Problem, er
 	if !filepath.IsAbs(appDir) {
 		appDir = filepath.Join(repoRoot, filepath.FromSlash(appDir))
 	}
-	return checkFromDir(fsys, repoRoot, appID, filepath.Clean(appDir))
+	return checkFromDir(fsys, repoRoot, appID, filepath.Clean(appDir), parseSCL)
 }
 
-func checkFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string) ([]Problem, error) {
+func checkFromDir(fsys fsx.FileSystem, repoRoot, appID, appDir string, parser SCLParser) ([]Problem, error) {
 	declared, err := hasAgentRelatedRecordsAt(fsys, repoRoot, appID, appDir)
 	if err != nil {
 		return nil, err
 	}
 	var a *App
 	if declared {
-		a, err = loadFromDir(fsys, repoRoot, appID, appDir)
+		a, err = loadFromDirWithParser(fsys, repoRoot, appID, appDir, parser)
 		if err != nil {
 			return nil, err
 		}

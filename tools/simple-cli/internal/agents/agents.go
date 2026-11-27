@@ -146,6 +146,10 @@ type App struct {
 
 func (a *App) DeclaresAgents() bool { return len(a.AgentRecords) > 0 }
 
+func (a *App) hasAgentCheckRecords() bool {
+	return len(a.AgentRecords) > 0 || len(a.AgentTaskTypeLinks) > 0
+}
+
 func (a *App) Agents() []*Agent {
 	result := append([]*Agent(nil), a.AgentRecords...)
 	sort.Slice(result, func(i, j int) bool { return result[i].DisplayName < result[j].DisplayName })

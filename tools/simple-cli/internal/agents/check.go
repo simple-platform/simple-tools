@@ -30,7 +30,7 @@ func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 	if err := a.checkMarkers(fsys, add); err != nil {
 		return nil, err
 	}
-	if len(a.AgentRecords) == 0 && len(a.TaskTypes) == 0 && len(a.AgentTaskTypeLinks) == 0 {
+	if !a.hasAgentCheckRecords() {
 		return uniqueProblems(problems), nil
 	}
 
@@ -344,25 +344,51 @@ func (a *App) checkShape(fsys fsx.FileSystem, item *TaskType, add func(string, i
 		add(item.File, item.Line, fmt.Sprintf("kind of work %q %s must be valid JSON with an object at its top level.", workName(item), shapeLabel))
 		return nil
 	}
-	var input map[string]json.RawMessage
-	if err := json.Unmarshal(value["input"], &input); err != nil || input == nil {
-		add(item.File, item.Line, fmt.Sprintf("kind of work %q shape must have an input object.", workName(item)))
+	input, inputExists := value["input"]
+	if inputExists {
+		if !validShapeInput(input) {
+			add(item.File, item.Line, fmt.Sprintf("kind of work %q shape input must have \"type\": \"object\", or be left out, null, true, or an empty object for free input", workName(item)))
+		}
 	}
-	output, exists := value["output"]
-	if !exists {
+	output, outputExists := value["output"]
+	if !outputExists {
 		return nil
 	}
 	trimmed := strings.TrimSpace(string(output))
-	if shapeLabel != "shape file" && trimmed == `"null"` {
-		trimmed = "null"
+	if trimmed == "null" || trimmed == `"null"` {
+		return nil
 	}
-	if trimmed != "null" {
-		var outputObject map[string]json.RawMessage
-		if err := json.Unmarshal(output, &outputObject); err != nil || outputObject == nil {
-			add(item.File, item.Line, fmt.Sprintf("kind of work %q shape output must be an object or null.", workName(item)))
-		}
+	if !validShapeObject(output) {
+		add(item.File, item.Line, fmt.Sprintf("kind of work %q shape output must have \"type\": \"object\", or be left out for any answer", workName(item)))
 	}
 	return nil
+}
+
+func validShapeInput(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "null" || trimmed == `"null"` || trimmed == "true" {
+		return true
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return false
+	}
+	if len(object) == 0 {
+		return true
+	}
+	return validShapeObject(raw)
+}
+
+func validShapeObject(raw json.RawMessage) bool {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return false
+	}
+	var typeName string
+	if err := json.Unmarshal(object["type"], &typeName); err != nil {
+		return false
+	}
+	return typeName == "object"
 }
 
 func inlineShapeJSON(raw any) ([]byte, bool) {

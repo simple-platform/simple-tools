@@ -22,11 +22,130 @@ import (
 
 const capturedParserFixtureGZIP = `H4sICNDdB2sAA2NvbXBsZXRlLWFwcC5qc29uAM1ZS0/rOBTez6+IIqSCREvSNH0tRrqb0SxGGunOEpBlEgO5dZMQJ2Uqhv8+dh4nLdg+4VKkywISPsc+x993HnGuX9yUbpm7dnNOy/us2JIyyzjJiyxiQpCYltS9dMt9rsbc8SzayNsN28u7HS3kdfSY8Lhgqbu+funGbXYS2FFeqZub1HGeKlbsnQdWEvMyzosa6Tg8e0iitROzHRHJNueMiL0o2ZaQGhHnzTDHeX5kBVt3j6kfmuc8iWiZZClJYgkR9rR2blw516SZa9LMdeO+XvaPqR3oB7c2jZVNclw3rL24cF6cJG7u6l+wHbWPzZ20NHLXLy5PUrkDvtykjLvr4LXdFD28en291TzttbAnn1aG6tHAf329BC6z55TQqN4GnmWbKj8phf3sX0hZlG0nNNpKwh6z3EZX9MiizTgrYlachq0ZQtfMzpcftLivJQzgaXDA2LX7bu8mmzR75ix+YNLKnBUiSykRVZ5nReneGvgUrBzC5z/NNM63B5aW8HCZlJzptmS6sG8J4KvaJd2KZ/cJZ+cj8Omq9WTcejbZxqMLsOQui7XcTJeIIR2+1HMznVu5ATj0jrg5YoLT/Z2MKVKwsipS8VkqvjfTON28OBvB1L4JgGNs3PSOXbXejDszJB83Lk5IECC2BHZCAt9KCMDBR4JFbBLOJT/3VRqTPJPpZf95ltRkTjsZThESMMHPBIzyatx4NW4MGRY0ARI0ARI0gT1oAA5nH+Corv73iSSoztyf5ecPOZPzdz0TSs4MiZ/Z0Pg5IEe5M1buNIVoGDEzJHhmSPDM7MED8Jts9p4Y2paB+u/X1pg4ESrFkNoYnU9I5ADuz43sfEvFs6wqqmMRqq8Qk355JqIiydV/tasjoQK4H5q1ITsamXwiKQSZYd8U7sOcmqSiLKq6jxKy9dHas0Ls6XDfrFXVqe1Yz15Jy0roFgs9+2KA+55Bj/ZEAfAMSxQlFRtS+yIl2F2fquB203SPmZQYIn0g4Evj1n9/s1TOq4Jyo/bDEFkxxNX3J01jzoTTejlY+eEcWXv+YeW/aZQOpQ+YXvYhkgQAtxnTpOjGHHGlZDRW40TX6kx+yMAcXTj//e6cqcvz3jwh3ym2VGsZkiAA9z20+dKYpoKTNZbJ7dKaVo/QmobkCsDNpgVzz+sWeqYbRpK0ZIUEiZC2prF23TmSNgCfhvq0EdpfmAAOp0PKGLEmDxKze1rxkjQl75Op5FDwo6PieVD9m//rhT5Hcgzg/nRg1L3z+DDsetBgDpKAALcUX/Yvi6oy6/uwItO3YXMk4wBuzK+yejIopkCtdi0koQDuz/Qands1CvAC02hPQd3PazUa0aJImCBt73BKlX5SIAvkKAtwi0AG90fQXZuMQfp4wM3G+JDu8kwkptq4QPp0wFWU6tSz8KzqAXgxuDEaop7uQOEXkg8ShosBzf3wJgPVD1LLATdbMx2mH6QyA27Uj72xBngRnlA/X3CKckIpLZGYBHywlDT+fkRNS6SUA242KBikpiVSpAE3qWk5taoJ4OV8sJrU8YdWTFv5qh9RfsqjnlOKCAlMwAeLqHfz0I76I4jBhhXSPgNupHNpp7ODF4sT0nn0efDXIXSFBOEKD0L3bEeL85H5M2X3yvh0PprUxF57t5Pk8LzPSjcSvSsself2ThTgxQqhu7ES6sDxeSzh0l2Zf05K7U8EBxKgq8PKOez96NjPj2R430NCtR+g5KUlzx6rAIeDyJNGni6t9ofX6MmY72GfSD38bExzYo+dDfseEjz9AEt8/yXbReFUuVM7O/yEzPeQF9Z+gOVYavBprO8hzXI/wHQe63vIp2jAZ76c4bf/ATWVJ0oMIgAA`
 
-const capturedInlineShapeParserOutput = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":5,"col":18},"value_loc":{"line":5,"col":23}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":16}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"name":"","type":"block","key":"output","children":[{"name":"","type":"block","key":"accepted","children":[{"type":"kv","value":"boolean","key":"type","key_loc":{"line":8,"col":18},"value_loc":{"line":8,"col":23}}],"key_loc":{"line":8,"col":7},"name_loc":{"line":8,"col":16}}],"key_loc":{"line":7,"col":5},"name_loc":{"line":7,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
+// Captured from the SCL parser for the inline shape cases below.
+const capturedInlineShapeRulesSCL = `set dev_simple_system.task_type, task_type_returns {
+  name "returns"
+  schema {
+    input {
+      type "object"
+      properties {
+        order_id {
+          type "string"
+        }
+      }
+    }
+    output {
+      type "object"
+    }
+  }
+}
 
-const capturedInlineShapeOutputNull = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":6,"col":9},"value_loc":{"line":6,"col":14}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":9}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"type":"kv","value":"null","key":"output","key_loc":{"line":9,"col":5},"value_loc":{"line":9,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
+set dev_simple_system.task_type, task_type_input_true {
+  name "input_true"
+  schema {
+    input true
+    output {
+      type "object"
+    }
+  }
+}
 
-const capturedInlineShapeOutputInvalidString = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":6,"col":9},"value_loc":{"line":6,"col":14}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":9}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"type":"kv","value":"string_output","key":"output","key_loc":{"line":9,"col":5},"value_loc":{"line":9,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
+set dev_simple_system.task_type, task_type_input_empty {
+  name "input_empty"
+  schema {
+    input {}
+    output {
+      type "object"
+    }
+  }
+}
+
+set dev_simple_system.task_type, task_type_output_null {
+  name "output_null"
+  schema {
+    input true
+    output null
+  }
+}
+
+set dev_simple_system.task_type, task_type_output_quoted_null {
+  name "output_quoted_null"
+  schema {
+    input true
+    output "null"
+  }
+}
+
+set dev_simple_system.task_type, task_type_input_null {
+  name "input_null"
+  schema {
+    input null
+    output {
+      type "object"
+    }
+  }
+}
+
+set dev_simple_system.task_type, task_type_input_absent {
+  name "input_absent"
+  schema {
+    output {
+      type "object"
+    }
+  }
+}
+
+set dev_simple_system.task_type, task_type_input_bad_type {
+  name "input_bad_type"
+  schema {
+    input {
+      type "string"
+    }
+    output {
+      type "object"
+    }
+  }
+}
+
+set dev_simple_system.task_type, task_type_output_bad_type {
+  name "output_bad_type"
+  schema {
+    input true
+    output {
+      type "string"
+    }
+  }
+}
+
+set dev_simple_system.task_type, task_type_inline_object {
+  name "inline_object"
+  schema {
+    input {
+      type "object"
+      order_id {
+        type "string"
+      }
+    }
+    output {
+      type "object"
+      accepted {
+        type "boolean"
+      }
+    }
+  }
+}
+
+set dev_simple_system.task_type, task_type_output_absent {
+  name "output_absent"
+  schema {
+    input true
+  }
+}
+`
+
+const capturedInlineShapeRulesParserOutput = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":5,"col":7},"value_loc":{"line":5,"col":12}},{"name":"","type":"block","key":"properties","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":8,"col":11},"value_loc":{"line":8,"col":16}}],"key_loc":{"line":7,"col":9},"name_loc":{"line":7,"col":18}}],"key_loc":{"line":6,"col":7},"name_loc":{"line":6,"col":18}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":13,"col":7},"value_loc":{"line":13,"col":12}}],"key_loc":{"line":12,"col":5},"name_loc":{"line":12,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}},{"name":["dev_simple_system.task_type","task_type_input_true"],"type":"block","key":"set","children":[{"type":"kv","value":"input_true","key":"name","key_loc":{"line":19,"col":3},"value_loc":{"line":19,"col":8}},{"name":"","type":"block","key":"schema","children":[{"type":"kv","value":true,"key":"input","key_loc":{"line":21,"col":5},"value_loc":{"line":21,"col":11}},{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":23,"col":7},"value_loc":{"line":23,"col":12}}],"key_loc":{"line":22,"col":5},"name_loc":{"line":22,"col":12}}],"key_loc":{"line":20,"col":3},"name_loc":{"line":20,"col":10}}],"key_loc":{"line":18,"col":1},"name_loc":{"line":18,"col":55}},{"name":["dev_simple_system.task_type","task_type_input_empty"],"type":"block","key":"set","children":[{"type":"kv","value":"input_empty","key":"name","key_loc":{"line":29,"col":3},"value_loc":{"line":29,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[],"key_loc":{"line":31,"col":5},"name_loc":{"line":31,"col":11}},{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":33,"col":7},"value_loc":{"line":33,"col":12}}],"key_loc":{"line":32,"col":5},"name_loc":{"line":32,"col":12}}],"key_loc":{"line":30,"col":3},"name_loc":{"line":30,"col":10}}],"key_loc":{"line":28,"col":1},"name_loc":{"line":28,"col":56}},{"name":["dev_simple_system.task_type","task_type_output_null"],"type":"block","key":"set","children":[{"type":"kv","value":"output_null","key":"name","key_loc":{"line":39,"col":3},"value_loc":{"line":39,"col":8}},{"name":"","type":"block","key":"schema","children":[{"type":"kv","value":true,"key":"input","key_loc":{"line":41,"col":5},"value_loc":{"line":41,"col":11}},{"type":"kv","value":"null","key":"output","key_loc":{"line":42,"col":5},"value_loc":{"line":42,"col":12}}],"key_loc":{"line":40,"col":3},"name_loc":{"line":40,"col":10}}],"key_loc":{"line":38,"col":1},"name_loc":{"line":38,"col":56}},{"name":["dev_simple_system.task_type","task_type_output_quoted_null"],"type":"block","key":"set","children":[{"type":"kv","value":"output_quoted_null","key":"name","key_loc":{"line":47,"col":3},"value_loc":{"line":47,"col":8}},{"name":"","type":"block","key":"schema","children":[{"type":"kv","value":true,"key":"input","key_loc":{"line":49,"col":5},"value_loc":{"line":49,"col":11}},{"type":"kv","value":"null","key":"output","key_loc":{"line":50,"col":5},"value_loc":{"line":50,"col":12}}],"key_loc":{"line":48,"col":3},"name_loc":{"line":48,"col":10}}],"key_loc":{"line":46,"col":1},"name_loc":{"line":46,"col":63}},{"name":["dev_simple_system.task_type","task_type_input_null"],"type":"block","key":"set","children":[{"type":"kv","value":"input_null","key":"name","key_loc":{"line":55,"col":3},"value_loc":{"line":55,"col":8}},{"name":"","type":"block","key":"schema","children":[{"type":"kv","value":"null","key":"input","key_loc":{"line":57,"col":5},"value_loc":{"line":57,"col":11}},{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":59,"col":7},"value_loc":{"line":59,"col":12}}],"key_loc":{"line":58,"col":5},"name_loc":{"line":58,"col":12}}],"key_loc":{"line":56,"col":3},"name_loc":{"line":56,"col":10}}],"key_loc":{"line":54,"col":1},"name_loc":{"line":54,"col":55}},{"name":["dev_simple_system.task_type","task_type_input_absent"],"type":"block","key":"set","children":[{"type":"kv","value":"input_absent","key":"name","key_loc":{"line":65,"col":3},"value_loc":{"line":65,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":68,"col":7},"value_loc":{"line":68,"col":12}}],"key_loc":{"line":67,"col":5},"name_loc":{"line":67,"col":12}}],"key_loc":{"line":66,"col":3},"name_loc":{"line":66,"col":10}}],"key_loc":{"line":64,"col":1},"name_loc":{"line":64,"col":57}},{"name":["dev_simple_system.task_type","task_type_input_bad_type"],"type":"block","key":"set","children":[{"type":"kv","value":"input_bad_type","key":"name","key_loc":{"line":74,"col":3},"value_loc":{"line":74,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":77,"col":7},"value_loc":{"line":77,"col":12}}],"key_loc":{"line":76,"col":5},"name_loc":{"line":76,"col":11}},{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":80,"col":7},"value_loc":{"line":80,"col":12}}],"key_loc":{"line":79,"col":5},"name_loc":{"line":79,"col":12}}],"key_loc":{"line":75,"col":3},"name_loc":{"line":75,"col":10}}],"key_loc":{"line":73,"col":1},"name_loc":{"line":73,"col":59}},{"name":["dev_simple_system.task_type","task_type_output_bad_type"],"type":"block","key":"set","children":[{"type":"kv","value":"output_bad_type","key":"name","key_loc":{"line":86,"col":3},"value_loc":{"line":86,"col":8}},{"name":"","type":"block","key":"schema","children":[{"type":"kv","value":true,"key":"input","key_loc":{"line":88,"col":5},"value_loc":{"line":88,"col":11}},{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":90,"col":7},"value_loc":{"line":90,"col":12}}],"key_loc":{"line":89,"col":5},"name_loc":{"line":89,"col":12}}],"key_loc":{"line":87,"col":3},"name_loc":{"line":87,"col":10}}],"key_loc":{"line":85,"col":1},"name_loc":{"line":85,"col":60}},{"name":["dev_simple_system.task_type","task_type_inline_object"],"type":"block","key":"set","children":[{"type":"kv","value":"inline_object","key":"name","key_loc":{"line":96,"col":3},"value_loc":{"line":96,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":99,"col":7},"value_loc":{"line":99,"col":12}},{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":101,"col":9},"value_loc":{"line":101,"col":14}}],"key_loc":{"line":100,"col":7},"name_loc":{"line":100,"col":16}}],"key_loc":{"line":98,"col":5},"name_loc":{"line":98,"col":11}},{"name":"","type":"block","key":"output","children":[{"type":"kv","value":"object","key":"type","key_loc":{"line":105,"col":7},"value_loc":{"line":105,"col":12}},{"name":"","type":"block","key":"accepted","children":[{"type":"kv","value":"boolean","key":"type","key_loc":{"line":107,"col":9},"value_loc":{"line":107,"col":14}}],"key_loc":{"line":106,"col":7},"name_loc":{"line":106,"col":16}}],"key_loc":{"line":104,"col":5},"name_loc":{"line":104,"col":12}}],"key_loc":{"line":97,"col":3},"name_loc":{"line":97,"col":10}}],"key_loc":{"line":95,"col":1},"name_loc":{"line":95,"col":58}},{"name":["dev_simple_system.task_type","task_type_output_absent"],"type":"block","key":"set","children":[{"type":"kv","value":"output_absent","key":"name","key_loc":{"line":114,"col":3},"value_loc":{"line":114,"col":8}},{"name":"","type":"block","key":"schema","children":[{"type":"kv","value":true,"key":"input","key_loc":{"line":116,"col":5},"value_loc":{"line":116,"col":11}}],"key_loc":{"line":115,"col":3},"name_loc":{"line":115,"col":10}}],"key_loc":{"line":113,"col":1},"name_loc":{"line":113,"col":58}}]`
+
+const capturedAgentTaskTypeLinkParserOutput = `[{"name":["agent_task_type","link_people"],"type":"block","key":"set","children":[],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":34}}]`
 
 const capturedNestedBlockListParserOutput = `[{"name":["dev_simple_system.task_type","task_type_returns"],"type":"block","key":"set","children":[{"type":"kv","value":"returns","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"name":"","type":"block","key":"schema","children":[{"name":"","type":"block","key":"input","children":[{"name":"","type":"block","key":"order_id","children":[{"type":"kv","value":"string","key":"type","key_loc":{"line":6,"col":9},"value_loc":{"line":6,"col":14}}],"key_loc":{"line":5,"col":7},"name_loc":{"line":5,"col":9}},{"type":"kv_multi","value":[{"line":8,"value":"a","col":16},{"line":8,"value":"b","col":21}],"key":"required","key_loc":{"line":8,"col":7}}],"key_loc":{"line":4,"col":5},"name_loc":{"line":4,"col":11}},{"type":"kv","value":"null","key":"output","key_loc":{"line":10,"col":5},"value_loc":{"line":10,"col":12}}],"key_loc":{"line":3,"col":3},"name_loc":{"line":3,"col":10}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":52}}]`
 
@@ -327,7 +446,7 @@ func TestCheckSkipsMalformedRecordsWithoutAgentDeclarationsAndKeepsMarkerScan(t 
 	}
 }
 
-func TestHasAgentDeclarationsFindsAgentAndTaskTypeRecords(t *testing.T) {
+func TestAgentDeclarationQuickScanFindsCandidateRecords(t *testing.T) {
 	tests := []struct {
 		name   string
 		record string
@@ -352,12 +471,71 @@ func TestHasAgentDeclarationsFindsAgentAndTaskTypeRecords(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			f := newMemoryFS()
 			f.put("records/other.scl", []byte(test.record))
-			got, err := HasAgentDeclarations(f, fixtureRepoRoot, fixtureAppID)
+			got, err := hasAgentDeclarationsAt(f, fixtureRepoRoot, fixtureAppID, filepath.Join(fixtureRepoRoot, "apps", fixtureAppID))
 			if err != nil {
-				t.Fatalf("HasAgentDeclarations() error = %v", err)
+				t.Fatalf("agent declaration quick scan error = %v", err)
 			}
 			if got != test.want {
 				t.Errorf("HasAgentDeclarations() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCheckUsesParsedAgentRecordKinds(t *testing.T) {
+	tests := []struct {
+		name         string
+		record       string
+		parserOutput string
+		wantDeclared bool
+		wantProblems int
+	}{
+		{
+			name:         "comment mentioning an agent does not enable agent checks",
+			record:       "# We do not set agent, ever.\nset task_type, task_type_human {\n  name \"human\"\n}\n",
+			parserOutput: `[{"name":["task_type","task_type_human"],"type":"block","key":"set","children":[{"type":"kv","value":"human","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}}],"key_loc":{"line":0,"col":0},"name_loc":{"line":0,"col":31}}]`,
+		},
+		{
+			name:         "description mentioning an agent does not enable agent checks",
+			record:       "set task_type, task_type_human {\n  name \"human\"\n  description \"We do not set agent, ever.\"\n}\n",
+			parserOutput: `[{"name":["task_type","task_type_human"],"type":"block","key":"set","children":[{"type":"kv","value":"human","key":"name","key_loc":{"line":2,"col":3},"value_loc":{"line":2,"col":8}},{"type":"kv","value":"We do not set agent, ever.","key":"description","key_loc":{"line":3,"col":3},"value_loc":{"line":3,"col":15}}],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":32}}]`,
+		},
+		{
+			name:         "parsed agent record enables agent checks",
+			record:       "set agent, agent_support {}\n",
+			parserOutput: `[{"name":["agent","agent_support"],"type":"block","key":"set","children":[],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":26}}]`,
+			wantDeclared: true,
+			wantProblems: 1,
+		},
+		{
+			name:         "parsed agent task link enables agent checks on its own",
+			record:       "set agent_task_type, link_people {}\n",
+			parserOutput: `[{"name":["agent_task_type","link_people"],"type":"block","key":"set","children":[],"key_loc":{"line":1,"col":1},"name_loc":{"line":1,"col":34}}]`,
+			wantDeclared: true,
+			wantProblems: 2,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fsys := newMemoryFS()
+			fsys.put("records/case.scl", []byte(test.record))
+			oldParser := parseSCL
+			parseSCL = func(string) ([]byte, error) { return []byte(test.parserOutput), nil }
+			t.Cleanup(func() { parseSCL = oldParser })
+
+			problems, err := Check(fsys, fixtureRepoRoot, fixtureAppID)
+			if err != nil {
+				t.Fatalf("Check() error = %v", err)
+			}
+			if len(problems) != test.wantProblems {
+				t.Errorf("Check() returned %d problems, want %d: %#v", len(problems), test.wantProblems, problems)
+			}
+			declared, err := HasAgentDeclarations(fsys, fixtureRepoRoot, fixtureAppID)
+			if err != nil {
+				t.Fatalf("HasAgentDeclarations() error = %v", err)
+			}
+			if declared != test.wantDeclared {
+				t.Errorf("HasAgentDeclarations() = %v, want %v", declared, test.wantDeclared)
 			}
 		})
 	}
@@ -505,7 +683,7 @@ func TestAgentScanFormsDetectedBothScans(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			f := newMemoryFS()
 			f.put("records/sample.scl", []byte(test.record))
-			gotDecl, err := HasAgentDeclarations(f, fixtureRepoRoot, fixtureAppID)
+			gotDecl, err := hasAgentDeclarationsAt(f, fixtureRepoRoot, fixtureAppID, filepath.Join(fixtureRepoRoot, "apps", fixtureAppID))
 			if err != nil {
 				t.Fatalf("HasAgentDeclarations() error = %v", err)
 			}
@@ -979,11 +1157,13 @@ func TestCheckRuleCases(t *testing.T) {
 		{name: "shape file missing", want: "shape file is missing", mutate: func(_ *App, f *memoryFS) { f.delete("records/task-types/returns.json") }},
 		{name: "shape invalid json", want: "valid JSON", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/returns.json", []byte("{")) }},
 		{name: "shape top level is not object", want: "top level", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/returns.json", []byte("[]")) }},
-		{name: "shape input absent", want: "input object", mutate: func(_ *App, f *memoryFS) { f.put("records/task-types/returns.json", []byte(`{"output":{}}`)) }},
-		{name: "shape input not object", want: "input object", mutate: func(_ *App, f *memoryFS) {
-			f.put("records/task-types/returns.json", []byte(`{"input":[],"output":{}}`))
+		{name: "shape input not accepted", want: `input must have "type"`, mutate: func(_ *App, f *memoryFS) {
+			f.put("records/task-types/returns.json", []byte(`{"input":false,"output":{"type":"object"}}`))
 		}},
-		{name: "shape output not object", want: "output must be an object", mutate: func(_ *App, f *memoryFS) {
+		{name: "shape input object with wrong type", want: `input must have "type"`, mutate: func(_ *App, f *memoryFS) {
+			f.put("records/task-types/returns.json", []byte(`{"input":{"type":"string"},"output":{"type":"object"}}`))
+		}},
+		{name: "shape output not object", want: `output must have "type": "object"`, mutate: func(_ *App, f *memoryFS) {
 			f.put("records/task-types/returns.json", []byte(`{"input":{},"output":[]}`))
 		}},
 		{name: "states reference unreadable", want: "unreadable states file reference", mutate: func(a *App, _ *memoryFS) { a.records["task_type_returns"].fields["states"] = "bad expression" }},
@@ -1115,10 +1295,16 @@ func TestCheckCapturedInlineShapeParserOutput(t *testing.T) {
 	checkSkill = func(string) []structure.Finding { return nil }
 	t.Cleanup(func() { checkInstructions, checkSkill = oldInstructions, oldSkill })
 	oldParser := parseSCL
-	parseSCL = func(string) ([]byte, error) { return []byte(capturedInlineShapeParserOutput), nil }
+	parseSCL = func(filePath string) ([]byte, error) {
+		if strings.HasSuffix(filePath, "agent-link.scl") {
+			return []byte(capturedAgentTaskTypeLinkParserOutput), nil
+		}
+		return []byte(capturedInlineShapeRulesParserOutput), nil
+	}
 	t.Cleanup(func() { parseSCL = oldParser })
 
 	fsys := fixtureFS(t)
+	fsys.put("records/agent-link.scl", []byte("set agent_task_type, link_people {}\n"))
 	a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -1128,14 +1314,25 @@ func TestCheckCapturedInlineShapeParserOutput(t *testing.T) {
 		t.Fatalf("parsed inline schema = %#v, want an object", a.records["task_type_returns"].fields["schema"])
 	}
 	input, ok := schema["input"].(map[string]any)
+	if !ok || input["type"] != "object" {
+		t.Fatalf("parsed input shape = %#v, want an object shape", schema["input"])
+	}
+	properties, ok := input["properties"].(map[string]any)
 	if !ok {
-		t.Fatalf("parsed input shape = %#v, want an object", schema["input"])
+		t.Fatalf("parsed input properties = %#v, want an object", input["properties"])
 	}
-	if _, ok := input["order_id"].(map[string]any); !ok {
-		t.Fatalf("parsed order_id shape = %#v, want an object", input["order_id"])
+	if _, ok := properties["order_id"].(map[string]any); !ok {
+		t.Fatalf("parsed order_id shape = %#v, want an object", properties["order_id"])
 	}
-	if _, ok := schema["output"].(map[string]any); !ok {
-		t.Fatalf("parsed output shape = %#v, want an object", schema["output"])
+	output, ok := schema["output"].(map[string]any)
+	if !ok || output["type"] != "object" {
+		t.Fatalf("parsed output shape = %#v, want an object shape", schema["output"])
+	}
+	for _, taskType := range a.TaskTypes {
+		if taskType.Name == "returns" {
+			a.TaskTypes = []*TaskType{taskType}
+			break
+		}
 	}
 
 	problems, err := a.check(fsys)
@@ -1148,62 +1345,123 @@ func TestCheckCapturedInlineShapeParserOutput(t *testing.T) {
 		}
 	}
 }
-
-func TestCheckCapturedInlineShapeOutput(t *testing.T) {
+func TestCheckShapeFileRules(t *testing.T) {
+	const inputRule = `kind of work "returns" shape input must have "type": "object", or be left out, null, true, or an empty object for free input`
+	const outputRule = `kind of work "returns" shape output must have "type": "object", or be left out for any answer`
+	tests := []struct {
+		name        string
+		shape       string
+		wantProblem string
+	}{
+		{name: "input omitted", shape: `{"output":{"type":"object"}}`},
+		{name: "input null", shape: `{"input":null,"output":{"type":"object"}}`},
+		{name: "input true", shape: `{"input":true,"output":{"type":"object"}}`},
+		{name: "empty input object", shape: `{"input":{},"output":{"type":"object"}}`},
+		{name: "typed input object", shape: `{"input":{"type":"object"},"output":{"type":"object"}}`},
+		{name: "output omitted", shape: `{"input":{}}`},
+		{name: "output null", shape: `{"input":{},"output":null}`},
+		{name: "typed output object", shape: `{"input":{},"output":{"type":"object"}}`},
+		{name: "input false", shape: `{"input":false}`, wantProblem: inputRule},
+		{name: "input array", shape: `{"input":[]}`, wantProblem: inputRule},
+		{name: "input string", shape: `{"input":"free"}`, wantProblem: inputRule},
+		{name: "input object missing type", shape: `{"input":{"field":"value"}}`, wantProblem: inputRule},
+		{name: "input object wrong type", shape: `{"input":{"type":"string"}}`, wantProblem: inputRule},
+		{name: "output false", shape: `{"input":{},"output":false}`, wantProblem: outputRule},
+		{name: "output array", shape: `{"input":{},"output":[]}`, wantProblem: outputRule},
+		{name: "output string", shape: `{"input":{},"output":"answer"}`, wantProblem: outputRule},
+		{name: "output object missing type", shape: `{"input":{},"output":{"field":"value"}}`, wantProblem: outputRule},
+		{name: "output object wrong type", shape: `{"input":{},"output":{"type":"string"}}`, wantProblem: outputRule},
+	}
 	oldInstructions, oldSkill := checkInstructions, checkSkill
 	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) { return nil, nil }
 	checkSkill = func(string) []structure.Finding { return nil }
 	t.Cleanup(func() { checkInstructions, checkSkill = oldInstructions, oldSkill })
-
-	tests := []struct {
-		name        string
-		parserJSON  string
-		wantProblem string
-	}{
-		{
-			name:       "inline output null passes",
-			parserJSON: capturedInlineShapeOutputNull,
-		},
-		{
-			name:       "inline output object passes",
-			parserJSON: capturedInlineShapeParserOutput,
-		},
-		{
-			name:        "inline output string is refused",
-			parserJSON:  capturedInlineShapeOutputInvalidString,
-			wantProblem: `kind of work "returns" shape output must be an object or null`,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			oldParser := parseSCL
-			parseSCL = func(string) ([]byte, error) { return []byte(tt.parserJSON), nil }
-			t.Cleanup(func() { parseSCL = oldParser })
-
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			a := loadFixtureModel(t)
 			fsys := fixtureFS(t)
-			a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
-			if err != nil {
-				t.Fatalf("Load() error = %v", err)
-			}
+			fsys.put("records/task-types/returns.json", []byte(test.shape))
 			problems, err := a.check(fsys)
 			if err != nil {
 				t.Fatalf("check() error = %v", err)
 			}
 			var shapeProblems []Problem
-			for _, p := range problems {
-				if strings.Contains(p.Rule, "shape") {
-					shapeProblems = append(shapeProblems, p)
+			for _, problem := range problems {
+				if strings.Contains(problem.Rule, "shape") {
+					shapeProblems = append(shapeProblems, problem)
 				}
 			}
-			if tt.wantProblem == "" {
-				if len(shapeProblems) > 0 {
+			if test.wantProblem == "" {
+				if len(shapeProblems) != 0 {
 					t.Fatalf("unexpected shape problems: %#v", shapeProblems)
 				}
-			} else {
-				if !problemContains(shapeProblems, tt.wantProblem) {
-					t.Fatalf("check() problems = %#v, want %q", shapeProblems, tt.wantProblem)
+				return
+			}
+			if len(shapeProblems) != 1 || shapeProblems[0].Rule != test.wantProblem {
+				t.Fatalf("shape problems = %#v, want only %q", shapeProblems, test.wantProblem)
+			}
+		})
+	}
+}
+
+func TestCheckCapturedInlineShapeRules(t *testing.T) {
+	const inputTypeRule = `kind of work "input_bad_type" shape input must have "type": "object", or be left out, null, true, or an empty object for free input`
+	const outputTypeRule = `kind of work "output_bad_type" shape output must have "type": "object", or be left out for any answer`
+	tests := []struct {
+		name        string
+		workName    string
+		wantProblem string
+	}{
+		{name: "typed input and output objects", workName: "returns"},
+		{name: "input true", workName: "input_true"},
+		{name: "empty input object", workName: "input_empty"},
+		{name: "input absent", workName: "input_absent"},
+		{name: "output absent", workName: "output_absent"},
+		{name: "input null is parsed as text", workName: "input_null"},
+		{name: "input object has wrong type", workName: "input_bad_type", wantProblem: inputTypeRule},
+		{name: "output null is parsed as text", workName: "output_null"},
+		{name: "quoted output null is parsed as text", workName: "output_quoted_null"},
+		{name: "output object has wrong type", workName: "output_bad_type", wantProblem: outputTypeRule},
+	}
+	oldInstructions, oldSkill := checkInstructions, checkSkill
+	checkInstructions = func(string, string, string) ([]structure.Finding, []structure.Finding) { return nil, nil }
+	checkSkill = func(string) []structure.Finding { return nil }
+	t.Cleanup(func() { checkInstructions, checkSkill = oldInstructions, oldSkill })
+	oldParser := parseSCL
+	parseSCL = func(filePath string) ([]byte, error) {
+		if strings.HasSuffix(filePath, "agent-link.scl") {
+			return []byte(capturedAgentTaskTypeLinkParserOutput), nil
+		}
+		return []byte(capturedInlineShapeRulesParserOutput), nil
+	}
+	t.Cleanup(func() { parseSCL = oldParser })
+	fsys := fixtureFS(t)
+	fsys.put("records/all.scl", []byte(capturedInlineShapeRulesSCL))
+	fsys.put("records/agent-link.scl", []byte("set agent_task_type, link_people {}\n"))
+	a, err := Load(fsys, fixtureRepoRoot, fixtureAppID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	problems, err := a.check(fsys)
+	if err != nil {
+		t.Fatalf("check() error = %v", err)
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var shapeProblems []Problem
+			for _, problem := range problems {
+				if strings.Contains(problem.Rule, "shape") && strings.Contains(problem.Rule, `kind of work "`+test.workName+`"`) {
+					shapeProblems = append(shapeProblems, problem)
 				}
+			}
+			if test.wantProblem == "" {
+				if len(shapeProblems) != 0 {
+					t.Fatalf("unexpected shape problems: %#v", shapeProblems)
+				}
+				return
+			}
+			if len(shapeProblems) != 1 || shapeProblems[0].Rule != test.wantProblem {
+				t.Fatalf("shape problems = %#v, want only %q", shapeProblems, test.wantProblem)
 			}
 		})
 	}
@@ -1311,7 +1569,7 @@ func TestCheckWorkWithoutAgentLink(t *testing.T) {
 			a.TaskTypes[0].Playbook = nil
 			a.TaskTypes[0].PlaybookRef = Reference{}
 			f.put("records/task-types/returns.json", []byte(`{"input":[]}`))
-		}, want: "input object"},
+		}, want: `input must have "type"`},
 		{name: "checks a no-agent tool link", mutate: func(a *App, _ *memoryFS) {
 			a.AgentTaskTypeLinks = nil
 			a.TaskTypeSkillLinks = nil
@@ -1709,7 +1967,7 @@ func fixtureFS(t *testing.T) *memoryFS {
 	t.Helper()
 	f := newMemoryFS()
 	f.put("records/all.scl", fixtureSource(t))
-	f.put("records/task-types/returns.json", []byte(`{"input":{},"output":{}}`))
+	f.put("records/task-types/returns.json", []byte(`{"input":{},"output":{"type":"object"}}`))
 	f.put("records/task-types/states.json", []byte(`{"queued":true,"working":true,"waiting_for_user":true,"waiting_for_event":true,"completed":true,"cancelled":true,"failed":true}`))
 	f.put("knowledge/support-persona.md", []byte("# Persona\nBe useful.\n"))
 	f.put("knowledge/playbook-returns.md", []byte("# Playbook\nFollow steps.\n"))

@@ -21,7 +21,7 @@ description: Create and connect an agent, its kinds of work, tools, and guidance
 
 4. Write the playbook for the business person who maintains it. The file is `knowledge/playbook-<kind-of-work>.md`. Do not add a title. Use `Collaboration`, `Domain Boundaries`, and `Completion Voice`. Explain what the agent can finish, what it brings to a person, what the person sees when asked, and which tool supplies each fact. Never put a script, query, or code in a playbook.
 
-5. Set the shape file's `input` to the information handed to the work. Set `output` to the fixed result the agent must return. Leave `output` out or set it to `null` for a free-text answer.
+5. Set the shape file's `input` to an object with `type: "object"` for checked input. For free input, leave it out, set it to `null` or `true`, or set it to `{}`; other values fail. Set `output` to an object with `type: "object"` for a fixed result. Leave `output` out for any answer; `null` means free input or any answer.
 
 6. Add a tool for each fact the playbook needs that its linked tools cannot provide:
 
