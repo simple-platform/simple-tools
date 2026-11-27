@@ -33,7 +33,7 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 			"templates/space/index.html":           []byte(`<title>{{.DisplayName}}</title>`),
 			"templates/space/src/styles/theme.css": []byte(`/* theme */`),
 			"templates/space/src/main.tsx":         []byte(`// main`),
-			"templates/space/src/App.tsx":          []byte(`<h1>{{.DisplayName}}</h1>`),
+			"templates/space/src/App.tsx":          []byte(`<h1>{{.DisplayNameJSX}}</h1>`),
 			"templates/space/tests/App.test.tsx":   []byte(`// test`),
 			"templates/space/10_spaces.scl":        []byte("set dev_simple_system.space, {{.SpaceNameScl}} { display_name \"{{.DisplayName}}\" }"),
 		},
@@ -69,6 +69,48 @@ func TestCreateSpaceStructure_Success(t *testing.T) {
 	}
 }
 
+func TestEscapeSpaceDisplayNameForJSX(t *testing.T) {
+	tests := []struct {
+		name        string
+		displayName string
+		want        string
+	}{
+		{name: "plain name", displayName: "Service Board", want: "Service Board"},
+		{name: "ampersand", displayName: "&", want: "&amp;"},
+		{name: "less than", displayName: "<", want: "&lt;"},
+		{name: "greater than", displayName: ">", want: "&gt;"},
+		{name: "opening brace", displayName: "{", want: "&#123;"},
+		{name: "closing brace", displayName: "}", want: "&#125;"},
+		{name: "several special characters", displayName: "R&D <Ops> {beta}", want: "R&amp;D &lt;Ops&gt; &#123;beta&#125;"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := escapeSpaceDisplayNameForJSX(tt.displayName); got != tt.want {
+				t.Errorf("escapeSpaceDisplayNameForJSX(%q) = %q, want %q", tt.displayName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateSpaceStructureEscapesDisplayNameInAppHeading(t *testing.T) {
+	written := make(map[string][]byte)
+	mockFS := &mockWriteTrackingFS{
+		written: written,
+		statFn:  func(name string) bool { return name == "/root/apps/com.acme.app" },
+	}
+	cfg := SpaceConfig{AppID: "com.acme.app", SpaceName: "ops", DisplayName: "R&D <Ops> {beta}"}
+	if err := CreateSpaceStructure(mockFS, TemplatesFS, "/root", cfg); err != nil {
+		t.Fatalf("scaffold Space with special display name: %v", err)
+	}
+
+	app := string(written["/root/apps/com.acme.app/spaces/ops/src/App.tsx"])
+	wantLine := `      <h1 className="text-2xl font-bold mb-4">R&amp;D &lt;Ops&gt; &#123;beta&#125;</h1>`
+	if !strings.Contains(app, wantLine) {
+		t.Errorf("App.tsx heading does not preserve the display name as JSX text; want line %q", wantLine)
+	}
+}
+
 func TestSpaceTemplateUsesSharedTheme(t *testing.T) {
 	written := make(map[string][]byte)
 	mockFS := &mockWriteTrackingFS{
@@ -81,8 +123,8 @@ func TestSpaceTemplateUsesSharedTheme(t *testing.T) {
 	}
 	theme := string(written["/root/apps/com.acme.app/spaces/my-space/src/styles/theme.css"])
 	for _, required := range []string{
-		`@import "tailwindcss";`,
-		`@import "@simpleplatform/ui-kit/theme.css";`,
+		`@import 'tailwindcss';`,
+		`@import '@simpleplatform/ui-kit/theme.css';`,
 		"var(--simple-color-canvas)",
 		"var(--simple-color-text-primary)",
 		"var(--simple-font-family-sans)",

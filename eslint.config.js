@@ -9,6 +9,8 @@ export default antfu({
   ignores: [
     'node_modules/',
     'dist/',
+    // TestGeneratedWorkspacePassesLint judges these with their shipped config.
+    'tools/simple-cli/internal/scaffold/templates/',
   ],
 
   languageOptions: {

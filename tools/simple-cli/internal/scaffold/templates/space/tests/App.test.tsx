@@ -16,7 +16,9 @@ vi.mock('@simpleplatform/sdk/space', () => ({
     context: { kind: 'standalone' },
     data: {
       query: vi.fn().mockResolvedValue({
-        application_tables: [{ id: 'TBL000001' }],
+        application_tables: [
+          { id: 'TBL000001' },
+        ],
         applications: [
           { display_name: 'Test App One', id: '1', version: '1.0.0' },
           { display_name: 'Test App Two', id: '2', version: '2.3.1' },

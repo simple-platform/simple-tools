@@ -1,7 +1,17 @@
 {
+  "type": "module",
   "private": true,
   "packageManager": "pnpm@10.34.9",
   "engines": {
     "node": ">=25"
+  },
+  "scripts": {
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@antfu/eslint-config": "10.0.0",
+    "eslint": "10.15.0",
+    "eslint-plugin-format": "2.0.1",
+    "typescript": "6.0.3"
   }
 }

@@ -432,7 +432,7 @@ func TestNewActionCmd_Rust(t *testing.T) {
 	for _, want := range []string{
 		`name = "greet-user"`,
 		`simpleplatform-sdk = "0.7"`,
-		`async = ["simpleplatform-sdk/async"]`,
+		`async = [ "simpleplatform-sdk/async" ]`,
 		`opt-level = "z"`,
 	} {
 		if !strings.Contains(string(cargoToml), want) {
