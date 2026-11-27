@@ -82,3 +82,7 @@ This document defines the **standard operating procedure** for building and modi
 2.  `simple test`
 3.  `simple deploy apps/<app_id> --env <env>` (when deployment is requested)
     *   *Ref:* `.simple/context/cli-manifest.json` (Command: "deploy")
+
+## Create an Agent
+
+When a developer asks for an agent, follow `.agent/workflows/create-agent.md` and use the `build-agents` skill. Create the agent and kind of work with the CLI, then complete the generated persona, playbook, and shape file. Add only the tools and longer procedures the work needs. See `.simple/context/13-agents.md` for the parts, command flags, and build checks.

@@ -60,7 +60,7 @@ fn main() {
 /// checks it, and it never makes a failed call safe to repeat.
 ///
 /// @tool
-/// @shortdesc Greet whoever the caller names, and answer with the greeting.
+/// @shortdesc {{if .Tool}}TODO(simple): Say in one line what this tool gives an agent.{{else}}Greet whoever the caller names, and answer with the greeting.{{end}}
 /// @usewhen A greeting is wanted for a named person.
 fn handler(request: Request<Payload>) -> Result<Output, Error> {
     let name = request.data.name.trim();

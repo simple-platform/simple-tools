@@ -19,6 +19,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	"simple-cli/internal/agents"
 	"simple-cli/internal/config"
 	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
@@ -127,6 +128,238 @@ func TestRunDeploy(t *testing.T) {
 				t.Errorf("runDeploy() unexpected error = %v", err)
 			}
 		})
+	}
+}
+
+func TestRunDeployWithAgentProblemsStopsBeforeCollecting(t *testing.T) {
+	originalCheck := checkBuildAgents
+	defer func() { checkBuildAgents = originalCheck }()
+	problem := agents.Problem{File: "apps/com.acme.shop/records/71_agents.scl", Line: 8, Rule: "replace the remaining guidance."}
+	tests := []struct {
+		name   string
+		dryRun bool
+	}{
+		{name: "deploy", dryRun: false},
+		{name: "dry run", dryRun: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				checkCalls := 0
+				checkBuildAgents = func(_ fsx.FileSystem, _, appID string) ([]agents.Problem, error) {
+					checkCalls++
+					if appID != "com.acme.shop" {
+						t.Errorf("checked app = %q, want com.acme.shop", appID)
+					}
+					return []agents.Problem{problem}, nil
+				}
+				f := newDeployFixture()
+				f.versioner.id = "com.acme.shop"
+				collected := false
+				f.collect = func(func(int, int)) (map[string]deploy.FileInfo, error) {
+					collected = true
+					return smallApp, nil
+				}
+				fsys := &fsx.MockFileSystem{Files: map[string][]byte{"apps/com.acme.shop/records": nil}}
+				opts := deployOptions{appPath: "apps/com.acme.shop", env: "dev", dryRun: tt.dryRun, mode: progressPlain, fsys: fsys}
+				var out bytes.Buffer
+				err := runDeployWith(context.Background(), &out, f.deps(), opts)
+				if err == nil || !strings.Contains(err.Error(), "1 agent problem remains") {
+					t.Fatalf("runDeployWith() error = %v, want agent check failure", err)
+				}
+				if checkCalls != 1 {
+					t.Errorf("agent checker calls = %d, want 1", checkCalls)
+				}
+				if collected || f.versioner.bumped() != 0 {
+					t.Errorf("collected = %v, version bumps = %d; want neither", collected, f.versioner.bumped())
+				}
+				for _, want := range []string{
+					"com.acme.shop: 1 thing left:",
+					"apps/com.acme.shop/records/71_agents.scl:8: replace the remaining guidance.",
+					"Nothing was uploaded.",
+				} {
+					if !strings.Contains(out.String(), want) {
+						t.Errorf("output missing %q:\n%s", want, out.String())
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestRunDeployWithTwoAgentProblemsStopsBeforeCollecting(t *testing.T) {
+	originalCheck := checkBuildAgents
+	defer func() { checkBuildAgents = originalCheck }()
+	problems := []agents.Problem{
+		{File: "apps/com.acme.shop/records/71_agents.scl", Line: 8, Rule: "replace the remaining guidance."},
+		{File: "apps/com.acme.shop/records/72_agent_links.scl", Line: 12, Rule: "repair the broken link."},
+	}
+	checkBuildAgents = func(_ fsx.FileSystem, _, appID string) ([]agents.Problem, error) {
+		if appID != "com.acme.shop" {
+			t.Errorf("checked app = %q, want com.acme.shop", appID)
+		}
+		return problems, nil
+	}
+	synctest.Test(t, func(t *testing.T) {
+		fixture := newDeployFixture()
+		fixture.versioner.id = "com.acme.shop"
+		collected := false
+		fixture.collect = func(func(int, int)) (map[string]deploy.FileInfo, error) {
+			collected = true
+			return smallApp, nil
+		}
+		opts := deployOptions{appPath: "apps/com.acme.shop", env: "dev", dryRun: true, mode: progressPlain,
+			fsys: &fsx.MockFileSystem{Files: map[string][]byte{"apps/com.acme.shop/records": nil}}}
+		var out bytes.Buffer
+		err := runDeployWith(context.Background(), &out, fixture.deps(), opts)
+		if err == nil || !strings.Contains(err.Error(), "2 agent problems remain") {
+			t.Fatalf("runDeployWith() error = %v, want two agent problems", err)
+		}
+		if collected || fixture.versioner.bumped() != 0 {
+			t.Errorf("collected = %v, version bumps = %d; want neither", collected, fixture.versioner.bumped())
+		}
+		for _, want := range []string{
+			"com.acme.shop: 2 things left:",
+			"apps/com.acme.shop/records/71_agents.scl:8: replace the remaining guidance.",
+			"apps/com.acme.shop/records/72_agent_links.scl:12: repair the broken link.",
+			"Nothing was uploaded.",
+		} {
+			if !strings.Contains(out.String(), want) {
+				t.Errorf("output missing %q:\n%s", want, out.String())
+			}
+		}
+	})
+}
+
+func TestRunDeployWithNoAgentProblemsKeepsOutput(t *testing.T) {
+	originalCheck := checkBuildAgents
+	defer func() { checkBuildAgents = originalCheck }()
+	checkCalls := 0
+	checkBuildAgents = func(_ fsx.FileSystem, _, _ string) ([]agents.Problem, error) {
+		checkCalls++
+		return nil, nil
+	}
+	var outputs [2]string
+	for i, withCheck := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			f := newDeployFixture()
+			f.versioner.id = "com.acme.shop"
+			f.files = smallApp
+			opts := deployOptions{appPath: "apps/com.acme.shop", env: "dev", dryRun: true, mode: progressPlain}
+			if withCheck {
+				opts.fsys = &fsx.MockFileSystem{Files: map[string][]byte{"apps/com.acme.shop/records": nil}}
+			}
+			var out bytes.Buffer
+			if err := runDeployWith(context.Background(), &out, f.deps(), opts); err != nil {
+				t.Fatal(err)
+			}
+			outputs[i] = out.String()
+		})
+	}
+	if checkCalls != 1 {
+		t.Errorf("agent checker calls = %d, want 1", checkCalls)
+	}
+	if outputs[0] != outputs[1] {
+		t.Errorf("deploy output changed with an empty agent check:\n%s\nwant:\n%s", outputs[1], outputs[0])
+	}
+}
+
+func TestDeployAllowsUnrelatedUnparseableRecordsWithoutAgentsAndKeepsMarkerCheck(t *testing.T) {
+	oldCheck := checkBuildAgents
+	defer func() { checkBuildAgents = oldCheck }()
+	checkBuildAgents = agents.Check
+	tests := []struct {
+		name    string
+		marker  bool
+		wantErr string
+	}{
+		{name: "unrelated malformed record deploys"},
+		{name: "action marker still blocks deploy", marker: true, wantErr: "1 agent problem remains"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				f := newDeployFixture()
+				f.versioner.id = "com.acme.crm"
+				fsys := newAgentCheckFS(tt.marker)
+				opts := deployOptions{appPath: "apps/com.acme.crm", env: "dev", dryRun: true, mode: progressPlain, fsys: fsys}
+				var out bytes.Buffer
+				err := runDeployWith(context.Background(), &out, f.deps(), opts)
+				if (err != nil) != (tt.wantErr != "") || err != nil && !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("runDeployWith() error = %v, want containing %q", err, tt.wantErr)
+				}
+				if tt.marker && !strings.Contains(out.String(), "apps/com.acme.crm/actions/prepare/src/index.ts:1") {
+					t.Errorf("deploy output omitted the action marker location: %s", out.String())
+				}
+			})
+		})
+	}
+}
+
+func TestRunDeployChecksTheSuppliedAppFolder(t *testing.T) {
+	originalCanonical, originalAt := checkBuildAgents, checkBuildAgentsAt
+	defer func() { checkBuildAgents, checkBuildAgentsAt = originalCanonical, originalAt }()
+	checkBuildAgents = func(fsx.FileSystem, string, string) ([]agents.Problem, error) {
+		return nil, errors.New("deploy checked the app-ID-derived folder")
+	}
+	problem := agents.Problem{File: "apps/deployed-copy/records/71_agents.scl", Line: 4, Rule: "finish the guidance"}
+	checkCalls := 0
+	var checkedFolder string
+	checkBuildAgentsAt = func(_ fsx.FileSystem, _, appID, appDir string) ([]agents.Problem, error) {
+		checkCalls++
+		if appID != "com.acme.shop" {
+			t.Errorf("checked app ID = %q, want parsed ID", appID)
+		}
+		checkedFolder = appDir
+		return []agents.Problem{problem}, nil
+	}
+	synctest.Test(t, func(t *testing.T) {
+		fixture := newDeployFixture()
+		fixture.versioner.id = "com.acme.shop"
+		collected := false
+		fixture.collect = func(func(int, int)) (map[string]deploy.FileInfo, error) {
+			collected = true
+			return smallApp, nil
+		}
+		opts := deployOptions{appPath: "apps/deployed-copy", env: "dev", dryRun: true, mode: progressPlain,
+			fsys: &fsx.MockFileSystem{Files: map[string][]byte{"apps/deployed-copy": nil}}}
+		var out bytes.Buffer
+		err := runDeployWith(context.Background(), &out, fixture.deps(), opts)
+		if err == nil || !strings.Contains(err.Error(), "1 agent problem remains") {
+			t.Fatalf("runDeployWith() error = %v, want agent check failure", err)
+		}
+		if collected {
+			t.Error("deploy collected files before the agent check passed")
+		}
+	})
+	wantFolder := "apps/deployed-copy"
+	if checkCalls != 1 || checkedFolder != wantFolder {
+		t.Errorf("checked folder = %q in %d checks, want %q once", checkedFolder, checkCalls, wantFolder)
+	}
+}
+
+func TestDeployAgentProblemsUseJSONOutput(t *testing.T) {
+	problem := agents.Problem{File: "apps/com.acme.shop/records/71_agents.scl", Line: 8, Rule: "replace the remaining guidance"}
+	d := &deployRun{opts: deployOptions{json: true}, facts: &deployFacts{}, agentProblems: []agents.Problem{problem}}
+	d.facts.set(func(facts *deployFactsSnapshot) { facts.appID = "com.acme.shop" })
+	var out bytes.Buffer
+	err := d.reportFailure(&out, stepRunResult{err: errors.New("deploy stopped because 1 agent problem remains")})
+	if err == nil || !strings.Contains(err.Error(), "1 agent problem remains") {
+		t.Fatalf("reportFailure() error = %v, want the original deploy error", err)
+	}
+	var result struct {
+		Status        string             `json:"status"`
+		AppID         string             `json:"app_id"`
+		AgentProblems []agentProblemJSON `json:"agent_problems"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("agent problem output is not JSON: %v: %s", err, out.String())
+	}
+	if result.Status != "failed" || result.AppID != "com.acme.shop" || len(result.AgentProblems) != 1 || result.AgentProblems[0].File != problem.File || result.AgentProblems[0].Line != problem.Line {
+		t.Fatalf("JSON result = %#v, want the build agent_problems shape", result)
+	}
+	if strings.Contains(out.String(), "Nothing was uploaded") || strings.Contains(out.String(), "still") {
+		t.Errorf("JSON output included plain text: %s", out.String())
 	}
 }
 

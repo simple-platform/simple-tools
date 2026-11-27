@@ -1,0 +1,5 @@
+set dev_simple_system.agent, {{.Key}} {
+  display_name "{{.DisplayName}}"{{if .Description}}{{printf "\n  description \"%s\"" .Description}}{{end}}
+  instructions_id `$app_record("{{.PersonaKey}}")`
+  status active
+}

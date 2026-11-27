@@ -1,26 +1,15 @@
 # Tasks
 
-A **task** is one piece of work that an agent does for a person: read a document, answer a question, write a summary. A **task type** is the kind of work it is. Your app declares task types; Spaces and other tasks create tasks from them.
+A **task** is one piece of work done for a person: read a document, answer a question, or write a summary. A **task type** is the kind of work it is. Your app declares task types; Spaces and other tasks create tasks from them. A kind of work can be for an agent or only for people.
 
 > [!NOTE]
-> A task is not an Action. An Action is code you write and the platform runs. A task is work an **agent** (a model) does, with the tools its task type allows, and the platform checks the answer before anyone sees it.
+> A task is not an Action. An Action is code you write and the platform runs. An agent-owned task uses the tools allowed by its task type. The platform checks the answer before anyone sees it.
 
 ---
 
 ## Task types and tasks
 
-A task type is a configuration record. It names the input the work takes, the output it must answer with, and the states the work moves through:
-
-```scl
-set dev_simple_system.task_type, packet_summary_type {
-  name "packet_summary"
-  plural_name "Packet summaries"
-  description "Summarises a packet from what its other tasks found."
-  playbook_id `$app_record("packet_summary_playbook")`
-  schema `$file('records/task-types/packet_summary.json') |> $json()`
-  states `$file('records/task-types/states.json') |> $json()`
-}
-```
+A task type is a configuration record. It names the input, output, and states for one kind of work. Create one with `simple new task-type`. Use `--no-agent` for work only people do. For agent-owned work, it also creates links to the default agent and requested tools. Use `simple new tool <app> <name> --task-type <task-type>` to add a tool link. Do not write these records or links by hand. See [Agents](./13-agents.md) for all five commands and their options.
 
 `schema` holds two JSON Schemas (Draft 2020-12), `input` and `output`:
 
@@ -41,9 +30,9 @@ set dev_simple_system.task_type, packet_summary_type {
 }
 ```
 
-A task is one run of that work. It has an immutable `input` that matches the schema (at most 32 KiB), a `status`, a `state`, and an `output` once the agent has answered.
+A task is one run of that work. It has an immutable `input` that matches the schema (at most 32 KiB), a `status`, a `state`, and an `output` once the work is answered.
 
-An `agent_task_type` record with `role executor` says which agent does the work, and `task_type_tool` records say which tools it may call. A task type that declares no tools gets none.
+The agent and tool links say which agent does the work and which tools it may call. `simple new task-type` and `simple new tool` create these links. A task type that declares no tools gets none.
 
 ---
 

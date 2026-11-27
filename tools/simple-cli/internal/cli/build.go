@@ -2,10 +2,13 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"simple-cli/internal/agents"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
@@ -19,9 +22,27 @@ import (
 )
 
 var (
-	buildAll    bool
-	concurrency int
+	buildAll                  bool
+	concurrency               int
+	checkBuildAgents          = agents.Check
+	checkBuildAgentsAt        = agents.CheckAt
+	hasBuildAgentDeclarations = agents.HasAgentDeclarations
+	findBuildActions          = build.FindActions
+	findBuildSpaces           = build.FindSpaces
+	runAllBuildTargets        = runBuildAll
 )
+
+type buildAgentTarget struct {
+	appID    string
+	fsys     fsx.FileSystem
+	checked  bool
+	problems []agents.Problem
+}
+
+type appAgentProblems struct {
+	appID    string
+	problems []agents.Problem
+}
 
 // buildCmd represents the 'build' command.
 // It compiles actions or applications logic (often using esbuild for JS/TS) into artifacts.
@@ -141,7 +162,7 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			appDir := filepath.Join(appsDir, entry.Name())
-			actionDirs, err := build.FindActions(appDir)
+			actionDirs, err := findBuildActions(appDir)
 			if err == nil {
 				for _, actionDir := range actionDirs {
 					absDir, err := filepath.Abs(actionDir)
@@ -151,7 +172,7 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 				}
 			}
 			// Find spaces
-			spaceDirs, err := build.FindSpaces(appDir)
+			spaceDirs, err := findBuildSpaces(appDir)
 			if err == nil {
 				for _, spaceDir := range spaceDirs {
 					absDir, err := filepath.Abs(spaceDir)
@@ -162,16 +183,41 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 			}
 		}
 	}
+	targets := make([]buildAgentTarget, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			targets = append(targets, buildAgentTarget{appID: entry.Name(), fsys: fsys})
+		}
+	}
 
 	if len(allActionDirs) == 0 && len(allSpaceDirs) == 0 {
+		findings, err := collectAgentProblems(fsys, targets)
+		if err != nil {
+			return err
+		}
+		hasAgents := false
+		for _, target := range targets {
+			declared, err := appHasAgentDeclarations(fsys, target.appID)
+			if err != nil {
+				return err
+			}
+			hasAgents = hasAgents || declared
+		}
+		for i := range targets {
+			targets[i].checked = true
+			targets[i].problems = findings[i].problems
+		}
+		if len(agentProblems(findings)) > 0 || hasAgents {
+			return runAllBuildTargets(manager, nil, nil, targets...)
+		}
 		if jsonOutput {
-			return printJSON(map[string]interface{}{"status": "success", "actions": []string{}, "spaces": []string{}})
+			return printJSON(map[string]interface{}{"status": "success", "actions": []string{}, "spaces": []string{}, "agent_problems": []agentProblemJSON{}})
 		}
 		fmt.Println("No actions or spaces found to build.")
 		return nil
 	}
 
-	return runBuildAll(manager, allActionDirs, allSpaceDirs)
+	return runAllBuildTargets(manager, allActionDirs, allSpaceDirs, targets...)
 }
 
 // buildTarget resolves a single target (app, action, or shorthand) and builds it.
@@ -208,7 +254,7 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 
 	// Check if it's an action dir (has action.scl)
 	if build.IsActionDir(targetPath) {
-		return runBuildAll(manager, []string{targetPath}, nil)
+		return buildSingleActionTarget(manager, targetPath)
 	}
 
 	// Check if it's a space dir (has package.json but not action.scl)
@@ -221,10 +267,141 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 	spaceDirs, _ := build.FindSpaces(targetPath)
 
 	if len(actionDirs) == 0 && len(spaceDirs) == 0 {
+		appID, isApp := appIDForPath(targetPath)
+		if isApp {
+			return buildEmptyAppTarget(manager, fsys, target, appID)
+		}
 		return fmt.Errorf("no actions or spaces found in %s", target)
 	}
 
+	if appID, isApp := appIDForPath(targetPath); isApp {
+		return runBuildAll(manager, actionDirs, spaceDirs, buildAgentTarget{appID: appID, fsys: fsys})
+	}
 	return runBuildAll(manager, actionDirs, spaceDirs)
+}
+
+func buildSingleActionTarget(manager *build.BuildManager, actionDir string) error {
+	return runBuildAll(manager, []string{actionDir}, nil)
+}
+
+func buildEmptyAppTarget(manager *build.BuildManager, fsys fsx.FileSystem, target, appID string) error {
+	targetInfo := buildAgentTarget{appID: appID, fsys: fsys}
+	findings, err := collectAgentProblems(fsys, []buildAgentTarget{targetInfo})
+	if err != nil {
+		return err
+	}
+	declared, err := appHasAgentDeclarations(fsys, appID)
+	if err != nil {
+		return err
+	}
+	targetInfo.checked = true
+	targetInfo.problems = findings[0].problems
+	if declared || len(targetInfo.problems) > 0 {
+		return runBuildAll(manager, nil, nil, targetInfo)
+	}
+	return fmt.Errorf("no actions or spaces found in %s", target)
+}
+
+func appIDForPath(path string) (string, bool) {
+	appsRoot, err := filepath.Abs("apps")
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(appsRoot, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || strings.Contains(rel, string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+func appHasAgentDeclarations(fsys fsx.FileSystem, appID string) (bool, error) {
+	if _, err := fsys.Stat(filepath.Join("apps", filepath.FromSlash(appID), "records")); errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, fmt.Errorf("failed to find records for app %q: %w", appID, err)
+	}
+	declared, err := hasBuildAgentDeclarations(fsys, ".", appID)
+	if err != nil {
+		return false, fmt.Errorf("failed to read agent declarations for app %q: %w", appID, err)
+	}
+	return declared, nil
+}
+
+func checkAppAgents(fsys fsx.FileSystem, appID string) ([]agents.Problem, error) {
+	return checkBuildAgents(fsys, ".", appID)
+}
+
+func checkAppAgentsAt(fsys fsx.FileSystem, appID, appDir string) ([]agents.Problem, error) {
+	canonicalDir := filepath.Clean(filepath.Join("apps", filepath.FromSlash(appID)))
+	if filepath.Clean(appDir) == canonicalDir {
+		return checkAppAgents(fsys, appID)
+	}
+	return checkBuildAgentsAt(fsys, ".", appID, appDir)
+}
+
+func collectAgentProblems(fsys fsx.FileSystem, targets []buildAgentTarget) ([]appAgentProblems, error) {
+	findings := make([]appAgentProblems, 0, len(targets))
+	for _, target := range targets {
+		if target.checked {
+			findings = append(findings, appAgentProblems{appID: target.appID, problems: target.problems})
+			continue
+		}
+		if target.fsys != nil {
+			fsys = target.fsys
+		}
+		problems, err := checkAppAgents(fsys, target.appID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check agents for app %q: %w", target.appID, err)
+		}
+		findings = append(findings, appAgentProblems{appID: target.appID, problems: problems})
+	}
+	return findings, nil
+}
+
+func agentProblems(findings []appAgentProblems) []agents.Problem {
+	var problems []agents.Problem
+	for _, finding := range findings {
+		problems = append(problems, finding.problems...)
+	}
+	return problems
+}
+
+type agentProblemJSON struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Rule string `json:"rule"`
+}
+
+func agentProblemsJSON(problems []agents.Problem) []agentProblemJSON {
+	result := make([]agentProblemJSON, 0, len(problems))
+	for _, problem := range problems {
+		result = append(result, agentProblemJSON{File: problem.File, Line: problem.Line, Rule: problem.Rule})
+	}
+	return result
+}
+
+func writeAgentProblems(w io.Writer, appID string, problems []agents.Problem) {
+	count := len(problems)
+	thing := "things"
+	if count == 1 {
+		thing = "thing"
+	}
+	_, _ = fmt.Fprintf(w, "%s: %d %s left:\n", appID, count, thing)
+	for _, problem := range problems {
+		if problem.Line == 0 {
+			_, _ = fmt.Fprintf(w, "%s: %s\n", problem.File, problem.Rule)
+		} else {
+			_, _ = fmt.Fprintf(w, "%s:%d: %s\n", problem.File, problem.Line, problem.Rule)
+		}
+	}
+}
+
+func agentProblemCount(count int) string {
+	noun := "problems"
+	if count == 1 {
+		noun = "problem"
+	}
+	return fmt.Sprintf("%d agent %s", count, noun)
 }
 
 // buildResult is the outcome of building one action or space.
@@ -257,7 +434,7 @@ func printBuildNotes(w io.Writer, results []buildResult) {
 // runBuildAll builds actions and spaces together in a single parallel pool.
 // This ensures maximum utilization of CPU cores by not waiting for all actions
 // to finish before starting space builds.
-func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) error {
+func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string, agentTargets ...buildAgentTarget) error {
 	totalCount := len(actionDirs) + len(spaceDirs)
 	results := make([]buildResult, totalCount)
 	ctx := context.Background()
@@ -314,7 +491,7 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 		wg.Wait()
 	}
 
-	if !jsonOutput {
+	if !jsonOutput && totalCount > 0 {
 		if err := runWithProgress(allNames, buildFn); err != nil {
 			return err
 		}
@@ -352,6 +529,15 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 	}
 
 	totalFailures := actionFailures + spaceFailures
+	var agentFindings []appAgentProblems
+	if len(agentTargets) > 0 {
+		var err error
+		agentFindings, err = collectAgentProblems(agentTargets[0].fsys, agentTargets)
+		if err != nil {
+			return err
+		}
+	}
+	agentProblemList := agentProblems(agentFindings)
 
 	// Printed after the progress view has closed, for the reason given for
 	// failures below, and only in plain mode: under --json they are the
@@ -361,8 +547,12 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 	}
 
 	if jsonOutput {
-		if err := printJSON(map[string]interface{}{
-			"status":        "complete",
+		status := "complete"
+		if len(agentProblemList) > 0 {
+			status = "failed"
+		}
+		document := map[string]interface{}{
+			"status":        status,
 			"total":         totalCount,
 			"success":       actionSuccesses + spaceSuccesses,
 			"failed":        totalFailures,
@@ -370,7 +560,11 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 			"failedSpaces":  failedSpaces,
 			"errors":        errors,
 			"warnings":      warnings,
-		}); err != nil {
+		}
+		if len(agentTargets) > 0 {
+			document["agent_problems"] = agentProblemsJSON(agentProblemList)
+		}
+		if err := printJSON(document); err != nil {
 			return err
 		}
 		// Fall through to the failure below rather than returning here. The
@@ -405,6 +599,16 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 		}
 		fmt.Fprintln(os.Stderr)
 	}
+	if !jsonOutput {
+		for _, finding := range agentFindings {
+			if len(finding.problems) > 0 {
+				writeAgentProblems(os.Stderr, finding.appID, finding.problems)
+			}
+		}
+		if len(agentProblemList) > 0 {
+			fmt.Fprintf(os.Stderr, "Build failed because of %s.\n", agentProblemCount(len(agentProblemList)))
+		}
+	}
 
 	// THE OUTCOME IS THE SAME IN BOTH OUTPUT MODES.
 	//
@@ -421,7 +625,13 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string) er
 			parts = append(parts, fmt.Sprintf("%d space(s)", spaceFailures))
 		}
 
+		if len(agentProblemList) > 0 {
+			return fmt.Errorf("%s failed to build; build failed because of %s", strings.Join(parts, " and "), agentProblemCount(len(agentProblemList)))
+		}
 		return fmt.Errorf("%s failed to build", strings.Join(parts, " and "))
+	}
+	if len(agentProblemList) > 0 {
+		return fmt.Errorf("build failed because of %s", agentProblemCount(len(agentProblemList)))
 	}
 
 	return nil

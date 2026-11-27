@@ -1,0 +1,8 @@
+set dev_simple_system.task_type, {{.Key}} {
+  name "{{.Name}}"
+  plural_name "{{.PluralName}}"{{if .Description}}{{printf "\n  description \"%s\"" .Description}}{{end}}
+{{if .PlaybookKey}}  playbook_id `$app_record("{{.PlaybookKey}}")`
+{{end}}  schema `$file('{{.ShapePath}}') |> $json()`
+  states `$file('{{.StatesPath}}') |> $json()`{{if .WakeIntervalSeconds}}
+  wake_interval_seconds {{.WakeIntervalSeconds}}{{end}}
+}

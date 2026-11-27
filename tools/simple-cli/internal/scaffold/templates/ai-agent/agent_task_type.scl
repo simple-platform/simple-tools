@@ -1,0 +1,6 @@
+set dev_simple_system.agent_task_type, {{.Key}} {
+  agent_id `$app_record("{{.AgentKey}}")`
+  task_type_id `$app_record("{{.TaskTypeKey}}")`
+  role executor
+  is_default true
+}

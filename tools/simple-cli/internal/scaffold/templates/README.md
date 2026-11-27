@@ -18,6 +18,11 @@ A Simple Platform monorepo.
 | :----------------------------------------------- | :---------------------------------- |
 | `simple new app <app> <name>`                    | Create a new application            |
 | `simple new action <app> <name> --lang ts\|rust` | Scaffold a new Action               |
+| `simple new agent <app> <name> "<Display name>"` | Create an agent and persona         |
+| `simple new task-type <app> <name> "<Plural name>" [--no-agent]` | Create a kind of work               |
+| `simple new tool <app> <name> [--task-type <type>]` | Set up a tool and optionally link it |
+| `simple new skill <app> <name> ["<Title>"] --task-type <type>` | Add a skill to a kind of work        |
+| `simple new knowledge <app> <name> ["<Title>"] --task-type <type>` | Add reference knowledge             |
 | `simple build <app>`                             | Build all Actions in an app         |
 | `simple deploy <app>`                            | Deploy application (Schema + Logic) |
 
@@ -65,3 +70,4 @@ simple deploy com.mycompany.crm
 
 - **AI Agents:** See [AGENTS.md](./AGENTS.md) for detailed coding rules.
 - **Platform Ref:** See `.simple/context/` for SCL grammar, SDK reference, and more.
+- **Agent Guidance:** See `.simple/context/13-agents.md`, `.agent/workflows/create-agent.md`, and `.agent/skills/build-agents/SKILL.md` for command options and steps.

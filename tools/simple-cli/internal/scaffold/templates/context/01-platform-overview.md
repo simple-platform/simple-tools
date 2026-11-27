@@ -55,6 +55,7 @@ Follow these documents in order:
 | 10    | [GraphQL API](./10-graphql-api.md)                       | Queries and mutations     |
 | 11    | [SDK Reference](./11-sdk-reference.md)                   | Complete API docs         |
 | 12    | [Tasks](./12-tasks.md)                                   | Agent work, scheduling    |
+| 13    | [Agents](./13-agents.md)                                 | Agents, tools, skills, and kinds of work |
 
 ## Key Concepts
 

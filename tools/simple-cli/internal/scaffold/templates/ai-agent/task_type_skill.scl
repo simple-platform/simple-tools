@@ -1,0 +1,5 @@
+set dev_simple_system.task_type_skill, {{.Key}} {
+  task_type_id `$app_record("{{.TaskTypeKey}}")`
+  knowledge_id `$app_record("{{.KnowledgeKey}}")`
+  position {{.Position}}
+}

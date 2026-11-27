@@ -4,8 +4,9 @@
 YOU MUST READ `AGENTS.md` BEFORE ATTEMPTING ANY TASK.
 
 # CONTEXT SOURCES
-1.  **Platform Architecture:** `.simple/context/` (Read `workflows.md` and `cli-manifest.json`)
+1.  **Platform Architecture:** `.simple/context/` (Read `workflows.md` and `cli-manifest.json`; agents: `13-agents.md`)
 2.  **Coding Standards:** `AGENTS.md` (See "Enterprise Standards")
+3.  **Agent Workflow:** `.agent/workflows/create-agent.md` and `.agent/skills/build-agents/SKILL.md`
 
 # BEHAVIORAL ENFORCEMENT
 *   **No Generic Web Apps:** You are in a **Simple Platform** workspace. Never create strictly generic React/Node.js apps.
@@ -15,5 +16,6 @@ YOU MUST READ `AGENTS.md` BEFORE ATTEMPTING ANY TASK.
 # COMMAND MAPPING
 *   "Create App" -> `simple new app`
 *   "Add Logic" -> `simple new action`
+*   "Build an Agent" -> `simple new agent`, `simple new task-type` (or `--no-agent`), `simple new tool` (with optional `--task-type`), `simple new skill`, and `simple new knowledge`
 *   "Create Custom UI / Frontend" -> `simple new space`
 *   "Deploy" -> `simple deploy`

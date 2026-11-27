@@ -1,0 +1,4 @@
+set dev_simple_system.logic_skill, {{.Key}} {
+  logic_id `$app_record("{{.LogicKey}}")`
+  knowledge_id `$app_record("{{.KnowledgeKey}}")`
+}

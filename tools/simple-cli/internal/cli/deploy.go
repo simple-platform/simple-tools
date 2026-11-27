@@ -9,6 +9,7 @@ import (
 	"slices"
 	"time"
 
+	"simple-cli/internal/agents"
 	"simple-cli/internal/deploy"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/ui"
@@ -91,6 +92,7 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, out io.Writer, args []s
 		noInstall: deployNoInstall,
 		json:      jsonOutput,
 		mode:      mode,
+		fsys:      fsys,
 	})
 }
 
@@ -99,6 +101,7 @@ type deployOptions struct {
 	appPath, env, bump      string
 	dryRun, noInstall, json bool
 	mode                    progressMode
+	fsys                    fsx.FileSystem
 }
 
 // deployDeps are deploy's side effects, replaced in tests.
@@ -168,14 +171,15 @@ type deployRun struct {
 	opts  deployOptions
 	facts *deployFacts
 
-	target    *devopsTarget
-	versioner appVersioner
-	app       *deploy.AppSCL
-	version   string
-	files     map[string]deploy.FileInfo
-	needed    []string
-	result    *deploy.DeployResult
-	installed *deploy.InstallResult
+	target        *devopsTarget
+	versioner     appVersioner
+	app           *deploy.AppSCL
+	version       string
+	files         map[string]deploy.FileInfo
+	needed        []string
+	result        *deploy.DeployResult
+	installed     *deploy.InstallResult
+	agentProblems []agents.Problem
 }
 
 // work runs the deploy's steps in order. The order is also a guarantee:
@@ -216,6 +220,20 @@ func (d *deployRun) loadConfig(steps ui.StepReporter) (string, error) {
 	}
 	d.target, d.versioner, d.app = target, versioner, app
 	d.facts.set(func(s *deployFactsSnapshot) { s.appID = app.ID })
+	if d.opts.fsys != nil {
+		problems, err := checkAppAgentsAt(d.opts.fsys, app.ID, d.opts.appPath)
+		if err != nil {
+			return "", fmt.Errorf("failed to check agents for app %q: %w", app.ID, err)
+		}
+		if len(problems) > 0 {
+			d.agentProblems = problems
+			verb := "remain"
+			if len(problems) == 1 {
+				verb = "remains"
+			}
+			return "", fmt.Errorf("deploy stopped because %s %s", agentProblemCount(len(problems)), verb)
+		}
+	}
 	return fmt.Sprintf("%s · tenant %s", app.ID, target.cfg.Tenant), nil
 }
 
@@ -365,6 +383,19 @@ func (d *deployRun) install(ctx context.Context, steps ui.StepReporter, client d
 // returns the error for Execute to print.
 func (d *deployRun) reportFailure(out io.Writer, result stepRunResult) error {
 	facts := d.facts.snapshot()
+	if len(d.agentProblems) > 0 {
+		if d.opts.json {
+			if err := printJSONTo(out, map[string]interface{}{
+				"status": "failed", "app_id": facts.appID,
+				"agent_problems": agentProblemsJSON(d.agentProblems),
+			}); err != nil {
+				return err
+			}
+		} else {
+			writeAgentProblems(out, facts.appID, d.agentProblems)
+			_, _ = fmt.Fprintln(out, "Nothing was uploaded.")
+		}
+	}
 	if d.opts.json {
 		// A deploy that published but failed to install keeps its JSON
 		// document on stdout, and still exits 1, as build --json does. Every
