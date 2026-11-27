@@ -72,6 +72,7 @@ type docsRemovalFS struct {
 	symlinkPath       string
 	statFailurePath   string
 	removeFailurePath string
+	removed           []string
 }
 
 type docsRootAccessFS struct {
@@ -97,6 +98,45 @@ func newDocsMappedFS(base *fsx.MockFileSystem) *docsMappedFS {
 			"/repo/.agent": true, "/repo/inside-agent": true,
 			"/outside": true, "/outside/agent": true,
 		},
+	}
+}
+
+func TestDocumentationStampLivesInTrackedFolder(t *testing.T) {
+	const stampRelPath = ".simple/context/.cli/docs.json"
+	const oldStampRelPath = ".simple/docs.json"
+	const initRoot = "/initrepo"
+	initDisk := &fsx.MockFileSystem{Files: make(map[string][]byte)}
+
+	if err := scaffold.CreateMonorepoStructure(initDisk, scaffold.TemplatesFS, initRoot, scaffold.MonorepoConfig{
+		ProjectName: "example",
+		TenantName:  "acme",
+		CLIVersion:  "2.0.0",
+	}); err != nil {
+		t.Fatalf("CreateMonorepoStructure() error = %v", err)
+	}
+	if _, ok := initDisk.Files[filepath.Join(initRoot, filepath.FromSlash(stampRelPath))]; !ok {
+		t.Errorf("simple init did not write documentation stamp at %s", stampRelPath)
+	}
+	if _, ok := initDisk.Files[filepath.Join(initRoot, filepath.FromSlash(oldStampRelPath))]; ok {
+		t.Errorf("simple init wrote documentation stamp at obsolete path %s", oldStampRelPath)
+	}
+
+	disk := newDocsMappedFS(&fsx.MockFileSystem{Files: map[string][]byte{
+		"/repo/simple.scl": []byte("workspace"),
+	}})
+	if err := runDocsUpdate(new(bytes.Buffer), docsUpdateDeps{
+		fsys:       disk,
+		templates:  docsTestTemplates(),
+		cwd:        "/repo",
+		cliVersion: "2.0.0",
+	}, false); err != nil {
+		t.Fatalf("runDocsUpdate() error = %v", err)
+	}
+	if _, ok := disk.Files["/repo/"+filepath.FromSlash(stampRelPath)]; !ok {
+		t.Errorf("runDocsUpdate did not write documentation stamp at %s", stampRelPath)
+	}
+	if _, ok := disk.Files["/repo/"+filepath.FromSlash(oldStampRelPath)]; ok {
+		t.Errorf("runDocsUpdate wrote documentation stamp at obsolete path %s", oldStampRelPath)
 	}
 }
 
@@ -277,6 +317,7 @@ func (f *docsRemovalFS) ReadDir(name string) ([]os.DirEntry, error) {
 }
 
 func (f *docsRemovalFS) Remove(name string) error {
+	f.removed = append(f.removed, name)
 	if name == f.removeFailurePath {
 		return fs.ErrPermission
 	}
@@ -343,7 +384,7 @@ func TestRunDocsUpdate(t *testing.T) {
 			if !tt.stamp {
 				files["/repo/.cursorrules"] = []byte("team cursor rules")
 			} else {
-				files["/repo/.simple/docs.json"] = docsStampJSON("previous", "1.0.0",
+				files["/repo/.simple/context/.cli/docs.json"] = docsStampJSON("previous", "1.0.0",
 					".agent/obsolete.md", ".agent/obsolete.md", ".agent/skills/tool/SKILL.md", ".agent/gone.md", ".agent/../AGENTS.md",
 					"/outside.md", ".simple/context/../../simple.scl", ".simple/context/obsolete.md")
 			}
@@ -390,7 +431,7 @@ func TestRunDocsUpdate(t *testing.T) {
 			if strings.Contains(out.String(), "differs") || strings.Contains(out.String(), "AGENTS.md differs") {
 				t.Errorf("output reports team-owned root files: %q", out.String())
 			}
-			if !strings.Contains(out.String(), "Updated .simple/context/guide.md") || !strings.Contains(out.String(), "Updated .simple/docs.json") {
+			if !strings.Contains(out.String(), "Updated .simple/context/guide.md") || !strings.Contains(out.String(), "Updated .simple/context/.cli/docs.json") {
 				t.Errorf("output did not list updated files: %q", out.String())
 			}
 		})
@@ -447,7 +488,7 @@ func TestRunDocsUpdateOutsideRepository(t *testing.T) {
 func TestDocsUpdateRefusesStampFromNewerVersion(t *testing.T) {
 	templates := docsTestTemplates()
 	disk := docsTestDisk(t, templates)
-	stampPath := "/repo/.simple/docs.json"
+	stampPath := "/repo/.simple/context/.cli/docs.json"
 	disk.Files[stampPath] = docsStampJSON("different", "9.0.0", ".simple/context/guide.md")
 	before := make(map[string][]byte, len(disk.Files))
 	for name, content := range disk.Files {
@@ -467,8 +508,8 @@ func TestDocsUpdateRefusesStampFromNewerVersion(t *testing.T) {
 
 func TestDocsReminderSilentWhenStampIsNewer(t *testing.T) {
 	disk := &fsx.MockFileSystem{Files: map[string][]byte{
-		"/repo/simple.scl":        []byte("workspace"),
-		"/repo/.simple/docs.json": docsStampJSON("newer-docs", "9.0.0"),
+		"/repo/simple.scl":                     []byte("workspace"),
+		"/repo/.simple/context/.cli/docs.json": docsStampJSON("newer-docs", "9.0.0"),
 	}}
 	out := new(bytes.Buffer)
 	announceDocsUpdateTo(out, "2.0.0", false, true, "", "simple build", disk,
@@ -512,7 +553,7 @@ func TestDocsUpdateLeavesStampWhenNothingChanged(t *testing.T) {
 	for _, file := range files {
 		paths = append(paths, file.Path)
 	}
-	stampPath := "/repo/.simple/docs.json"
+	stampPath := "/repo/.simple/context/.cli/docs.json"
 	disk.Files[stampPath] = docsStampJSON(fingerprint, "1.0.0", paths...)
 	before := append([]byte(nil), disk.Files[stampPath]...)
 	out := new(bytes.Buffer)
@@ -536,7 +577,7 @@ func TestDocsUpdateRewritesStampWhenFileListDiffers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DocumentationFiles() error = %v", err)
 	}
-	stampPath := "/repo/.simple/docs.json"
+	stampPath := "/repo/.simple/context/.cli/docs.json"
 	disk.Files[stampPath] = docsStampJSON(scaffold.FingerprintDocumentationFiles(files), "1.0.0", files[0].Path)
 	if err := runDocsUpdate(new(bytes.Buffer), docsUpdateDeps{
 		fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0",
@@ -557,10 +598,10 @@ func TestDocsUpdateLeavesRootFilesAlone(t *testing.T) {
 	base := docsTestDisk(t, templates)
 	base.Files["/repo/AGENTS.md"] = []byte("team-owned AGENTS")
 	base.Files["/repo/.cursorrules"] = []byte("team-owned cursor rules")
-	base.Files["/repo/.simple/context/AGENTS.template.md"] = []byte("old root reference")
-	base.Files["/repo/.simple/context/cursorrules.template"] = []byte("old cursor reference")
-	base.Files["/repo/.simple/docs.json"] = docsStampJSON("old fingerprint", "1.0.0",
-		".simple/context/AGENTS.template.md", ".simple/context/cursorrules.template")
+	base.Files["/repo/.simple/context/.cli/AGENTS.template.md"] = []byte("old root reference")
+	base.Files["/repo/.simple/context/.cli/cursorrules.template"] = []byte("old cursor reference")
+	base.Files["/repo/.simple/context/.cli/docs.json"] = docsStampJSON("old fingerprint", "1.0.0",
+		".simple/context/.cli/AGENTS.template.md", ".simple/context/.cli/cursorrules.template")
 	disk := &docsRootAccessFS{MockFileSystem: base}
 	deps := docsUpdateDeps{fsys: disk, templates: templates, cwd: "/repo", cliVersion: "2.0.0"}
 	out := new(bytes.Buffer)
@@ -574,8 +615,8 @@ func TestDocsUpdateLeavesRootFilesAlone(t *testing.T) {
 		t.Errorf(".cursorrules = %q, want team content", got)
 	}
 	for path, want := range map[string]string{
-		"/repo/.simple/context/AGENTS.template.md":   "current agents",
-		"/repo/.simple/context/cursorrules.template": "current cursor rules",
+		"/repo/.simple/context/.cli/AGENTS.template.md":   "current agents",
+		"/repo/.simple/context/.cli/cursorrules.template": "current cursor rules",
 	} {
 		if got := string(disk.Files[path]); got != want {
 			t.Errorf("reference copy %s = %q, want %q", path, got, want)
@@ -584,7 +625,7 @@ func TestDocsUpdateLeavesRootFilesAlone(t *testing.T) {
 	if len(disk.accessed) != 0 {
 		t.Errorf("root guidance files were accessed: %v", disk.accessed)
 	}
-	const closing = "AGENTS.md and .cursorrules are your team's own files and were not changed. Current templates are in .simple/context/AGENTS.template.md and .simple/context/cursorrules.template.\n"
+	const closing = "AGENTS.md and .cursorrules are your team's own files and were not changed. Current templates are in .simple/context/.cli/AGENTS.template.md and .simple/context/.cli/cursorrules.template.\n"
 	if !strings.HasSuffix(out.String(), closing) {
 		t.Errorf("first run output does not end with root template guidance: %q", out.String())
 	}
@@ -612,7 +653,7 @@ func TestDocsUpdateRefusesPathsOutsideRepository(t *testing.T) {
 			configure: func(t *testing.T, disk *docsMappedFS) {
 				disk.links["/repo/.agent"] = "/outside/agent"
 				disk.Files["/outside/agent/victim"] = []byte("keep outside victim")
-				disk.Files["/repo/.simple/docs.json"] = docsStampJSON("old", "1.0.0", ".agent/victim")
+				disk.Files["/repo/.simple/context/.cli/docs.json"] = docsStampJSON("old", "1.0.0", ".agent/victim")
 			},
 			wantPath: ".agent/victim",
 		},
@@ -627,10 +668,10 @@ func TestDocsUpdateRefusesPathsOutsideRepository(t *testing.T) {
 		{
 			name: "stamp link leads outside",
 			configure: func(t *testing.T, disk *docsMappedFS) {
-				disk.links["/repo/.simple/docs.json"] = "/outside/docs.json"
+				disk.links["/repo/.simple/context/.cli/docs.json"] = "/outside/docs.json"
 				disk.Files["/outside/docs.json"] = docsStampJSON("old", "1.0.0")
 			},
-			wantPath: ".simple/docs.json",
+			wantPath: ".simple/context/.cli/docs.json",
 		},
 		{
 			name: "dangling shipped file link",
@@ -730,7 +771,7 @@ func TestRunDocsUpdateJSONChanges(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
 		t.Fatalf("invalid JSON result: %v", err)
 	}
-	if result.UpToDate || !containsString(result.Updated, ".simple/context/guide.md") || !containsString(result.Updated, ".simple/docs.json") {
+	if result.UpToDate || !containsString(result.Updated, ".simple/context/guide.md") || !containsString(result.Updated, ".simple/context/.cli/docs.json") {
 		t.Errorf("result = %+v, want updated docs and a stale result", result)
 	}
 }
@@ -794,6 +835,11 @@ func TestRunDocsUpdateSkipsUnremovableStampEntries(t *testing.T) {
 			},
 			wantRetain: []string{"/repo/.agent/device"},
 		},
+		{
+			name:       "stamp lists itself",
+			stampPath:  scaffold.DocumentationStampPath,
+			wantRetain: []string{"/repo/.simple/context/.cli/docs.json"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -801,12 +847,14 @@ func TestRunDocsUpdateSkipsUnremovableStampEntries(t *testing.T) {
 			templates := docsTestTemplates()
 			base := docsTestDisk(t, templates)
 			base.Files["/repo/.simple/context/guide.md"] = []byte("old guidance")
-			base.Files["/repo/.simple/docs.json"] = docsStampJSON("previous", "1.0.0", tt.stampPath, ".agent/obsolete.md")
+			base.Files["/repo/.simple/context/.cli/docs.json"] = docsStampJSON("previous", "1.0.0", tt.stampPath, ".agent/obsolete.md")
 			base.Files["/repo/.agent/obsolete.md"] = []byte("old obsolete guidance")
 			base.Files["/repo/.agent/unlisted.md"] = []byte("local guidance")
 			base.Files["/repo/package.json"] = []byte("local package settings")
 			for _, retained := range tt.wantRetain {
-				base.Files[retained] = []byte("must remain")
+				if retained != "/repo/.simple/context/.cli/docs.json" {
+					base.Files[retained] = []byte("must remain")
+				}
 			}
 			if tt.name == "directory with files" {
 				base.Files["/repo/.agent/rules/custom.md"] = []byte("nested local guidance")
@@ -836,11 +884,16 @@ func TestRunDocsUpdateSkipsUnremovableStampEntries(t *testing.T) {
 				}
 			}
 			var stamp scaffold.DocumentationStamp
-			if err := json.Unmarshal(base.Files["/repo/.simple/docs.json"], &stamp); err != nil {
+			if err := json.Unmarshal(base.Files["/repo/.simple/context/.cli/docs.json"], &stamp); err != nil {
 				t.Fatalf("new documentation stamp is invalid: %v", err)
 			}
 			if stamp.CLIVersion != "2.0.0" {
 				t.Errorf("stamp CLI version = %q, want 2.0.0", stamp.CLIVersion)
+			}
+			for _, removed := range fsys.removed {
+				if removed == "/repo/.simple/context/.cli/docs.json" {
+					t.Error("documentation stamp was removed after listing itself in the old stamp")
+				}
 			}
 			if tt.wantReport && !strings.Contains(out.String(), tt.stampPath) {
 				t.Errorf("output = %q, want failed path %s reported", out.String(), tt.stampPath)
@@ -852,7 +905,7 @@ func TestRunDocsUpdateSkipsUnremovableStampEntries(t *testing.T) {
 func TestRunDocsUpdateStampReadFails(t *testing.T) {
 	templates := docsTestTemplates()
 	base := docsTestDisk(t, templates)
-	stampPath := "/repo/.simple/docs.json"
+	stampPath := "/repo/.simple/context/.cli/docs.json"
 	base.Files[stampPath] = docsStampJSON("unreadable", "1.0.0")
 	disk := &docsFailureFS{MockFileSystem: base, readFailurePath: stampPath}
 	err := runDocsUpdate(new(bytes.Buffer), docsUpdateDeps{
@@ -917,7 +970,7 @@ func TestRunDocsUpdateFilesystemErrors(t *testing.T) {
 func TestRunDocsUpdateMalformedStampDoesNotRemoveFiles(t *testing.T) {
 	disk := &fsx.MockFileSystem{Files: map[string][]byte{
 		"/repo/simple.scl":                           []byte("workspace"),
-		"/repo/.simple/docs.json":                    []byte("not json"),
+		"/repo/.simple/context/.cli/docs.json":       []byte("not json"),
 		"/repo/.agent/team.md":                       []byte("team file"),
 		"/repo/AGENTS.md":                            []byte("current agents"),
 		"/repo/.cursorrules":                         []byte("current cursor rules"),
@@ -998,10 +1051,10 @@ func TestDocsUpdateWritesStampAndStopsReminder(t *testing.T) {
 	}
 	fingerprint := scaffold.FingerprintDocumentationFiles(documentationFiles)
 	disk := &fsx.MockFileSystem{Files: map[string][]byte{
-		"/repo/simple.scl":        []byte("workspace"),
-		"/repo/AGENTS.md":         []byte("current agents"),
-		"/repo/.cursorrules":      []byte("current cursor rules"),
-		"/repo/.simple/docs.json": docsStampJSON(previousFingerprint, "1.0.0"),
+		"/repo/simple.scl":                     []byte("workspace"),
+		"/repo/AGENTS.md":                      []byte("current agents"),
+		"/repo/.cursorrules":                   []byte("current cursor rules"),
+		"/repo/.simple/context/.cli/docs.json": docsStampJSON(previousFingerprint, "1.0.0"),
 	}}
 	reminder := new(bytes.Buffer)
 	announceDocsUpdateTo(reminder, "2.0.0", false, true, "", "simple build", disk,
@@ -1065,7 +1118,7 @@ func TestAnnounceDocsUpdateTo(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			files := map[string][]byte{}
 			if tt.stamp != nil {
-				files["/repo/.simple/docs.json"] = tt.stamp
+				files["/repo/.simple/context/.cli/docs.json"] = tt.stamp
 			}
 			if !tt.outside {
 				files["/repo/simple.scl"] = []byte("workspace")

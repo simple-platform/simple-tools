@@ -86,8 +86,8 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 	}
 	fingerprint := scaffold.FingerprintDocumentationFiles(files)
 
-	stampPath := filepath.Join(root, ".simple", "docs.json")
-	if err := ensureDocumentationPath(deps.fsys, realRoot, root, ".simple/docs.json"); err != nil {
+	stampPath := filepath.Join(root, filepath.FromSlash(scaffold.DocumentationStampPath))
+	if err := ensureDocumentationPath(deps.fsys, realRoot, root, scaffold.DocumentationStampPath); err != nil {
 		return err
 	}
 	oldStamp, err := deps.fsys.ReadFile(stampPath)
@@ -111,7 +111,7 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 	}
 	var removable []string
 	for _, oldPath := range previous.Files {
-		if managedDocumentationPath(oldPath) && !shipped[oldPath] {
+		if oldPath != scaffold.DocumentationStampPath && managedDocumentationPath(oldPath) && !shipped[oldPath] {
 			removable = append(removable, oldPath)
 		}
 	}
@@ -174,7 +174,7 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 		if err := deps.fsys.WriteFile(stampPath, stamp, fsx.FilePerm); err != nil {
 			return fmt.Errorf("failed to write documentation stamp: %w", err)
 		}
-		result.Updated = append(result.Updated, ".simple/docs.json")
+		result.Updated = append(result.Updated, scaffold.DocumentationStampPath)
 	}
 
 	result.UpToDate = len(result.Updated) == 0 && len(result.Removed) == 0 && len(result.RemovalFailures) == 0
@@ -196,8 +196,8 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 	}
 	_, _ = fmt.Fprintln(out, docsUpdateSummary(len(result.Updated), len(result.Removed)))
 	for _, name := range result.Updated {
-		if name == ".simple/context/AGENTS.template.md" || name == ".simple/context/cursorrules.template" {
-			_, _ = fmt.Fprintln(out, "AGENTS.md and .cursorrules are your team's own files and were not changed. Current templates are in .simple/context/AGENTS.template.md and .simple/context/cursorrules.template.")
+		if name == ".simple/context/.cli/AGENTS.template.md" || name == ".simple/context/.cli/cursorrules.template" {
+			_, _ = fmt.Fprintln(out, "AGENTS.md and .cursorrules are your team's own files and were not changed. Current templates are in .simple/context/.cli/AGENTS.template.md and .simple/context/.cli/cursorrules.template.")
 			break
 		}
 	}
@@ -284,7 +284,7 @@ func announceDocsUpdateTo(out io.Writer, version string, jsonMode, errIsTerminal
 		_, _ = fmt.Fprint(out, docsUpdateNotice)
 		return
 	}
-	stamp, err := fsys.ReadFile(filepath.Join(filepath.Dir(rootMarker), ".simple", "docs.json"))
+	stamp, err := fsys.ReadFile(filepath.Join(filepath.Dir(rootMarker), filepath.FromSlash(scaffold.DocumentationStampPath)))
 	var recorded scaffold.DocumentationStamp
 	if err == nil && json.Unmarshal(stamp, &recorded) == nil {
 		if documentationStampIsNewer(recorded.CLIVersion, version) || recorded.Fingerprint == fingerprint {

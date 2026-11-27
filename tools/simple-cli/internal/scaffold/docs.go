@@ -14,6 +14,11 @@ import (
 	"simple-cli/internal/fsx"
 )
 
+// DocumentationStampPath is where the stamp lives. It sits inside
+// .simple/context/, which repositories commit, so teammates share it: a stamp
+// that git ignored would let an older CLI downgrade docs a newer one wrote.
+const DocumentationStampPath = ".simple/context/.cli/docs.json"
+
 // DocumentationFile is one shipped assistant document and its repository path.
 type DocumentationFile struct {
 	Path    string
@@ -44,8 +49,8 @@ func DocumentationFiles(tplFS fsx.TemplateFS) ([]DocumentationFile, error) {
 		}
 	}
 	for _, rootCopy := range [][2]string{
-		{"templates/AGENTS.md", ".simple/context/AGENTS.template.md"},
-		{"templates/cursorrules", ".simple/context/cursorrules.template"},
+		{"templates/AGENTS.md", ".simple/context/.cli/AGENTS.template.md"},
+		{"templates/cursorrules", ".simple/context/.cli/cursorrules.template"},
 	} {
 		content, err := tplFS.ReadFile(rootCopy[0])
 		if err != nil {

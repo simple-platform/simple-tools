@@ -470,7 +470,7 @@ files added by the team are left alone. The tool owns files it ships in
 `.simple/context/` and `.agent/`, and `simple docs update` overwrites edits to
 them (`git diff` shows what changed). Put team guidance in `AGENTS.md`,
 `.cursorrules`, or new files. Current root templates are kept in
-`.simple/context/AGENTS.template.md` and `.simple/context/cursorrules.template`
+`.simple/context/.cli/AGENTS.template.md` and `.simple/context/.cli/cursorrules.template`
 for comparison. The command never touches packages. It changes nothing and says
 why when a newer release of the CLI wrote the docs (update the CLI first), or
 when a guidance folder or file is a link leading outside the repository.

@@ -29,9 +29,9 @@ func TestDocumentationFiles(t *testing.T) {
 			},
 			want: []string{
 				".agent/skills/build/SKILL.md",
-				".simple/context/AGENTS.template.md",
+				".simple/context/.cli/AGENTS.template.md",
+				".simple/context/.cli/cursorrules.template",
 				".simple/context/a.md",
-				".simple/context/cursorrules.template",
 				".simple/context/z.md",
 			},
 		},
@@ -66,8 +66,8 @@ func TestDocumentationFilesIncludeRootTemplateCopies(t *testing.T) {
 		t.Fatalf("DocumentationFiles() error = %v", err)
 	}
 	want := map[string]string{
-		".simple/context/AGENTS.template.md":   "templates/AGENTS.md",
-		".simple/context/cursorrules.template": "templates/cursorrules",
+		".simple/context/.cli/AGENTS.template.md":   "templates/AGENTS.md",
+		".simple/context/.cli/cursorrules.template": "templates/cursorrules",
 	}
 	for path, template := range want {
 		expected, err := TemplatesFS.ReadFile(template)
@@ -209,9 +209,12 @@ func TestCreateMonorepoStructureWritesDocsStamp(t *testing.T) {
 				t.Fatalf("CreateMonorepoStructure() error = %v", err)
 			}
 
-			raw, ok := disk.Files[filepath.Join(root, ".simple/docs.json")]
+			raw, ok := disk.Files[filepath.Join(root, filepath.FromSlash(DocumentationStampPath))]
 			if !ok {
 				t.Fatal("docs stamp was not written")
+			}
+			if _, ok := disk.Files[filepath.Join(root, ".simple/docs.json")]; ok {
+				t.Error("docs stamp was written at obsolete path .simple/docs.json")
 			}
 			var stamp struct {
 				Fingerprint string   `json:"fingerprint"`
@@ -224,7 +227,7 @@ func TestCreateMonorepoStructureWritesDocsStamp(t *testing.T) {
 			if stamp.Fingerprint == "" || stamp.CLIVersion != tt.version || len(stamp.Files) == 0 {
 				t.Errorf("stamp = %+v, want fingerprint, version %q, and docs paths", stamp, tt.version)
 			}
-			for _, path := range []string{".simple/context/AGENTS.template.md", ".simple/context/cursorrules.template"} {
+			for _, path := range []string{".simple/context/.cli/AGENTS.template.md", ".simple/context/.cli/cursorrules.template"} {
 				if _, ok := disk.Files[filepath.Join(root, filepath.FromSlash(path))]; !ok {
 					t.Errorf("root template copy %s was not written", path)
 				}

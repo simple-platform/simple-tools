@@ -83,7 +83,7 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 	if err != nil {
 		return err
 	}
-	if err := fsys.WriteFile(filepath.Join(rootPath, ".simple", "docs.json"), stamp, fsx.FilePerm); err != nil {
+	if err := fsys.WriteFile(filepath.Join(rootPath, filepath.FromSlash(DocumentationStampPath)), stamp, fsx.FilePerm); err != nil {
 		return fmt.Errorf("failed to write documentation stamp: %w", err)
 	}
 

@@ -80,7 +80,7 @@ func TestInitCmd_Integration(t *testing.T) {
 		t.Error("simple.scl not created")
 	}
 
-	stampData, err := os.ReadFile(tmpDir + "/proj1/.simple/docs.json")
+	stampData, err := os.ReadFile(tmpDir + "/proj1/" + scaffold.DocumentationStampPath)
 	if err != nil {
 		t.Fatalf("docs stamp was not created: %v", err)
 	}
