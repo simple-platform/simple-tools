@@ -56,6 +56,7 @@ func Execute() int {
 	// left with: a command that failed on an old version is the one most
 	// worth telling.
 	announceUpdate(os.Stderr, cmd.CommandPath())
+	announceDocsUpdate(os.Stderr, cmd.CommandPath())
 
 	return code
 }

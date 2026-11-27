@@ -36,6 +36,18 @@ func (OSFileSystem) Stat(name string) (fs.FileInfo, error) {
 	return os.Stat(name)
 }
 
+// Lstat reports information about a path without following its final symlink.
+// It is not part of FileSystem; only code that must distinguish links needs it.
+func (OSFileSystem) Lstat(name string) (fs.FileInfo, error) {
+	return os.Lstat(name)
+}
+
+// EvalSymlinks resolves links in a path to its real location. It is not part
+// of FileSystem; only code that must enforce a path boundary needs it.
+func (OSFileSystem) EvalSymlinks(name string) (string, error) {
+	return filepath.EvalSymlinks(name)
+}
+
 func (OSFileSystem) MkdirAll(path string, perm os.FileMode) error {
 	return os.MkdirAll(path, perm)
 }
