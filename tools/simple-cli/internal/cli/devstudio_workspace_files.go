@@ -13,7 +13,7 @@ import (
 
 // devStudioWorkspaceFiles are the root files every instance workspace needs,
 // taken from the CLI's own scaffold: devbox.json and package.json pin the
-// node and pnpm the agent's commands run with.
+// node, pnpm and Rust the agent's commands run with.
 var devStudioWorkspaceFiles = []struct{ template, name string }{
 	{"templates/devbox.json", "devbox.json"},
 	{"templates/package.json", "package.json"},

@@ -1,10 +1,18 @@
 {
   "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.16.0/.schema/devbox.schema.json",
   "packages": {
-    "nodejs": "25.9.0"
+    "nodejs": "25.9.0",
+    "rustup": "1.29.3"
   },
   "env": {
     "COREPACK_INTEGRITY_KEYS": "0",
-    "DEVBOX_COREPACK_ENABLED": "true"
+    "DEVBOX_COREPACK_ENABLED": "true",
+    "RUSTUP_AUTO_INSTALL": "0",
+    "RUSTUP_TOOLCHAIN": "1.100.0"
+  },
+  "shell": {
+    "init_hook": [
+      "rustup target list --installed --toolchain \"$RUSTUP_TOOLCHAIN\" 2>/dev/null | grep -x wasm32-wasip1 >/dev/null || rustup toolchain install \"$RUSTUP_TOOLCHAIN\" --profile minimal --target wasm32-wasip1 || echo \"Rust $RUSTUP_TOOLCHAIN could not be installed: see the error above. Everything else here works, but Rust actions will not build until a later start installs it.\" >&2"
+    ]
   }
 }
