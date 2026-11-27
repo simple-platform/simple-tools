@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
@@ -60,15 +62,68 @@ func docsTestDisk(t *testing.T, templates *fstest.MapFS) *fsx.MockFileSystem {
 
 type docsFailureFS struct {
 	*fsx.MockFileSystem
-	statFailurePath string
 	readFailurePath string
 }
 
-func (f *docsFailureFS) Stat(name string) (fs.FileInfo, error) {
+type docsRemovalFS struct {
+	*fsx.MockFileSystem
+	directoryPath     string
+	nonRegularPath    string
+	symlinkPath       string
+	statFailurePath   string
+	removeFailurePath string
+}
+
+func (f *docsRemovalFS) Stat(name string) (fs.FileInfo, error) {
 	if name == f.statFailurePath {
 		return nil, fs.ErrPermission
 	}
-	return f.MockFileSystem.Stat(name)
+	switch name {
+	case f.directoryPath:
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeDir | 0755}, nil
+	case f.nonRegularPath:
+		return docsTestFileInfo{name: filepath.Base(name), mode: fs.ModeDevice | 0600}, nil
+	default:
+		return f.MockFileSystem.Stat(name)
+	}
+}
+
+func (f *docsRemovalFS) ReadDir(name string) ([]os.DirEntry, error) {
+	if f.symlinkPath != "" && filepath.Dir(f.symlinkPath) == name {
+		return []os.DirEntry{docsTestDirEntry{name: filepath.Base(f.symlinkPath), mode: fs.ModeSymlink}}, nil
+	}
+	return f.MockFileSystem.ReadDir(name)
+}
+
+func (f *docsRemovalFS) Remove(name string) error {
+	if name == f.removeFailurePath {
+		return fs.ErrPermission
+	}
+	return f.MockFileSystem.Remove(name)
+}
+
+type docsTestFileInfo struct {
+	name string
+	mode fs.FileMode
+}
+
+func (i docsTestFileInfo) Name() string       { return i.name }
+func (i docsTestFileInfo) Size() int64        { return 0 }
+func (i docsTestFileInfo) Mode() fs.FileMode  { return i.mode }
+func (i docsTestFileInfo) ModTime() time.Time { return time.Time{} }
+func (i docsTestFileInfo) IsDir() bool        { return i.mode.IsDir() }
+func (i docsTestFileInfo) Sys() any           { return nil }
+
+type docsTestDirEntry struct {
+	name string
+	mode fs.FileMode
+}
+
+func (e docsTestDirEntry) Name() string      { return e.name }
+func (e docsTestDirEntry) IsDir() bool       { return e.mode.IsDir() }
+func (e docsTestDirEntry) Type() fs.FileMode { return e.mode }
+func (e docsTestDirEntry) Info() (fs.FileInfo, error) {
+	return docsTestFileInfo(e), nil
 }
 
 func (f *docsFailureFS) ReadFile(name string) ([]byte, error) {
@@ -231,6 +286,120 @@ func TestRunDocsUpdateJSONChanges(t *testing.T) {
 	}
 }
 
+func TestRunDocsUpdateSkipsUnremovableStampEntries(t *testing.T) {
+	tests := []struct {
+		name       string
+		stampPath  string
+		filePath   string
+		configure  func(*docsRemovalFS)
+		wantRetain []string
+		wantReport bool
+	}{
+		{
+			name:      "directory with files",
+			stampPath: ".agent/rules",
+			configure: func(fsys *docsRemovalFS) {
+				fsys.directoryPath = "/repo/.agent/rules"
+			},
+			wantRetain: []string{"/repo/.agent/rules/custom.md"},
+		},
+		{
+			name:      "missing file",
+			stampPath: ".agent/missing.md",
+		},
+		{
+			name:      "removal fails",
+			stampPath: ".agent/locked.md",
+			filePath:  "/repo/.agent/locked.md",
+			configure: func(fsys *docsRemovalFS) {
+				fsys.removeFailurePath = "/repo/.agent/locked.md"
+			},
+			wantRetain: []string{"/repo/.agent/locked.md"},
+			wantReport: true,
+		},
+		{
+			name:      "cannot inspect file",
+			stampPath: ".agent/unavailable.md",
+			filePath:  "/repo/.agent/unavailable.md",
+			configure: func(fsys *docsRemovalFS) {
+				fsys.statFailurePath = "/repo/.agent/unavailable.md"
+			},
+			wantRetain: []string{"/repo/.agent/unavailable.md"},
+			wantReport: true,
+		},
+		{
+			name:      "symbolic link",
+			stampPath: ".agent/link.md",
+			filePath:  "/repo/.agent/link.md",
+			configure: func(fsys *docsRemovalFS) {
+				fsys.symlinkPath = "/repo/.agent/link.md"
+			},
+			wantRetain: []string{"/repo/.agent/link.md"},
+		},
+		{
+			name:      "non-regular file",
+			stampPath: ".agent/device",
+			filePath:  "/repo/.agent/device",
+			configure: func(fsys *docsRemovalFS) {
+				fsys.nonRegularPath = "/repo/.agent/device"
+			},
+			wantRetain: []string{"/repo/.agent/device"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			templates := docsTestTemplates()
+			base := docsTestDisk(t, templates)
+			base.Files["/repo/.simple/context/guide.md"] = []byte("old guidance")
+			base.Files["/repo/.simple/docs.json"] = docsStampJSON("previous", "1.0.0", tt.stampPath, ".agent/obsolete.md")
+			base.Files["/repo/.agent/obsolete.md"] = []byte("old obsolete guidance")
+			base.Files["/repo/.agent/unlisted.md"] = []byte("local guidance")
+			base.Files["/repo/package.json"] = []byte("local package settings")
+			for _, retained := range tt.wantRetain {
+				base.Files[retained] = []byte("must remain")
+			}
+			if tt.name == "directory with files" {
+				base.Files["/repo/.agent/rules/custom.md"] = []byte("nested local guidance")
+			}
+			if tt.filePath != "" && tt.filePath != "/repo/.agent/obsolete.md" {
+				base.Files[tt.filePath] = []byte("must remain")
+			}
+			fsys := &docsRemovalFS{MockFileSystem: base}
+			if tt.configure != nil {
+				tt.configure(fsys)
+			}
+			out := new(bytes.Buffer)
+			deps := docsUpdateDeps{fsys: fsys, templates: templates, cwd: "/repo", cliVersion: "2.0.0"}
+
+			if err := runDocsUpdate(out, deps, false); err != nil {
+				t.Fatalf("runDocsUpdate() error = %v", err)
+			}
+			if got := string(base.Files["/repo/.simple/context/guide.md"]); got != "current guidance" {
+				t.Errorf("guide = %q, want updated content", got)
+			}
+			if _, ok := base.Files["/repo/.agent/obsolete.md"]; ok {
+				t.Error("obsolete file from old stamp was not removed")
+			}
+			for _, retained := range append(tt.wantRetain, "/repo/.agent/unlisted.md", "/repo/package.json") {
+				if _, ok := base.Files[retained]; !ok {
+					t.Errorf("file %s was removed", retained)
+				}
+			}
+			var stamp scaffold.DocumentationStamp
+			if err := json.Unmarshal(base.Files["/repo/.simple/docs.json"], &stamp); err != nil {
+				t.Fatalf("new documentation stamp is invalid: %v", err)
+			}
+			if stamp.CLIVersion != "2.0.0" {
+				t.Errorf("stamp CLI version = %q, want 2.0.0", stamp.CLIVersion)
+			}
+			if tt.wantReport && !strings.Contains(out.String(), tt.stampPath) {
+				t.Errorf("output = %q, want failed path %s reported", out.String(), tt.stampPath)
+			}
+		})
+	}
+}
+
 func TestRunDocsUpdateStampAndRemovalErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -238,7 +407,6 @@ func TestRunDocsUpdateStampAndRemovalErrors(t *testing.T) {
 		want string
 	}{
 		{name: "stamp read fails", fs: &fsx.MockFileSystem{Files: map[string][]byte{"/repo/simple.scl": []byte("workspace")}, ReadFileErr: fs.ErrPermission}, want: "failed to read documentation stamp"},
-		{name: "obsolete file removal fails", fs: &fsx.MockFileSystem{Files: map[string][]byte{"/repo/simple.scl": []byte("workspace"), "/repo/.simple/docs.json": docsStampJSON("old", "1.0.0", ".agent/old.md"), "/repo/.agent/old.md": []byte("old")}, RemoveErr: fs.ErrPermission}, want: "failed to remove obsolete documentation"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -256,17 +424,6 @@ func TestRunDocsUpdateFilesystemErrors(t *testing.T) {
 		fs   func(*testing.T, *fstest.MapFS) fsx.FileSystem
 		want string
 	}{
-		{
-			name: "obsolete stat fails",
-			fs: func(_ *testing.T, _ *fstest.MapFS) fsx.FileSystem {
-				base := &fsx.MockFileSystem{Files: map[string][]byte{
-					"/repo/simple.scl": []byte("workspace"), "/repo/.simple/docs.json": docsStampJSON("old", "1.0.0", ".agent/old.md"),
-					"/repo/.agent/old.md": []byte("old"),
-				}}
-				return &docsFailureFS{MockFileSystem: base, statFailurePath: "/repo/.agent/old.md"}
-			},
-			want: "failed to check obsolete documentation",
-		},
 		{
 			name: "shipped doc read fails",
 			fs: func(t *testing.T, templates *fstest.MapFS) fsx.FileSystem {

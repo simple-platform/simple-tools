@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -53,10 +54,11 @@ type docsUpdateDeps struct {
 }
 
 type docsUpdateResult struct {
-	Updated  []string `json:"updated"`
-	Removed  []string `json:"removed"`
-	Differs  []string `json:"differs"`
-	UpToDate bool     `json:"upToDate"`
+	Updated         []string `json:"updated"`
+	Removed         []string `json:"removed"`
+	RemovalFailures []string `json:"removalFailures,omitempty"`
+	Differs         []string `json:"differs"`
+	UpToDate        bool     `json:"upToDate"`
 }
 
 func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
@@ -86,7 +88,7 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 	for _, file := range files {
 		shipped[file.Path] = true
 	}
-	result := docsUpdateResult{Updated: []string{}, Removed: []string{}, Differs: []string{}}
+	result := docsUpdateResult{Updated: []string{}, Removed: []string{}, RemovalFailures: []string{}, Differs: []string{}}
 	oldPaths := append([]string(nil), previous.Files...)
 	sort.Strings(oldPaths)
 	for _, oldPath := range oldPaths {
@@ -94,14 +96,25 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 			continue
 		}
 		destination := filepath.Join(root, filepath.FromSlash(oldPath))
-		if _, err := deps.fsys.Stat(destination); err != nil {
+		info, err := deps.fsys.Stat(destination)
+		if err != nil {
 			if os.IsNotExist(err) {
 				continue
 			}
-			return fmt.Errorf("failed to check obsolete documentation %s: %w", oldPath, err)
+			result.RemovalFailures = append(result.RemovalFailures, oldPath)
+			continue
+		}
+		isSymlink, err := documentationPathIsSymlink(deps.fsys, destination)
+		if err != nil {
+			result.RemovalFailures = append(result.RemovalFailures, oldPath)
+			continue
+		}
+		if isSymlink || !info.Mode().IsRegular() {
+			continue
 		}
 		if err := deps.fsys.Remove(destination); err != nil {
-			return fmt.Errorf("failed to remove obsolete documentation %s: %w", oldPath, err)
+			result.RemovalFailures = append(result.RemovalFailures, oldPath)
+			continue
 		}
 		result.Removed = append(result.Removed, oldPath)
 	}
@@ -162,7 +175,7 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 		result.Updated = append(result.Updated, ".simple/docs.json")
 	}
 
-	result.UpToDate = len(result.Updated) == 0 && len(result.Removed) == 0 && len(result.Differs) == 0
+	result.UpToDate = len(result.Updated) == 0 && len(result.Removed) == 0 && len(result.RemovalFailures) == 0 && len(result.Differs) == 0
 	if jsonMode {
 		return printJSONTo(out, result)
 	}
@@ -176,11 +189,35 @@ func runDocsUpdate(out io.Writer, deps docsUpdateDeps, jsonMode bool) error {
 	for _, name := range result.Removed {
 		_, _ = fmt.Fprintf(out, "Removed %s\n", name)
 	}
+	for _, name := range result.RemovalFailures {
+		_, _ = fmt.Fprintf(out, "Could not remove %s\n", name)
+	}
 	for _, name := range result.Differs {
 		_, _ = fmt.Fprintf(out, "%s differs from the current template. Compare it by hand; it was not changed.\n", name)
 	}
 	_, _ = fmt.Fprintln(out, docsUpdateSummary(len(result.Updated), len(result.Removed), len(result.Differs)))
 	return nil
+}
+
+func documentationPathIsSymlink(fsys fsx.FileSystem, name string) (bool, error) {
+	entries, err := fsys.ReadDir(filepath.Dir(name))
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.Name() != filepath.Base(name) {
+			continue
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			return true, nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return false, err
+		}
+		return info.Mode()&fs.ModeSymlink != 0, nil
+	}
+	return false, nil
 }
 
 func docsUpdateSummary(updated, removed, differs int) string {
