@@ -136,11 +136,11 @@ func (a *App) check(fsys fsx.FileSystem) ([]Problem, error) {
 		a.checkLogicSkillLink(fsys, link, add)
 	}
 	for _, action := range a.Actions {
-		marked, err := a.actionMarkedTool(fsys, action)
+		mark, err := a.actionToolMark(fsys, action)
 		if err != nil {
 			return nil, err
 		}
-		if marked {
+		if mark == toolMarked {
 			lesson, ok := a.Lesson(action.Key)
 			if !ok || !hasBody(lesson) {
 				add(action.File, action.Line, fmt.Sprintf("tool %q has no lesson body: link a knowledge body to this tool as its lesson.", action.Name))
@@ -253,20 +253,19 @@ func (a *App) checkTaskToolLink(fsys fsx.FileSystem, link *TaskTypeToolLink, add
 			add(link.File, link.Line, fmt.Sprintf("tool %q is linked here but is not an action of this app: create it with 'simple new tool %s %s \"<Display name>\"'", link.Tool.Name, a.ID, link.Tool.Name))
 			return nil
 		}
-		marked, err := a.actionMarkedTool(fsys, action)
+		mark, err := a.actionToolMark(fsys, action)
 		if err != nil {
 			return err
 		}
-		if !marked {
-			jsonFile := actionJSONPath(a, action)
-			_, readErr := fsys.ReadFile(jsonFile)
-			if errors.Is(readErr, fs.ErrNotExist) || errors.Is(readErr, os.ErrNotExist) {
-				add(link.File, link.Line, fmt.Sprintf("tool %q has not been built, so its tool setting is unknown: run 'simple build %s' and check again", action.Name, a.ID))
-			} else if readErr != nil {
-				return fmt.Errorf("failed to read %s: %w", relative(a.RepoRoot, jsonFile), readErr)
-			} else {
-				add(link.File, link.Line, fmt.Sprintf("tool %q is not marked as a tool in its action source: mark it as a tool and build again", action.Name))
-			}
+		switch mark {
+		case toolNotBuilt:
+			add(link.File, link.Line, fmt.Sprintf("tool %q has not been built, so its tool setting is unknown: run 'simple build %s' and check again", action.Name, a.ID))
+		case toolUnreadable:
+			add(link.File, link.Line, fmt.Sprintf("tool %q has a built description that cannot be read, so its tool setting is unknown: run 'simple build %s' and check again", action.Name, a.ID))
+		case toolNotMarked:
+			add(link.File, link.Line, fmt.Sprintf("tool %q is not marked as a tool in its action source: add @tool, and @shortdesc followed by one line saying what the tool gives an agent, to a comment there, then build again", action.Name))
+		case toolMarked:
+			// Nothing to report: the link names an action that is a tool.
 		}
 		return nil
 	}
@@ -440,24 +439,47 @@ func (a *App) checkStates(fsys fsx.FileSystem, item *TaskType, add func(string, 
 	return nil
 }
 
-func (a *App) actionMarkedTool(fsys fsx.FileSystem, action *Action) (bool, error) {
+// toolMark is what an action's built description says about the action being
+// a tool. The build writes that description, action.json, from the tags in the
+// action's source.
+type toolMark int
+
+const (
+	// toolNotBuilt: there is no built description yet.
+	toolNotBuilt toolMark = iota
+	// toolUnreadable: the file is there and is not a description the build
+	// writes. That says nothing about the source, so the author is sent to
+	// build again, not to add tags that may already be there.
+	toolUnreadable
+	// toolNotMarked: built, and the source does not offer the action as a tool.
+	toolNotMarked
+	// toolMarked: built, and the source offers the action as a tool.
+	toolMarked
+)
+
+func (a *App) actionToolMark(fsys fsx.FileSystem, action *Action) (toolMark, error) {
 	file := actionJSONPath(a, action)
 	data, err := fsys.ReadFile(file)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, os.ErrNotExist) {
-			return false, nil
+			return toolNotBuilt, nil
 		}
-		return false, fmt.Errorf("failed to read %s: %w", relative(a.RepoRoot, file), err)
+		return toolNotBuilt, fmt.Errorf("failed to read %s: %w", relative(a.RepoRoot, file), err)
 	}
-	var value struct {
+	// A pointer, so that a file holding only `null` is told apart from a
+	// description with no tool setting: both decode without an error.
+	var value *struct {
 		AI struct {
 			Tool bool `json:"tool"`
 		} `json:"ai"`
 	}
-	if err := json.Unmarshal(data, &value); err != nil {
-		return false, nil
+	if err := json.Unmarshal(data, &value); err != nil || value == nil {
+		return toolUnreadable, nil
 	}
-	return value.AI.Tool, nil
+	if value.AI.Tool {
+		return toolMarked, nil
+	}
+	return toolNotMarked, nil
 }
 
 func actionJSONPath(a *App, action *Action) string {

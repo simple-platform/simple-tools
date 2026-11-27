@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/agents"
 	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"strings"
@@ -814,12 +815,9 @@ func TestTheScaffoldedRustActionDeclaresThePayloadTheGeneratorLooksFor(t *testin
 	}
 }
 
-// THE SCAFFOLDED RUST ACTION BUILDS INTO THE STATEMENT ITS TEMPLATE MAKES.
+// THE SCAFFOLDED RUST ACTION BUILDS WITHOUT CLAIMING TO BE A TOOL.
 //
-// The template's comments name every tag an author may write, including the one
-// it deliberately leaves off. A mention is prose only while it is not read as a
-// tag: written at the start of a line it would be a claim no author made, and a
-// near spelling of one would refuse every action scaffolded from here. So the
+// A plain action's generated description must not expose it to an agent. The
 // template is put through the generator this binary embeds, exactly as the
 // first `simple build` after `simple new action --lang rust` would.
 func TestTheScaffoldedRustActionIsDescribedAsItsTemplateSays(t *testing.T) {
@@ -831,54 +829,182 @@ func TestTheScaffoldedRustActionIsDescribedAsItsTemplateSays(t *testing.T) {
 		t.Skip("cargo not available, skipping integration test")
 	}
 
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "apps", "com.test"), 0755); err != nil {
-		t.Fatalf("failed to create the app: %v", err)
+	tests := []struct {
+		name          string
+		tool          bool
+		wantShortDesc string
+	}{
+		{name: "plain action"},
+		{name: "tool", tool: true, wantShortDesc: "TODO(simple): Say in one line what this tool gives an agent."},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(root, "apps", "com.test"), 0755); err != nil {
+				t.Fatalf("failed to create the app: %v", err)
+			}
 
-	cfg := ActionConfig{
-		AppID:        "com.test",
-		ActionName:   "greet-user",
-		DisplayName:  "Greet User",
-		ExecutionEnv: "server",
-		Language:     LanguageRust,
+			cfg := ActionConfig{
+				AppID:        "com.test",
+				ActionName:   "greet-user",
+				DisplayName:  "Greet User",
+				ExecutionEnv: "server",
+				Language:     LanguageRust,
+				Tool:         tt.tool,
+			}
+
+			if err := CreateActionStructure(fsx.OSFileSystem{}, TemplatesFS, root, cfg); err != nil {
+				t.Fatalf("failed to scaffold the action: %v", err)
+			}
+
+			actionDir := filepath.Join(root, "apps", "com.test", "actions", "greet-user")
+			if err := build.ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
+				t.Fatalf("a freshly scaffolded Rust action does not build: %v", err)
+			}
+
+			raw, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
+			if err != nil {
+				t.Fatalf("failed to read action.json: %v", err)
+			}
+
+			var described struct {
+				Description string         `json:"description"`
+				AI          map[string]any `json:"ai"`
+			}
+
+			if err := json.Unmarshal(raw, &described); err != nil {
+				t.Fatalf("action.json is not JSON: %v", err)
+			}
+
+			if tt.tool {
+				if described.AI["tool"] != true {
+					t.Fatalf("a Rust tool was not marked as a tool: %#v", described.AI)
+				}
+				if described.AI["shortdesc"] != tt.wantShortDesc {
+					t.Fatalf("Rust tool short description = %#v, want %q", described.AI["shortdesc"], tt.wantShortDesc)
+				}
+			} else {
+				if tool, marked := described.AI["tool"]; marked && tool != false {
+					t.Fatalf("a plain Rust action was marked as a tool: %#v", described.AI)
+				}
+			}
+
+			// The template leaves this claim to the author. A tool's comment
+			// names the tag while explaining it, and that mention must not be
+			// read as the claim.
+			if _, claimed := described.AI["parallelsafe"]; claimed {
+				t.Fatalf("a scaffolded action claims @parallelsafe that its author never wrote: %#v", described.AI)
+			}
+
+			if strings.Contains(described.Description, "@") {
+				t.Fatalf("a tag reached a scaffolded action's description: %q", described.Description)
+			}
+		})
 	}
+}
 
-	if err := CreateActionStructure(fsx.OSFileSystem{}, TemplatesFS, root, cfg); err != nil {
-		t.Fatalf("failed to scaffold the action: %v", err)
+func TestGeneratedActionsMatchAgentBuildToolCheck(t *testing.T) {
+	tests := []struct {
+		name       string
+		language   string
+		tool       bool
+		wantMarked bool
+	}{
+		{name: "plain Rust action", language: LanguageRust},
+		{name: "Rust tool", language: LanguageRust, tool: true, wantMarked: true},
+		{name: "plain TypeScript action", language: LanguageTypeScript},
+		{name: "TypeScript tool", language: LanguageTypeScript, tool: true, wantMarked: true},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const appID = "com.test"
+			actionName := "greet-user"
+			root := t.TempDir()
+			if err := CreateAppStructure(fsx.OSFileSystem{}, TemplatesFS, root, appID, "Test", ""); err != nil {
+				t.Fatalf("failed to scaffold the app: %v", err)
+			}
+			if _, err := CreateAgent(fsx.OSFileSystem{}, TemplatesFS, root, AgentConfig{AppID: appID, Name: "support", DisplayName: "Service Support"}); err != nil {
+				t.Fatalf("failed to scaffold the agent: %v", err)
+			}
+			if err := CreateActionStructure(fsx.OSFileSystem{}, TemplatesFS, root, ActionConfig{
+				AppID: appID, ActionName: actionName, DisplayName: "Greet User", Scope: "acme",
+				ExecutionEnv: "server", Language: tt.language, Tool: tt.tool,
+			}); err != nil {
+				t.Fatalf("failed to scaffold the action: %v", err)
+			}
 
-	actionDir := filepath.Join(root, "apps", "com.test", "actions", "greet-user")
-	if err := build.ExtractMetadata(fsx.OSFileSystem{}, actionDir); err != nil {
-		t.Fatalf("a freshly scaffolded Rust action does not build: %v", err)
+			actionDir := filepath.Join(root, "apps", appID, "actions", actionName)
+			sourceName := "index.ts"
+			if tt.language == LanguageRust {
+				sourceName = filepath.Join("src", "main.rs")
+			} else {
+				sourceName = filepath.Join("src", sourceName)
+			}
+			source, err := os.ReadFile(filepath.Join(actionDir, sourceName))
+			if err != nil {
+				t.Fatalf("failed to read the generated action source: %v", err)
+			}
+
+			// This is a stand-in for metadata extraction so this checker test can
+			// run where Rust is not installed. Real Rust extraction is covered by
+			// TestTheScaffoldedRustActionIsDescribedAsItsTemplateSays.
+			toolTag := strings.Contains(string(source), "/// @tool\n") || strings.Contains(string(source), " * @tool\n")
+			metadata, err := json.Marshal(map[string]any{"ai": map[string]bool{"tool": toolTag}})
+			if err != nil {
+				t.Fatalf("failed to encode action metadata: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(actionDir, "action.json"), metadata, fsx.FilePerm); err != nil {
+				t.Fatalf("failed to write action metadata: %v", err)
+			}
+
+			problems, err := agents.CheckWithParser(fsx.OSFileSystem{}, root, appID, generatedActionCheckParser(actionName))
+			if err != nil {
+				t.Fatalf("agent build check failed: %v", err)
+			}
+			toolProblem := "tool \"" + actionName + "\" has no lesson body"
+			gotMarked := false
+			for _, problem := range problems {
+				if strings.Contains(problem.Rule, toolProblem) {
+					gotMarked = true
+					break
+				}
+			}
+			if gotMarked != tt.wantMarked {
+				t.Fatalf("agent build check marked the action as a tool = %v, want %v; problems: %#v", gotMarked, tt.wantMarked, problems)
+			}
+		})
 	}
+}
 
-	raw, err := os.ReadFile(filepath.Join(actionDir, "action.json"))
-	if err != nil {
-		t.Fatalf("failed to read action.json: %v", err)
-	}
-
-	var described struct {
-		Description string         `json:"description"`
-		AI          map[string]any `json:"ai"`
-	}
-
-	if err := json.Unmarshal(raw, &described); err != nil {
-		t.Fatalf("action.json is not JSON: %v", err)
-	}
-
-	if described.AI["tool"] != true {
-		t.Fatalf("the template's @tool did not reach the artifact: %#v", described.AI)
-	}
-
-	// The template leaves the claim to the author, so the action it scaffolds
-	// makes none; the mention in its comment is not read as one.
-	if _, claimed := described.AI["parallelsafe"]; claimed {
-		t.Fatalf("a scaffolded action claims @parallelsafe that its author never wrote: %#v", described.AI)
-	}
-
-	if strings.Contains(described.Description, "@") {
-		t.Fatalf("a tag reached a scaffolded action's description: %q", described.Description)
+func generatedActionCheckParser(actionName string) agents.SCLParser {
+	return func(filePath string) ([]byte, error) {
+		table, key := "", ""
+		var fields []map[string]any
+		switch filepath.Base(filePath) {
+		case "10_actions.scl":
+			table, key = "logic", strings.ReplaceAll(actionName, "-", "_")
+			fields = []map[string]any{
+				{"type": "kv", "key": "name", "value": actionName},
+				{"type": "kv", "key": "display_name", "value": "Greet User"},
+			}
+		case "70_agent_knowledge.scl":
+			table, key = "knowledge", "persona_support"
+			fields = []map[string]any{
+				{"type": "kv", "key": "title", "value": "Service Support"},
+				{"type": "kv", "key": "body", "value": "$file('knowledge/support-persona.md')"},
+			}
+		case "71_agents.scl":
+			table, key = "agent", "agent_support"
+			fields = []map[string]any{
+				{"type": "kv", "key": "display_name", "value": "Service Support"},
+				{"type": "kv", "key": "instructions_id", "value": "$app_record(\"persona_support\")"},
+			}
+		default:
+			return []byte("[]"), nil
+		}
+		return json.Marshal([]map[string]any{{
+			"name": []string{"dev_simple_system." + table, key}, "type": "block", "key": "set", "children": fields,
+		}})
 	}
 }
 

@@ -444,16 +444,18 @@ func TestNewActionCmd_Rust(t *testing.T) {
 	for _, want := range []string{
 		"use simpleplatform_sdk::prelude::*;",
 		"#[simple(",
-		"@tool",
-		"@shortdesc",
-		"@usewhen",
-		"`@parallelsafe`",
 		"simple::run(handler)",
 		"#[cfg(test)]",
 		"/// Greets a person by name",
+		"/// Greets whoever the caller names and answers with the greeting. A blank name\n/// is refused.",
 	} {
 		if !strings.Contains(string(mainRs), want) {
 			t.Errorf("main.rs missing %q", want)
+		}
+	}
+	for _, tag := range []string{"@tool", "@shortdesc", "@usewhen", "@parallelsafe"} {
+		if strings.Contains(string(mainRs), tag) {
+			t.Errorf("plain Rust action contains tool tag %q", tag)
 		}
 	}
 
