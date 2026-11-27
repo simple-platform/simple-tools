@@ -98,6 +98,25 @@ func TestSpaceTemplateUsesSharedTheme(t *testing.T) {
 	}
 }
 
+// TestSpaceTemplatePinsMatchingVitestVersions keeps the test runner and coverage
+// add-on compatible with the workspace toolchain. The vitest 2.1.9 release brought
+// its own vite 5.4.21, which a repo with pnpm's trustPolicy: no-downgrade refuses
+// to install. The coverage add-on must use the same version as vitest. Version
+// 4.1.12 is the newest release that states support for the Node version pinned by
+// the workspace template (25.9.0); 5.x leaves Node 25 out, so move to 5.x only
+// together with that Node pin.
+func TestSpaceTemplatePinsMatchingVitestVersions(t *testing.T) {
+	var manifest struct {
+		DevDependencies map[string]string `json:"devDependencies"`
+	}
+	readTemplateJSON(t, "templates/space/package.json", &manifest)
+	for _, dependency := range []string{"vitest", "@vitest/coverage-v8"} {
+		if got := manifest.DevDependencies[dependency]; got != "4.1.12" {
+			t.Errorf("space package.json %s = %q, want 4.1.12", dependency, got)
+		}
+	}
+}
+
 func TestSpaceDesignSkillCopiesEmbeddedResourcesUnchanged(t *testing.T) {
 	written := make(map[string][]byte)
 	if err := copyAgentDocs(&mockWriteTrackingFS{written: written}, TemplatesFS, "/root"); err != nil {
