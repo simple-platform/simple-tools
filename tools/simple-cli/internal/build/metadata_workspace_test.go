@@ -35,7 +35,7 @@ import (
 func requireWorkspaceRoot(t *testing.T, want, why string) {
 	t.Helper()
 
-	found, err := findWorkspaceRoot()
+	found, err := FindWorkspaceRoot()
 	if err != nil {
 		t.Fatalf("failed to find the workspace root: %v", err)
 	}
@@ -79,7 +79,7 @@ func writeFile(t *testing.T, path, content string) {
 // The root of this repository is the directory holding pnpm-workspace.yaml, and
 // no other directory on the way up to it holds one.
 func TestWorkspaceRootFoundFromInsideAMemberPackage(t *testing.T) {
-	root, err := findWorkspaceRoot()
+	root, err := FindWorkspaceRoot()
 	if err != nil {
 		t.Fatalf("failed to find the workspace root: %v", err)
 	}

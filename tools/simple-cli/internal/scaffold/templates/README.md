@@ -24,6 +24,7 @@ A Simple Platform monorepo.
 | `simple new skill <app> <name> ["<Title>"] --task-type <type>`     | Add a skill to a kind of work        |
 | `simple new knowledge <app> <name> ["<Title>"] --task-type <type>` | Add reference knowledge              |
 | `simple build <app>`                                               | Build all Actions in an app          |
+| `simple lint [target]`                                             | Lint the workspace or a target       |
 | `simple deploy <app>`                                              | Deploy application (Schema + Logic)  |
 
 ## Getting Started

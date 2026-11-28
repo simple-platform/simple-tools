@@ -194,7 +194,7 @@ type metadataInstall struct {
 // written and run from. The directory it actually sits in is created empty under
 // that root, so it has no `node_modules` of its own to contribute.
 func ensureNPMPackages() error {
-	workspaceRoot, err := findWorkspaceRoot()
+	workspaceRoot, err := FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find workspace root: %w", err)
 	}
@@ -230,6 +230,21 @@ func ensureNPMPackages() error {
 // needs, installing them at the workspace root if they are absent.
 func EnsureMetadataPackages() error {
 	return ensureNPMPackages()
+}
+
+// EnsureWorkspaceInstall runs the pnpm install used by metadata setup at the
+// workspace root. Lint uses it when the workspace's own ESLint is missing.
+func EnsureWorkspaceInstall() error {
+	workspaceRoot, err := FindWorkspaceRoot()
+	if err != nil {
+		return fmt.Errorf("failed to find workspace root: %w", err)
+	}
+
+	output, err := runMetadataInstall(workspaceRoot, []string{"install", "--ignore-scripts"})
+	if err != nil {
+		return fmt.Errorf("failed to install workspace packages at %s: %w\n%s", workspaceRoot, err, output)
+	}
+	return nil
 }
 
 // ResetMetadataInstallState clears the per-root result cache for tests.
@@ -306,7 +321,7 @@ func nodeCanResolve(dir, pkg string) bool {
 	return found
 }
 
-// findWorkspaceRoot answers with the root of the workspace whose `node_modules`
+// FindWorkspaceRoot answers with the root of the workspace whose `node_modules`
 // the generator runs against, by walking up from the current directory.
 //
 // A WORKSPACE ROOT IS NOT SIMPLY THE FIRST package.json ABOVE US. Every member
@@ -324,7 +339,7 @@ func nodeCanResolve(dir, pkg string) bool {
 // `workspaces` field marks an npm or yarn one. A plain manifest is remembered as
 // the answer for a project that belongs to no workspace at all, but the walk
 // carries on past it in case a workspace encloses it.
-func findWorkspaceRoot() (string, error) {
+func FindWorkspaceRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -579,7 +594,7 @@ func writeRustCompanionCrate() (string, error) {
 // it wrote to its error stream on a run that succeeds.
 func executeScript(actionDir string, lang ActionLanguage) (string, error) {
 	// Find workspace root to run the script from there (so Node.js can find packages)
-	workspaceRoot, err := findWorkspaceRoot()
+	workspaceRoot, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", fmt.Errorf("failed to find workspace root: %w", err)
 	}

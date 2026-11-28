@@ -6,11 +6,68 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"simple-cli/internal/fsx"
 	"strings"
 	"sync"
 	"testing"
 )
+
+func TestRustLintCommandsFollowBuildEnvironment(t *testing.T) {
+	tests := []struct {
+		name        string
+		environment string
+		fix         bool
+		want        [][]string
+	}{
+		{
+			name:        "server",
+			environment: "server",
+			want: [][]string{
+				{"fmt", "--check"},
+				{"clippy", "--all-targets", "--", "-D", "warnings"},
+				{"clippy", "--target", RustWasmTarget, "--", "-D", "warnings"},
+			},
+		},
+		{
+			name:        "browser",
+			environment: "client",
+			want: [][]string{
+				{"fmt", "--check"},
+				{"clippy", "--all-targets", "--", "-D", "warnings"},
+				{"clippy", "--target", RustWasmTarget, "--features", RustAsyncFeature, "--", "-D", "warnings"},
+			},
+		},
+		{
+			name:        "server and browser",
+			environment: "both",
+			want: [][]string{
+				{"fmt", "--check"},
+				{"clippy", "--all-targets", "--", "-D", "warnings"},
+				{"clippy", "--target", RustWasmTarget, "--", "-D", "warnings"},
+				{"clippy", "--target", RustWasmTarget, "--features", RustAsyncFeature, "--", "-D", "warnings"},
+			},
+		},
+		{
+			name:        "fix formats only",
+			environment: "server",
+			fix:         true,
+			want: [][]string{
+				{"fmt"},
+				{"clippy", "--all-targets", "--", "-D", "warnings"},
+				{"clippy", "--target", RustWasmTarget, "--", "-D", "warnings"},
+			},
+		},
+		{name: "invalid execution environment", environment: "else"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RustLintCommands(tt.environment, tt.fix); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("RustLintCommands(%q, %v) = %v, want %v", tt.environment, tt.fix, got, tt.want)
+			}
+		})
+	}
+}
 
 // cargoArtifactLine writes one of cargo's compiler-artifact messages, so the
 // tests below read the same shape the real cargo emits rather than a shape

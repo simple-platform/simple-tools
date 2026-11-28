@@ -71,6 +71,7 @@ Use these commands to build and deploy your work.
 | `simple build <app>/<action>`                                               | Build a single action                                          |
 | `simple build <app>`                                                        | Build all actions and spaces in an app in parallel             |
 | `simple build --all`                                                        | Build all actions and spaces in all apps in parallel           |
+| `simple lint [target]`                                                      | Lint the workspace or one build target                         |
 | `simple deps update <app>`                                                  | Update action and space lock files                             |
 | `simple deploy apps/<app> --env <env>`                                      | Bundle and deploy an application (Schema, Logic, and Spaces)   |
 

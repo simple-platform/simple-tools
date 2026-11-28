@@ -25,6 +25,35 @@ const (
 	RustAsyncFeature = "async"
 )
 
+// RustLintCommands returns the Rust checks for an action's host and wasm targets.
+// The host check includes tests, which simple test compiles. Browser builds use
+// the async feature, just as CargoBuildWasm does.
+func RustLintCommands(executionEnvironment string, fix bool) [][]string {
+	if executionEnvironment != "server" && executionEnvironment != "client" && executionEnvironment != "both" {
+		return nil
+	}
+	format := []string{"fmt", "--check"}
+	if fix {
+		format = []string{"fmt"}
+	}
+
+	commands := [][]string{
+		format,
+		{"clippy", "--all-targets", "--", "-D", "warnings"},
+	}
+	if executionEnvironment == "server" || executionEnvironment == "both" {
+		commands = append(commands, []string{
+			"clippy", "--target", RustWasmTarget, "--", "-D", "warnings",
+		})
+	}
+	if executionEnvironment == "client" || executionEnvironment == "both" {
+		commands = append(commands, []string{
+			"clippy", "--target", RustWasmTarget, "--features", RustAsyncFeature, "--", "-D", "warnings",
+		})
+	}
+	return commands
+}
+
 // rustBrowserWasmOptFlags is what wasm-opt is given for the browser artifact.
 //
 // The --enable-* flags are not decoration. Rust's wasm32-wasip1 target emits

@@ -192,6 +192,17 @@
       "usage": "simple build [target]",
       "description": "Build app targets and check agent guidance after building actions; a single action or space target skips agent checks"
     },
+    "lint": {
+      "usage": "simple lint [target]",
+      "description": "Lint the workspace or a build target with ESLint, Rust fmt and clippy (including action tests and built WebAssembly variants), and Go formatting and vet checks",
+      "args": [
+        { "name": "target", "type": "string", "optional": true, "description": "App, action, space, or app/action target" }
+      ],
+      "flags": [
+        { "name": "--fix", "type": "boolean", "description": "Apply available formatting fixes" },
+        { "name": "--json", "type": "boolean", "description": "Output JSON check results" }
+      ]
+    },
     "init": {
       "usage": "simple init <project-name>",
       "description": "Initialize a new monorepo workspace",
