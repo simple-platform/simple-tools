@@ -20,6 +20,6 @@
     "esbuild": "0.28.2",
     "npm-run-all2": "5.0.2",
     "typescript": "5.9.3",
-    "vitest": "3.2.7"
+    "vitest": "4.1.11"
   }
 }
