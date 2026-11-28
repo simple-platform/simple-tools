@@ -584,6 +584,10 @@ func captureStderr(t *testing.T, run func()) string {
 // It uses extensive mocking of the `build` package functions to avoid invalidating
 // the test environment or taking excessive time with actual builds only to test CLI parsing.
 func TestRunBuild(t *testing.T) {
+	originalEnsureMetadataPackages := ensureMetadataPackages
+	ensureMetadataPackages = func() error { return nil }
+	t.Cleanup(func() { ensureMetadataPackages = originalEnsureMetadataPackages })
+
 	// === MOCKING START ===
 	// Store original functions to restore them after the test
 	origDeps := build.EnsureDependenciesFunc

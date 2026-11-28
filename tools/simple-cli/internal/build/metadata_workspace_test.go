@@ -1,9 +1,11 @@
 package build
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -253,13 +255,93 @@ func TestGeneratorInstallUsesWorkspaceRootOnlyInAPnpmWorkspace(t *testing.T) {
 		root string
 		want string
 	}{
-		{"a pnpm workspace", pnpmWorkspace, "add -w -D ts-json-schema-generator ts-morph"},
-		{"a Simple workspace with no manifest", simpleWorkspace, "add -D ts-json-schema-generator ts-morph"},
+		{"a pnpm workspace", pnpmWorkspace, "add -w -D -E --ignore-scripts ts-json-schema-generator@2.9.0 ts-morph@28.0.0"},
+		{"a Simple workspace with no manifest", simpleWorkspace, "add -D -E --ignore-scripts ts-json-schema-generator@2.9.0 ts-morph@28.0.0"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if got := strings.Join(generatorInstallArgs(test.root), " "); got != test.want {
 				t.Fatalf("generatorInstallArgs = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestGeneratorUsesPinnedInstallWhenRootDeclaresPackages(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "package.json"), `{"devDependencies":{"ts-json-schema-generator":"2.9.0","ts-morph":"28.0.0"}}`)
+	if got := strings.Join(generatorInstallArgs(root), " "); got != "install --ignore-scripts" {
+		t.Fatalf("generatorInstallArgs = %q, want install --ignore-scripts", got)
+	}
+}
+
+func TestConcurrentMetadataInstallSharesResultPerWorkspace(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		wantErr bool
+	}{
+		{name: "success"},
+		{name: "registry failure", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ResetMetadataInstallState()
+			t.Cleanup(ResetMetadataInstallState)
+			root := t.TempDir()
+			writeFile(t, filepath.Join(root, "simple.scl"), "tenant acme\n")
+			member := filepath.Join(root, "apps", "com.acme.demo")
+			if err := os.MkdirAll(member, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			t.Chdir(member)
+
+			registryErr := errors.New("registry unavailable")
+			calls := 0
+			var callsMu sync.Mutex
+			original := runMetadataInstall
+			runMetadataInstall = func(_ string, _ []string) ([]byte, error) {
+				callsMu.Lock()
+				calls++
+				callsMu.Unlock()
+				if test.wantErr {
+					for _, pkg := range generatorPackages {
+						if err := os.MkdirAll(filepath.Join(root, "node_modules", filepath.FromSlash(pkg)), 0o755); err != nil {
+							return nil, err
+						}
+					}
+					return []byte("registry output"), registryErr
+				}
+				return nil, nil
+			}
+			t.Cleanup(func() { runMetadataInstall = original })
+
+			const callers = 8
+			start := make(chan struct{})
+			errs := make(chan error, callers)
+			for range callers {
+				go func() {
+					<-start
+					errs <- ensureNPMPackages()
+				}()
+			}
+			close(start)
+			for range callers {
+				err := <-errs
+				if (err != nil) != test.wantErr {
+					t.Errorf("ensureNPMPackages() error = %v, want error %v", err, test.wantErr)
+				} else if test.wantErr && (!errors.Is(err, registryErr) || !strings.Contains(err.Error(), "registry output")) {
+					t.Errorf("install error = %v, want original error and output", err)
+				}
+			}
+			if calls != 1 {
+				t.Errorf("root install ran %d times, want once", calls)
+			}
+			if test.wantErr {
+				if err := ensureNPMPackages(); !errors.Is(err, registryErr) {
+					t.Errorf("later call error = %v, want the cached registry error", err)
+				}
+				if calls != 1 {
+					t.Errorf("root install ran %d times after its failure, want once", calls)
+				}
 			}
 		})
 	}

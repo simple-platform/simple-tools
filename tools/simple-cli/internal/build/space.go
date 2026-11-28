@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"simple-cli/internal/fsx"
 )
 
 var ExecCommandFunc = exec.Command
@@ -70,10 +71,12 @@ func (m *BuildManager) BuildSpace(ctx context.Context, spaceDir string, onProgre
 		}
 	}
 
-	report("Installing dependencies...")
-	if err := EnsureDependenciesFunc(spaceDir); err != nil {
-		report("Failed")
-		return SpaceBuildResult{SpaceName: spaceName, Error: fmt.Errorf("npm install failed: %w", err)}
+	if BuildDependenciesNeedInstall(fsx.OSFileSystem{}, spaceDir) {
+		report("Installing dependencies...")
+		if err := EnsureDependenciesFunc(spaceDir); err != nil {
+			report("Failed")
+			return SpaceBuildResult{SpaceName: spaceName, Error: fmt.Errorf("npm install failed: %w", err)}
+		}
 	}
 
 	report("Building UI...")

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"simple-cli/internal/build"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
 	"simple-cli/internal/testsupport"
@@ -262,6 +263,30 @@ func TestGeneratedLintDependencyVersionsMatch(t *testing.T) {
 			templateVersion := templateManifest.DevDependencies[dependency]
 			if cliVersion == "" || templateVersion == "" || cliVersion != templateVersion {
 				t.Errorf("CLI version %q and template version %q differ or are missing", cliVersion, templateVersion)
+			}
+		})
+	}
+}
+
+func TestGeneratedPinnedDependencyVersionsMatch(t *testing.T) {
+	contents, err := scaffold.TemplatesFS.ReadFile("templates/package.json")
+	if err != nil {
+		t.Fatalf("read workspace template package.json: %v", err)
+	}
+	manifest, err := decodeLintManifest(contents)
+	if err != nil {
+		t.Fatalf("decode workspace template package.json: %v", err)
+	}
+	for _, dependency := range []struct {
+		name, version string
+	}{
+		{"ts-json-schema-generator", build.TSSchemaGeneratorVersion},
+		{"ts-morph", build.TSMorphVersion},
+		{"vitest", build.VitestVersion},
+	} {
+		t.Run(dependency.name, func(t *testing.T) {
+			if got := manifest.DevDependencies[dependency.name]; got != dependency.version {
+				t.Errorf("template version = %q, want pinned version %q", got, dependency.version)
 			}
 		})
 	}

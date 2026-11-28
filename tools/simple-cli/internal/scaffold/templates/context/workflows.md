@@ -83,6 +83,12 @@ This document defines the **standard operating procedure** for building and modi
 3.  `simple deploy apps/<app_id> --env <env>` (when deployment is requested)
     *   *Ref:* `.simple/context/cli-manifest.json` (Command: "deploy")
 
+Action and space dependencies use their `package-lock.json` files. `simple build`
+and `simple test` run `npm ci --ignore-scripts` when a lock file is present; the
+first install uses `npm install --ignore-scripts`. After changing a dependency
+in `package.json`, run `simple deps update <app>` and commit the changed lock
+files before deploying.
+
 ## Create an Agent
 
 When a developer asks for an agent, follow `.agent/workflows/create-agent.md` and use the `build-agents` skill. Create the agent and kind of work with the CLI, then complete the generated persona, playbook, and shape file. Add only the tools and longer procedures the work needs. See `.simple/context/13-agents.md` for the parts, command flags, and build checks.

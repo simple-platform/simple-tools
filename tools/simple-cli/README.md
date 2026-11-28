@@ -217,6 +217,25 @@ simple test com.mycompany.crm --behavior order
 
 ---
 
+### `simple deps update`
+
+Select dependency versions from each action or space `package.json` and write
+the result to its `package-lock.json`. `simple build` and `simple test` install
+from that lock with `npm ci --ignore-scripts`. If a folder has no lock file yet,
+its first install uses `npm install --ignore-scripts` and creates one.
+
+```bash
+simple deps update com.acme.crm/action-name
+simple deps update com.acme.crm
+simple deps update --all
+```
+
+The command prints each changed lock file. Commit those files before deploying;
+deploy checks that every TypeScript action and space has a tracked, committed
+lock file.
+
+---
+
 ### `simple deploy`
 
 Deploy an application to an environment: bump the version in `app.scl`, upload the files the server does not have yet, publish the version, and install it.

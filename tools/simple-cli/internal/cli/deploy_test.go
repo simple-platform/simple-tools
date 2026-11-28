@@ -111,7 +111,7 @@ func TestRunDeploy(t *testing.T) {
 				tt.setupDir(t, tmpDir)
 			}
 
-			err := runDeploy(context.Background(), fsx.OSFileSystem{}, &bytes.Buffer{}, tt.args)
+			err := runDeploy(context.Background(), fsx.OSFileSystem{}, &bytes.Buffer{}, &bytes.Buffer{}, tt.args)
 
 			if tt.wantErr {
 				if err == nil {
@@ -468,7 +468,7 @@ func TestRunDeploy_AuthRetry(t *testing.T) {
 	deployDryRun = false
 
 	var out bytes.Buffer
-	if err := runDeploy(context.Background(), fsx.OSFileSystem{}, &out, []string{"apps/myapp"}); err != nil {
+	if err := runDeploy(context.Background(), fsx.OSFileSystem{}, &out, &bytes.Buffer{}, []string{"apps/myapp"}); err != nil {
 		t.Fatalf("runDeploy failed unexpectedly: %v", err)
 	}
 	if authAttempts < 2 {

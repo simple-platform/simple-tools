@@ -9,9 +9,9 @@ Common patterns for the TypeScript SDK (`@simpleplatform/sdk`).
 
 ## Installation
 
-```bash
-npm install @simpleplatform/sdk
-```
+Add `@simpleplatform/sdk` to the action's `package.json`, then run
+`simple deps update <app>/<action>` to select versions and write the lock file.
+`simple build` installs the locked versions with install scripts disabled.
 
 ---
 
