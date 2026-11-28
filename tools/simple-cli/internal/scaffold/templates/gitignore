@@ -4,6 +4,10 @@ build/
 dist/
 tmp/
 
+# Cargo's build folder, one per Rust action. A Rust action ignores its own,
+# but a tool that reads only this file, such as the linter, needs it here too.
+apps/*/actions/*/target/
+
 # Dependencies
 node_modules/
 
@@ -21,3 +25,6 @@ Thumbs.db
 
 # Test Coverage
 coverage/
+
+# Devbox environment
+.devbox/

@@ -1,5 +1,5 @@
-@import "tailwindcss";
-@import "@simpleplatform/ui-kit/theme.css";
+@import 'tailwindcss';
+@import '@simpleplatform/ui-kit/theme.css';
 
 @layer base {
   *,
