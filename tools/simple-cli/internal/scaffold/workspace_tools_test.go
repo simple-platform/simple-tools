@@ -109,19 +109,26 @@ func TestWorkspaceToolVersionsArePinned(t *testing.T) {
 // The start-up line has three parts, `question || install || notice`, and each
 // one keeps a promise.
 //
-// The question keeps a start quiet and quick once Rust is there: rustup is
-// asked what is installed, and nothing more runs when the answer is yes. grep
-// reads the whole answer rather than stopping at the first match (-q): in a
-// shell that counts a failure anywhere in a pipe (pipefail), stopping early
-// can break rustup's last write and turn a yes into an install on every start.
+// The question keeps a start quiet and quick once Rust is complete: rustup is
+// asked what is installed, and nothing more runs when all three pieces are
+// there: the formatter, the linter, and the standard library for the
+// WebAssembly target. A workspace whose Rust was installed before the
+// formatter and the linter were part of it is two pieces short, so its next
+// start adds them. The standard library's name is matched to its end, so a
+// second WebAssembly target whose name begins the same way is not counted in
+// its place. grep counts
+// through the whole list rather than stopping at a match: in a shell that
+// counts a failure anywhere in a pipe (pipefail), stopping early can break
+// rustup's last write and turn a yes into an install on every start.
 //
-// The profile is minimal: the compiler, cargo and the standard library, which
-// is all a build or a test needs.
+// The install takes the minimal profile, which is the compiler, cargo and the
+// standard library, plus the formatter and the linter: 583 MB. What it leaves
+// out is the documentation, most of what the default profile adds.
 //
 // RUSTUP_AUTO_INSTALL=0 makes the install the only thing that ever downloads
 // Rust. Without it rustup answers a question about a release it does not have,
 // and any cargo or rustc call, by downloading that release itself,
-// documentation included (1.5 GB against 564 MB), saying nothing while it does.
+// documentation included (1.5 GB against 583 MB), saying nothing while it does.
 //
 // The notice keeps the rest of the environment usable when the install fails,
 // with no network for one. devbox runs nothing after a start-up line that
@@ -136,9 +143,9 @@ func TestWorkspaceRustInstallAsksFirstAndNeverBlocks(t *testing.T) {
 	if devbox.Env["RUSTUP_AUTO_INSTALL"] != "0" {
 		t.Errorf("devbox.json RUSTUP_AUTO_INSTALL = %q, want 0 so only the start-up line downloads Rust", devbox.Env["RUSTUP_AUTO_INSTALL"])
 	}
-	question := `rustup target list --installed --toolchain "$RUSTUP_TOOLCHAIN" 2>/dev/null | grep -x ` + build.RustWasmTarget + ` >/dev/null`
-	install := `rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target ` + build.RustWasmTarget
-	notice := `echo "Rust $RUSTUP_TOOLCHAIN could not be installed: see the error above. Everything else here works, but Rust actions will not build until a later start installs it." >&2`
+	question := `[ "$(rustup component list --installed --toolchain "$RUSTUP_TOOLCHAIN" 2>/dev/null | grep -c -E '^(rustfmt-|clippy-|rust-std-` + build.RustWasmTarget + `$)')" = 3 ]`
+	install := `rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy --target ` + build.RustWasmTarget
+	notice := `echo "Rust $RUSTUP_TOOLCHAIN is not completely installed: see the error above. Everything else here works, but Rust actions may not build, format or lint until a later start completes it." >&2`
 	want := []string{question + " || " + install + " || " + notice}
 	if !slices.Equal(devbox.Shell.InitHook, want) {
 		t.Errorf("devbox.json init_hook =\n%q\nwant\n%q", devbox.Shell.InitHook, want)

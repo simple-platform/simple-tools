@@ -360,6 +360,24 @@ jobs:
       - name: Install workspace packages
         run: pnpm install --frozen-lockfile
 
+      # THE GO TESTS JUDGE GENERATED RUST WITH THE RELEASE A NEW WORKSPACE
+      # GETS. That release is named once, in the workspace template's
+      # devbox.json, and read from there: a runner's own Rust is whatever was
+      # newest when its image was built, and a linter that new would start
+      # failing templates nobody changed. The tests fail in CI, rather than
+      # skip, when this release is missing.
+      - name: Install the Rust release a new workspace gets
+        working-directory: tools/simple-cli
+        run: |
+          set -euo pipefail
+
+          version=$(jq -r '.env.RUSTUP_TOOLCHAIN // empty' internal/scaffold/templates/devbox.json)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "devbox.json .env.RUSTUP_TOOLCHAIN is '${version}', which is not a three-part Rust release." >&2
+            exit 1
+          fi
+          rustup toolchain install "$version" --profile minimal --component rustfmt,clippy --target wasm32-wasip1
+
       # THE PACKAGES ARE TESTED SIDE BY SIDE, ON A MACHINE THAT HAS NEVER RUN
       # SCL-PARSER. The tests run scl-parser, and scl-parser unpacks its own
       # runtime under the home directory the first time it runs. Two first
