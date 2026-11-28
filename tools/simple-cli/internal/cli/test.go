@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -238,6 +237,7 @@ func runTest(cmd *cobra.Command, args []string) error {
 	var passed, failed int
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	var missingVitestNotice sync.Once
 
 	// Limit concurrency to NumCPU
 	limit := runtime.NumCPU()
@@ -331,7 +331,17 @@ func runTest(cmd *cobra.Command, args []string) error {
 
 					fullArgs = []string{vitestBin, "run", reporterFlag}
 				} else {
-					fullArgs = []string{"npx", "vitest", "run", reporterFlag}
+					missingVitestNotice.Do(func() {
+						notice := fmt.Sprintf("Vitest is not installed at the repository root; add \"vitest\": \"%s\" to its devDependencies and run pnpm install.\n", build.VitestVersion)
+						mu.Lock()
+						defer mu.Unlock()
+						if jsonMode {
+							_, _ = fmt.Fprint(cmd.ErrOrStderr(), notice)
+						} else {
+							_, _ = fmt.Fprint(cmd.OutOrStdout(), notice)
+						}
+					})
+					fullArgs = []string{"npx", "--yes", "vitest@" + build.VitestVersion, "run", reporterFlag}
 				}
 
 				if coverage {
@@ -350,6 +360,9 @@ func runTest(cmd *cobra.Command, args []string) error {
 			// Vitest strips colors if not directly attached to a TTY.
 			// Force colors so the captured combined output retains syntax highlighting.
 			execCmd.Env = append(os.Environ(), "FORCE_COLOR=1")
+			if fullArgs[0] == "npx" {
+				execCmd.Env = append(execCmd.Env, "npm_config_ignore_scripts=true")
+			}
 
 			var stdoutBuf bytes.Buffer
 			var stderrBuf bytes.Buffer
@@ -450,9 +463,8 @@ func installPackages(fsys fsx.FileSystem, testDirs []string, runsUnderNpm func(s
 }
 
 // needsInstall answers whether a target's packages must be installed before
-// its tests run: because a package its package.json lists cannot be found
-// (packagesMissing), or because its packages were not installed from the
-// files the target holds now (build.InstalledFromCurrentFiles).
+// its tests run because a required package is missing or the install note no
+// longer matches the files the target holds now.
 //
 // A LOCKFILE MOVES UNDER PACKAGES ALREADY INSTALLED. A dependency update, from
 // Renovate or a pull, moves versions in the lockfile while the old versions
@@ -464,63 +476,5 @@ func installPackages(fsys fsx.FileSystem, testDirs []string, runsUnderNpm func(s
 // Whatever pins its packages, such as a workspace's lockfile above it, is not
 // among the files InstalledFromCurrentFiles reads.
 func needsInstall(fsys fsx.FileSystem, dir string) bool {
-	if packagesMissing(fsys, dir) {
-		return true
-	}
-
-	if !scaffold.PathExists(fsys, filepath.Join(dir, "package-lock.json")) {
-		return false
-	}
-
-	return !build.InstalledFromCurrentFiles(fsys, dir)
-}
-
-// packagesMissing answers whether any package a target's package.json lists
-// cannot be found from the target's own folder.
-//
-// IT ASKS ABOUT THE TARGET'S OWN PACKAGES, NOT ABOUT ANY node_modules. It used
-// to ask only whether a `node_modules` folder existed anywhere above the
-// target, and one nearly always does: the repository root, installed for its
-// own tools. So an action or a space outside any workspace, whose packages had
-// never been installed, had its install skipped and its tests failed on a
-// missing module.
-//
-// Each package is looked for in the `node_modules` folders from the target's
-// folder upward (ResolveUpward), so a workspace member whose packages are
-// hoisted to the workspace root still finds them there and is not installed
-// again. Optional packages may be absent by design, so they are not asked
-// about, including one that is also listed as a dependency: npm lets the
-// optional entry win. A manifest that cannot be read or parsed gets an
-// install, which reports the problem in npm's own words.
-func packagesMissing(fsys fsx.FileSystem, dir string) bool {
-	raw, err := fsys.ReadFile(filepath.Join(dir, "package.json"))
-	if err != nil {
-		return true
-	}
-
-	// npm reads a manifest saved with a byte-order mark; Go's decoder does not.
-	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
-
-	var manifest struct {
-		Dependencies         map[string]string `json:"dependencies"`
-		DevDependencies      map[string]string `json:"devDependencies"`
-		OptionalDependencies map[string]string `json:"optionalDependencies"`
-	}
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return true
-	}
-
-	for _, listed := range []map[string]string{manifest.Dependencies, manifest.DevDependencies} {
-		for name := range listed {
-			if _, optional := manifest.OptionalDependencies[name]; optional {
-				continue
-			}
-
-			if _, found := fsx.ResolveUpward(fsys, dir, "node_modules", name); !found {
-				return true
-			}
-		}
-	}
-
-	return false
+	return build.DependenciesNeedInstall(fsys, dir)
 }

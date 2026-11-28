@@ -136,6 +136,61 @@ func TestTest_DoesNotInstallWhenThePackagesAreHoisted(t *testing.T) {
 	}
 }
 
+func TestBehaviorFallbackUsesPinnedVitestWithScriptsOffAndOneNotice(t *testing.T) {
+	root := t.TempDir()
+	for _, appID := range []string{"com.acme.one", "com.acme.two"} {
+		dir := filepath.Join(root, "apps", appID, "scripts", "record-behaviors")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "example.test.js"), []byte("test('ok', () => {})\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(root)
+
+	original := testCommandFunc
+	var mu sync.Mutex
+	var invocations [][]string
+	var commands []*exec.Cmd
+	testCommandFunc = func(name string, args ...string) *exec.Cmd {
+		mu.Lock()
+		invocations = append(invocations, append([]string{name}, args...))
+		cmd := noopCommand()
+		commands = append(commands, cmd)
+		mu.Unlock()
+		return cmd
+	}
+	t.Cleanup(func() { testCommandFunc = original })
+
+	stdout, _, err := invokeTestCmd("test")
+	if err != nil {
+		t.Fatalf("simple test error = %v", err)
+	}
+	if strings.Count(stdout, "Vitest is not installed at the repository root") != 1 {
+		t.Errorf("missing-runner notice count is not one:\n%s", stdout)
+	}
+	if len(invocations) != 2 {
+		t.Fatalf("Vitest invocations = %v, want two behavior suites", invocations)
+	}
+	for index, invocation := range invocations {
+		if strings.Join(invocation, " ") != "npx --yes vitest@"+build.VitestVersion+" run --reporter=verbose" {
+			t.Errorf("invocation %d = %v", index, invocation)
+		}
+	}
+	for _, cmd := range commands {
+		found := false
+		for _, value := range cmd.Env {
+			if value == "npm_config_ignore_scripts=true" {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("npx behavior fallback did not disable install scripts")
+		}
+	}
+}
+
 // The other half, so the first is not passing by refusing to install at all.
 func TestTest_InstallsWhenThePackagesAreReachableFromNowhere(t *testing.T) {
 	root := t.TempDir()

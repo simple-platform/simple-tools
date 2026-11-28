@@ -71,6 +71,7 @@ Use these commands to build and deploy your work.
 | `simple build <app>/<action>`                                               | Build a single action                                          |
 | `simple build <app>`                                                        | Build all actions and spaces in an app in parallel             |
 | `simple build --all`                                                        | Build all actions and spaces in all apps in parallel           |
+| `simple deps update <app>`                                                  | Update action and space lock files                             |
 | `simple deploy apps/<app> --env <env>`                                      | Bundle and deploy an application (Schema, Logic, and Spaces)   |
 
 ## AI Coding Guidelines
@@ -241,7 +242,7 @@ Consult these documents for detailed syntax and behavior.
 A: **No.** You must use the SCL (`tables.scl`) for DDL and the GraphQL API via SDK for DML. Direct SQL access is restricted.
 
 **Q: How do I import an external library in an Action?**
-A: You can use `npm install`. However, **CAUTION:** Actions are compiled to WASM using Javy (QuickJS runtime).
+A: Add it to the action's `package.json`, then run `simple deps update <app>/<action>` to select versions and write its lock file. Builds and tests use `npm ci --ignore-scripts` when the lock file exists; without one, the first install uses `npm install --ignore-scripts`. **CAUTION:** Actions are compiled to WASM using Javy (QuickJS runtime).
 
 - **Must be QuickJS compatible:** Libraries relying on Node.js-specific APIs (like `fs`, `net`, `crypto`) or native bindings will **FAIL**.
 - **Pure JS only:** Use libraries that are platform-agnostic or pure JavaScript.

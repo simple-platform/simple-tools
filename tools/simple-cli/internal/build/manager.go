@@ -309,11 +309,14 @@ func (*BuildManager) buildGoAction(actionName string, describe func() error, rep
 }
 
 func (m *BuildManager) buildTypeScriptAction(actionDir, actionName string, needsSync, needsAsync bool, describe func() error, report func(string)) ActionBuildResult {
-	// Install dependencies
-	report("Installing dependencies...")
-	if err := EnsureDependenciesFunc(actionDir); err != nil {
-		report("Failed")
-		return ActionBuildResult{ActionName: actionName, Error: fmt.Errorf("npm install failed: %w", err)}
+	// A build needs its own lock file before an install can be skipped. The test
+	// command may rely on packages hoisted from a workspace root instead.
+	if BuildDependenciesNeedInstall(fsx.OSFileSystem{}, actionDir) {
+		report("Installing dependencies...")
+		if err := EnsureDependenciesFunc(actionDir); err != nil {
+			report("Failed")
+			return ActionBuildResult{ActionName: actionName, Error: fmt.Errorf("npm install failed: %w", err)}
+		}
 	}
 
 	// AN ACTION THAT CANNOT BE DESCRIBED FROM ITS OWN SOURCE DOES NOT BUILD.

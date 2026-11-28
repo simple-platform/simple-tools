@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -32,27 +33,112 @@ var npmInstallArgs = []string{"install", "--ignore-scripts"}
 // EnsureDependencies installs an action's or a space's packages with npm, then
 // notes what they were installed from (RecordInstall).
 func EnsureDependencies(dir string) error {
+	return installDependencies(dir, false)
+}
+
+// UpdateDependencies deliberately asks npm to select versions from package.json
+// and write the resulting lock file.
+func UpdateDependencies(dir string) error {
+	return installDependencies(dir, true)
+}
+
+func installDependencies(dir string, update bool) error {
 	fsys := fsx.OSFileSystem{}
 	before, readErr := fingerprint(fsys, dir, packageFiles)
+	beforeManifest, manifestReadErr := fingerprint(fsys, dir, []string{"package.json", ".npmrc"})
 
-	cmd := ExecCommandFunc("npm", npmInstallArgs...)
-	cmd.Dir = dir
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("npm install failed: %s: %w", string(output), err)
+	args, err := dependenciesInstallArgs(fsys, dir, update)
+	if err != nil {
+		return err
 	}
 
-	// The note vouches for the files npm read, so it is written only when they
-	// are still exactly as npm found them. One of them changes while npm runs
-	// when a branch is switched or a pull lands meanwhile, or when npm rewrites
-	// the lockfile to match package.json. Without a note, the next
-	// `simple test` installs again from whatever is there by then. A note that
-	// cannot be written has the same effect, so it does not fail this install.
+	cmd := ExecCommandFunc("npm", args...)
+	cmd.Dir = dir
+	if output, err := cmd.CombinedOutput(); err != nil {
+		if args[0] == "ci" {
+			return fmt.Errorf("npm ci failed in %s:\n%s\n%w\nIf package.json and package-lock.json disagree, choose versions with simple deps update %s and commit the lock file", dir, string(output), err, dir)
+		}
+		return fmt.Errorf("npm %s failed in %s:\n%s\n%w", args[0], dir, string(output), err)
+	}
+
+	// A deliberate update and a first install create or rewrite the lockfile.
+	// In those cases package.json and npm settings still prove which inputs npm
+	// read; for npm ci, all package files must remain unchanged.
 	after, err := fingerprint(fsys, dir, packageFiles)
-	if readErr == nil && err == nil && bytes.Equal(before, after) {
+	afterManifest, afterManifestErr := fingerprint(fsys, dir, []string{"package.json", ".npmrc"})
+	unchangedFiles := readErr == nil && err == nil && bytes.Equal(before, after)
+	unchangedInstallInputs := args[0] == "install" && manifestReadErr == nil && afterManifestErr == nil && bytes.Equal(beforeManifest, afterManifest)
+	if unchangedFiles || unchangedInstallInputs {
 		_ = RecordInstall(fsys, dir)
 	}
 
 	return nil
+}
+
+func dependenciesInstallArgs(fsys fsx.FileSystem, dir string, update bool) ([]string, error) {
+	if update {
+		return []string{"install", "--ignore-scripts"}, nil
+	}
+	if _, err := fsys.Stat(filepath.Join(dir, "package-lock.json")); err == nil {
+		return []string{"ci", "--ignore-scripts"}, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("failed to check for package-lock.json in %s: %w", dir, err)
+	}
+	return npmInstallArgs, nil
+}
+
+// DependenciesNeedInstall answers whether the install note no longer describes
+// the package files, or a required package is absent from Node's lookup path.
+func DependenciesNeedInstall(fsys fsx.FileSystem, dir string) bool {
+	if PackagesMissing(fsys, dir) {
+		return true
+	}
+	if _, err := fsys.Stat(filepath.Join(dir, "package-lock.json")); errors.Is(err, fs.ErrNotExist) {
+		return false
+	}
+	return !InstalledFromCurrentFiles(fsys, dir)
+}
+
+// BuildDependenciesNeedInstall requires a folder's own lock file to be noted
+// before a build can skip its install. Without one, npm must create the lock
+// file even when the packages happen to be reachable from a workspace root.
+func BuildDependenciesNeedInstall(fsys fsx.FileSystem, dir string) bool {
+	if PackagesMissing(fsys, dir) {
+		return true
+	}
+	if _, err := fsys.Stat(filepath.Join(dir, "package-lock.json")); errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	return !InstalledFromCurrentFiles(fsys, dir)
+}
+
+// PackagesMissing checks the non-optional packages named in package.json
+// using the same upward lookup Node uses when resolving imports.
+func PackagesMissing(fsys fsx.FileSystem, dir string) bool {
+	raw, err := fsys.ReadFile(filepath.Join(dir, "package.json"))
+	if err != nil {
+		return true
+	}
+	raw = bytes.TrimPrefix(raw, []byte("\xef\xbb\xbf"))
+	var manifest struct {
+		Dependencies         map[string]string `json:"dependencies"`
+		DevDependencies      map[string]string `json:"devDependencies"`
+		OptionalDependencies map[string]string `json:"optionalDependencies"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return true
+	}
+	for _, listed := range []map[string]string{manifest.Dependencies, manifest.DevDependencies} {
+		for name := range listed {
+			if _, optional := manifest.OptionalDependencies[name]; optional {
+				continue
+			}
+			if _, found := fsx.ResolveUpward(fsys, dir, "node_modules", name); !found {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // installNote is the file, inside an install's node_modules, that holds the

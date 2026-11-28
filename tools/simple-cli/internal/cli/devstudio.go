@@ -323,6 +323,9 @@ func ensureDevStudioInstanceRootAtPath(instanceID, targetPath string) (string, e
 		if err := os.MkdirAll(appsPath, fsx.DirPerm); err != nil {
 			return "", fmt.Errorf("failed to create instance apps directory: %w", err)
 		}
+		if err := ensureDevStudioWorkspaceMarker(resolvedPath); err != nil {
+			return "", err
+		}
 		return resolvedPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("failed to inspect instance workspace root: %w", err)
@@ -338,7 +341,42 @@ func ensureDevStudioInstanceRootAtPath(instanceID, targetPath string) (string, e
 	if err := exec.Command("git", "-C", resolvedPath, "rev-parse", "--is-inside-work-tree").Run(); err != nil {
 		_ = exec.Command("git", "init", resolvedPath).Run()
 	}
+	if err := ensureDevStudioWorkspaceMarker(resolvedPath); err != nil {
+		return "", err
+	}
 	return resolvedPath, nil
+}
+
+func ensureDevStudioWorkspaceMarker(instanceRoot string) error {
+	canonicalRoot, err := filepath.EvalSymlinks(instanceRoot)
+	if err != nil {
+		return fmt.Errorf("failed to resolve Dev Studio workspace root: %w", err)
+	}
+	simpleDir, err := devStudioPathInside(canonicalRoot, ".simple")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(simpleDir, fsx.DirPerm); err != nil {
+		return fmt.Errorf("failed to create Dev Studio marker directory: %w", err)
+	}
+	path, err := devStudioPathInside(canonicalRoot, filepath.FromSlash(devStudioWorkspaceMarker))
+	if err != nil {
+		return err
+	}
+	contents, err := os.ReadFile(path)
+	if err == nil {
+		if string(contents) != devStudioWorkspaceMarkerValue {
+			return fmt.Errorf("dev studio workspace marker has unexpected contents: %s", path)
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to read Dev Studio workspace marker: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(devStudioWorkspaceMarkerValue), fsx.FilePerm); err != nil {
+		return fmt.Errorf("failed to write Dev Studio workspace marker: %w", err)
+	}
+	return nil
 }
 
 var devStudioCmd = &cobra.Command{

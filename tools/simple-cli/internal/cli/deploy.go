@@ -2,11 +2,15 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 
 	"simple-cli/internal/agents"
@@ -50,7 +54,7 @@ Examples:
   simple deploy apps/com.example.crm --env prod`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return runDeploy(cmd.Context(), fsx.OSFileSystem{}, cmd.OutOrStdout(), args)
+		return runDeploy(cmd.Context(), fsx.OSFileSystem{}, cmd.OutOrStdout(), cmd.ErrOrStderr(), args)
 	},
 }
 
@@ -66,7 +70,7 @@ func init() {
 
 // runDeploy validates the command's flags and deploys args[0] with the real
 // dependencies, writing progress and results to out.
-func runDeploy(ctx context.Context, fsys fsx.FileSystem, out io.Writer, args []string) error {
+func runDeploy(ctx context.Context, fsys fsx.FileSystem, out, errOut io.Writer, args []string) error {
 	appPath := args[0]
 
 	// Validate --env flag is provided
@@ -83,6 +87,13 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, out io.Writer, args []s
 	if _, err := fsys.Stat(appPath); err != nil {
 		return fmt.Errorf("app path '%s' not found", appPath)
 	}
+	noticeOut := out
+	if jsonOutput {
+		noticeOut = errOut
+	}
+	if err := checkDependencyLocks(appPath, noticeOut); err != nil {
+		return err
+	}
 
 	return runDeployWith(ctx, out, defaultDeployDeps(), deployOptions{
 		appPath:   appPath,
@@ -94,6 +105,66 @@ func runDeploy(ctx context.Context, fsys fsx.FileSystem, out io.Writer, args []s
 		mode:      mode,
 		fsys:      fsys,
 	})
+}
+
+func checkDependencyLocks(appPath string, out io.Writer) error {
+	actions, err := findBuildActions(appPath)
+	if err != nil {
+		return fmt.Errorf("failed to find actions in %s: %w", appPath, err)
+	}
+	spaces, err := findBuildSpaces(appPath)
+	if err != nil {
+		return fmt.Errorf("failed to find spaces in %s: %w", appPath, err)
+	}
+	folders, err := npmFolders(fsx.OSFileSystem{}, actions, spaces)
+	if err != nil {
+		return err
+	}
+	if len(folders) == 0 {
+		return nil
+	}
+
+	var missing []string
+	for _, folder := range folders {
+		if _, err := os.Stat(filepath.Join(folder, "package-lock.json")); errors.Is(err, os.ErrNotExist) {
+			missing = append(missing, fmt.Sprintf("%s is missing package-lock.json; run simple deps update %s and commit the lock file", folder, folder))
+		} else if err != nil {
+			return fmt.Errorf("failed to check %s/package-lock.json: %w", folder, err)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("deploy requires dependency lock files:\n - %s", strings.Join(missing, "\n - "))
+	}
+
+	var problems []string
+	uncheckedDevStudio := false
+	for _, folder := range folders {
+		check, err := checkDependencyLock(folder)
+		if err != nil {
+			return err
+		}
+		switch check.state {
+		case dependencyLockUntracked:
+			problems = append(problems, fmt.Sprintf("%s/package-lock.json is not tracked; run git add %s/package-lock.json and commit it", folder, folder))
+		case dependencyLockUncommitted:
+			problems = append(problems, fmt.Sprintf("%s/package-lock.json has uncommitted changes; commit it before deploying", folder))
+		case dependencyLockGitUnavailable, dependencyLockNotRepository:
+			if isDevStudioWorkspace(folder) {
+				uncheckedDevStudio = true
+				continue
+			}
+			problems = append(problems, fmt.Sprintf("%s cannot be checked because git is unavailable or this folder is not a git repository; run git init, then git add %s/package-lock.json and commit it before deploying", folder, folder))
+		}
+	}
+	if uncheckedDevStudio {
+		if _, err := fmt.Fprintln(out, "Dependency lock files could not be checked in this Dev Studio workspace because Git is unavailable or the workspace is not a git repository."); err != nil {
+			return fmt.Errorf("failed to report unchecked dependency locks: %w", err)
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("deploy requires committed dependency lock files:\n - %s", strings.Join(problems, "\n - "))
+	}
+	return nil
 }
 
 // deployOptions are the deploy command's arguments and flags.

@@ -13,6 +13,7 @@ import (
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
 	"simple-cli/internal/ui"
+	"slices"
 	"strings"
 	"sync"
 
@@ -30,6 +31,7 @@ var (
 	findBuildActions          = build.FindActions
 	findBuildSpaces           = build.FindSpaces
 	runAllBuildTargets        = runBuildAll
+	ensureMetadataPackages    = build.EnsureMetadataPackages
 )
 
 type buildAgentTarget struct {
@@ -85,6 +87,9 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 		JSONOutput:  jsonOutput,
 	}
 	manager := build.NewBuildManager(opts)
+	if err := ensureBuildMetadataPackages(fsys, args); err != nil {
+		return fmt.Errorf("failed to install required npm packages: %w", err)
+	}
 
 	// Phase 1: Ensure Tools
 	// We need specific binaries (scl-parser, javy, wasm-opt, esbuild) to be present.
@@ -109,6 +114,42 @@ func runBuild(fsys fsx.FileSystem, args []string) error {
 
 	target := args[0]
 	return buildTarget(manager, fsys, target)
+}
+
+func ensureBuildMetadataPackages(fsys fsx.FileSystem, args []string) error {
+	var actionDirs []string
+	if buildAll {
+		apps, err := fsys.ReadDir("apps")
+		if err != nil {
+			return nil
+		}
+		for _, app := range apps {
+			if !app.IsDir() {
+				continue
+			}
+			actions, err := findBuildActions(filepath.Join("apps", app.Name()))
+			if err == nil {
+				actionDirs = append(actionDirs, actions...)
+			}
+		}
+	} else {
+		resolved, err := resolveBuildTarget(fsys, args[0])
+		if err != nil {
+			return nil
+		}
+		if resolved.action {
+			actionDirs = []string{resolved.path}
+		} else {
+			actionDirs = resolved.actions
+		}
+	}
+	for _, dir := range actionDirs {
+		language, err := build.DetectActionLanguage(dir)
+		if err == nil && language == build.LanguageTypeScript {
+			return ensureMetadataPackages()
+		}
+	}
+	return nil
 }
 
 // runWithProgress runs a function while displaying a progress UI (Bubble Tea).
@@ -222,6 +263,40 @@ func buildAllApps(manager *build.BuildManager, fsys fsx.FileSystem) error {
 
 // buildTarget resolves a single target (app, action, or shorthand) and builds it.
 func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string) error {
+	resolved, err := resolveBuildTarget(fsys, target)
+	if err != nil {
+		return err
+	}
+	if resolved.action {
+		return buildSingleActionTarget(manager, resolved.path)
+	}
+	if resolved.space {
+		return runBuildAll(manager, nil, []string{resolved.path})
+	}
+	if len(resolved.actions) == 0 && len(resolved.spaces) == 0 {
+		if resolved.appID != "" {
+			return buildEmptyAppTarget(manager, fsys, target, resolved.appID)
+		}
+		return fmt.Errorf("no actions or spaces found in %s", target)
+	}
+	if resolved.appID != "" {
+		return runBuildAll(manager, resolved.actions, resolved.spaces, buildAgentTarget{appID: resolved.appID, fsys: fsys})
+	}
+	return runBuildAll(manager, resolved.actions, resolved.spaces)
+}
+
+type resolvedBuildTarget struct {
+	path    string
+	actions []string
+	spaces  []string
+	appID   string
+	action  bool
+	space   bool
+}
+
+// resolveBuildTarget is shared by build and deps update so both accept the
+// same app, action, space, path, and app/action shorthand forms.
+func resolveBuildTarget(fsys fsx.FileSystem, target string) (resolvedBuildTarget, error) {
 	targetPath := target
 	if !scaffold.PathExists(fsys, targetPath) {
 		// Try resolving as app/action
@@ -242,42 +317,33 @@ func buildTarget(manager *build.BuildManager, fsys fsx.FileSystem, target string
 	}
 
 	if !scaffold.PathExists(fsys, targetPath) {
-		return fmt.Errorf("build target '%s' not found", target)
+		return resolvedBuildTarget{}, fmt.Errorf("build target '%s' not found", target)
 	}
 
 	// Convert to absolute path to ensure tools (like esbuild) have correct working directory context
 	absPath, err := filepath.Abs(targetPath)
 	if err != nil {
-		return fmt.Errorf("failed to get absolute path for %s: %w", targetPath, err)
+		return resolvedBuildTarget{}, fmt.Errorf("failed to get absolute path for %s: %w", targetPath, err)
 	}
 	targetPath = absPath
 
-	// Check if it's an action dir (has action.scl)
 	if build.IsActionDir(targetPath) {
-		return buildSingleActionTarget(manager, targetPath)
+		return resolvedBuildTarget{path: targetPath, action: true}, nil
 	}
-
-	// Check if it's a space dir (has package.json but not action.scl)
 	if build.IsSpaceDir(targetPath) {
-		return runBuildAll(manager, nil, []string{targetPath})
+		return resolvedBuildTarget{path: targetPath, space: true}, nil
 	}
 
-	// Check if it's an app dir (has actions or spaces inside)
-	actionDirs, _ := build.FindActions(targetPath)
-	spaceDirs, _ := build.FindSpaces(targetPath)
-
-	if len(actionDirs) == 0 && len(spaceDirs) == 0 {
-		appID, isApp := appIDForPath(targetPath)
-		if isApp {
-			return buildEmptyAppTarget(manager, fsys, target, appID)
-		}
-		return fmt.Errorf("no actions or spaces found in %s", target)
+	actionDirs, err := findBuildActions(targetPath)
+	if err != nil {
+		return resolvedBuildTarget{}, fmt.Errorf("failed to find actions in %s: %w", targetPath, err)
 	}
-
-	if appID, isApp := appIDForPath(targetPath); isApp {
-		return runBuildAll(manager, actionDirs, spaceDirs, buildAgentTarget{appID: appID, fsys: fsys})
+	spaceDirs, err := findBuildSpaces(targetPath)
+	if err != nil {
+		return resolvedBuildTarget{}, fmt.Errorf("failed to find spaces in %s: %w", targetPath, err)
 	}
-	return runBuildAll(manager, actionDirs, spaceDirs)
+	appID, _ := appIDForPath(targetPath)
+	return resolvedBuildTarget{path: targetPath, actions: actionDirs, spaces: spaceDirs, appID: appID}, nil
 }
 
 func buildSingleActionTarget(manager *build.BuildManager, actionDir string) error {
@@ -545,6 +611,7 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string, ag
 	if !jsonOutput {
 		printBuildNotes(os.Stderr, results)
 	}
+	printBuildLockNotice(actionDirs, spaceDirs, os.Stderr)
 
 	if jsonOutput {
 		status := "complete"
@@ -635,4 +702,38 @@ func runBuildAll(manager *build.BuildManager, actionDirs, spaceDirs []string, ag
 	}
 
 	return nil
+}
+
+func printBuildLockNotice(actionDirs, spaceDirs []string, out io.Writer) {
+	folders, err := npmFolders(fsx.OSFileSystem{}, actionDirs, spaceDirs)
+	if err != nil {
+		return
+	}
+	var paths []string
+	for _, dir := range folders {
+		check, err := checkDependencyLock(dir)
+		if err != nil || (check.state != dependencyLockUntracked && check.state != dependencyLockUncommitted) {
+			continue
+		}
+		root := check.root
+		if resolvedRoot, err := filepath.EvalSymlinks(root); err == nil {
+			root = resolvedRoot
+		}
+		lockPath := filepath.Join(dir, "package-lock.json")
+		if absLock, err := filepath.Abs(lockPath); err == nil {
+			lockPath = absLock
+		}
+		if resolvedLock, err := filepath.EvalSymlinks(lockPath); err == nil {
+			lockPath = resolvedLock
+		}
+		rel, err := filepath.Rel(root, lockPath)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			continue
+		}
+		paths = append(paths, filepath.ToSlash(rel))
+	}
+	if len(paths) > 0 {
+		slices.Sort(paths)
+		_, _ = fmt.Fprintf(out, "Dependency lock files not committed (commit before deploy): %s\n", strings.Join(paths, ", "))
+	}
 }

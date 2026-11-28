@@ -314,11 +314,12 @@ appearing beneath every graph. Empty/error states preserve scope and recovery.
 ### Charts with Recharts
 
 The CLI Space scaffold includes the shared theme but no chart package, shadcn
-chart helper, or `@` import alias. Add Recharts in the Space directory before
-using this example:
+chart helper, or `@` import alias. Add Recharts at an exact version to the
+Space's `package.json` `dependencies`, for example `"recharts": "2.15.4"`,
+then run:
 
 ```sh
-npm install recharts
+simple deps update apps/<app>/spaces/<space>
 ```
 
 If the app already has a configured shadcn chart helper, it can wrap Recharts;
