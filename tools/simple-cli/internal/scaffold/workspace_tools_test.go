@@ -3,8 +3,10 @@ package scaffold
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -22,9 +24,10 @@ type workspaceDevbox struct {
 }
 
 type workspaceManifest struct {
-	Private        bool              `json:"private"`
-	PackageManager string            `json:"packageManager"`
-	Engines        map[string]string `json:"engines"`
+	Private         bool              `json:"private"`
+	PackageManager  string            `json:"packageManager"`
+	Engines         map[string]string `json:"engines"`
+	DevDependencies map[string]string `json:"devDependencies"`
 }
 
 // A new workspace runs its tools through devbox and pins pnpm for corepack.
@@ -104,6 +107,15 @@ func TestWorkspaceToolVersionsArePinned(t *testing.T) {
 	if manifest.PackageManager != "pnpm@10.34.9" || manifest.Engines["node"] != ">=25" {
 		t.Errorf("package.json packageManager = %q, engines.node = %q, want pnpm@10.34.9 and >=25", manifest.PackageManager, manifest.Engines["node"])
 	}
+	for _, dependency := range []struct{ name, version string }{
+		{name: "@commitlint/cli", version: "20.5.0"},
+		{name: "@commitlint/config-conventional", version: "20.5.0"},
+		{name: "lint-staged", version: "16.2.7"},
+	} {
+		if got := manifest.DevDependencies[dependency.name]; got != dependency.version {
+			t.Errorf("package.json devDependency %s = %q, want %q", dependency.name, got, dependency.version)
+		}
+	}
 }
 
 // The start-up line has three parts, `question || install || notice`, and each
@@ -146,10 +158,449 @@ func TestWorkspaceRustInstallAsksFirstAndNeverBlocks(t *testing.T) {
 	question := `[ "$(rustup component list --installed --toolchain "$RUSTUP_TOOLCHAIN" 2>/dev/null | grep -c -E '^(rustfmt-|clippy-|rust-std-` + build.RustWasmTarget + `$)')" = 3 ]`
 	install := `rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt,clippy --target ` + build.RustWasmTarget
 	notice := `echo "Rust $RUSTUP_TOOLCHAIN is not completely installed: see the error above. Everything else here works, but Rust actions may not build, format or lint until a later start completes it." >&2`
-	want := []string{question + " || " + install + " || " + notice}
+	hooksPath := `root="$(git rev-parse --show-toplevel 2>/dev/null)" && [ "$(cd "$root" 2>/dev/null && pwd -P)" = "$(pwd -P)" ] && git config core.hooksPath .githooks >/dev/null 2>&1 || true`
+	want := []string{hooksPath, question + " || " + install + " || " + notice}
 	if !slices.Equal(devbox.Shell.InitHook, want) {
 		t.Errorf("devbox.json init_hook =\n%q\nwant\n%q", devbox.Shell.InitHook, want)
 	}
+}
+
+func TestGeneratedWorkspaceContainsCommitChecks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "acme")
+	fsys := &permissionRecordingFileSystem{FileSystem: fsx.OSFileSystem{}, written: make(map[string]os.FileMode)}
+	if err := CreateMonorepoStructure(fsys, TemplatesFS, root, MonorepoConfig{ProjectName: "acme", TenantName: "acme"}); err != nil {
+		t.Fatalf("CreateMonorepoStructure() error = %v", err)
+	}
+
+	files := []struct {
+		name       string
+		executable bool
+	}{
+		{name: ".gitattributes"},
+		{name: ".githooks/pre-commit", executable: true},
+		{name: ".githooks/commit-msg", executable: true},
+		{name: ".githooks/pre-push", executable: true},
+		{name: ".githooks/post-checkout", executable: true},
+		{name: ".githooks/post-merge", executable: true},
+		{name: ".githooks/post-rewrite", executable: true},
+		{name: "scripts/supply-chain-guard.sh", executable: true},
+		{name: "commitlint.config.js"},
+	}
+	for _, file := range files {
+		t.Run(file.name, func(t *testing.T) {
+			path := filepath.Join(root, filepath.FromSlash(file.name))
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatalf("generated file is missing: %v", err)
+			}
+			wantPerm := fsx.FilePerm
+			if file.executable {
+				wantPerm = fsx.ExecPerm
+			}
+			if got := fsys.written[path]; got != wantPerm {
+				t.Errorf("write permission = %04o, want %04o", got, wantPerm)
+			}
+			if file.executable && runtime.GOOS != "windows" && info.Mode().Perm()&0o111 != 0o111 {
+				t.Errorf("generated file mode = %04o, want executable bits", info.Mode().Perm())
+			}
+		})
+	}
+}
+
+func TestGeneratedSupplyChainGuardTree(t *testing.T) {
+	requireSupplyChainGuardTools(t)
+
+	tests := []struct {
+		name        string
+		mode        string
+		prepare     func(t *testing.T, root string)
+		wantSuccess bool
+		wantText    string
+	}{
+		{name: "fresh workspace passes in tree mode", mode: "--tree", wantSuccess: true},
+		{name: "fresh workspace passes in staged mode", mode: "--staged", wantSuccess: true},
+		{
+			name: "hidden code is refused",
+			mode: "--tree",
+			prepare: func(t *testing.T, root string) {
+				content := "const visible = true;\n" + strings.Repeat(" ", 2000) + "require('x')\n"
+				writeGuardFixture(t, root, "apps/com.acme.demo/hidden.ts", content)
+			},
+			wantText: "hidden code found",
+		},
+		{
+			name: "install script is refused",
+			mode: "--tree",
+			prepare: func(t *testing.T, root string) {
+				writeGuardFixture(t, root, "apps/com.acme.demo/package.json", `{"name":"com.acme.demo","scripts":{"postinstall":"node install.js"}}`)
+			},
+			wantText: "postinstall",
+		},
+		{
+			name:        "root node_modules file is excluded",
+			mode:        "--tree",
+			wantSuccess: true,
+			prepare: func(t *testing.T, root string) {
+				content := strings.Repeat(" ", 2000) + "require('x')\n"
+				writeGuardFixture(t, root, "node_modules/hidden.ts", content)
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "acme")
+			if err := CreateMonorepoStructure(fsx.OSFileSystem{}, TemplatesFS, root, MonorepoConfig{ProjectName: "acme", TenantName: "acme"}); err != nil {
+				t.Fatalf("CreateMonorepoStructure() error = %v", err)
+			}
+			runGuardGit(t, root, "init")
+			if tt.prepare != nil {
+				tt.prepare(t, root)
+			}
+			runGuardGit(t, root, "add", "--all")
+
+			output, err := runSupplyChainGuard(t, root, tt.mode)
+			if (err == nil) != tt.wantSuccess {
+				t.Fatalf("guard error = %v, wantSuccess %v\n%s", err, tt.wantSuccess, output)
+			}
+			if tt.wantText != "" && !strings.Contains(string(output), tt.wantText) {
+				t.Errorf("guard output = %q, want it to contain %q", output, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestGeneratedSupplyChainGuardStaged(t *testing.T) {
+	requireSupplyChainGuardTools(t)
+
+	tests := []struct {
+		name            string
+		prepare         func(t *testing.T, root string) string
+		afterStage      func(t *testing.T, root, name string)
+		cleanAfterStage bool
+		wantSuccess     bool
+		wantText        string
+	}{
+		{
+			name: "reads staged payload after working copy is cleaned",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/hidden.ts"
+				writeGuardFixture(t, root, name, "const visible = true;\n"+strings.Repeat(" ", 2000)+"require('x')\n")
+				return name
+			},
+			cleanAfterStage: true,
+			wantText:        "hidden code found",
+		},
+		{
+			name: "unrelated staged file larger than one MiB does not fail",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/large.bin"
+				writeGuardFixture(t, root, name, strings.Repeat("x", (1<<20)+1))
+				return name
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "staged submodule entry is ignored",
+			prepare: func(t *testing.T, root string) string {
+				return "apps/com.acme.demo/vendor.ts"
+			},
+			afterStage: func(t *testing.T, root, _ string) {
+				runGuardGit(t, root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "baseline")
+				command := exec.Command("git", "-C", root, "rev-parse", "HEAD")
+				oid, err := command.Output()
+				if err != nil {
+					t.Fatalf("read baseline commit for submodule entry: %v", err)
+				}
+				runGuardGit(t, root, "update-index", "--add", "--cacheinfo", "160000,"+strings.TrimSpace(string(oid))+",apps/com.acme.demo/vendor.ts")
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "staged rename reads the renamed file",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/old.ts"
+				writeGuardFixture(t, root, name, strings.Repeat(" ", 2000)+"require('x')\n")
+				return name
+			},
+			afterStage: func(t *testing.T, root, name string) {
+				runGuardGit(t, root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "baseline")
+				runGuardGit(t, root, "mv", name, "apps/com.acme.demo/renamed.ts")
+			},
+			wantText: "hidden code found",
+		},
+		{
+			name: "staged delete does not read removed content",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/deleted.ts"
+				writeGuardFixture(t, root, name, strings.Repeat(" ", 2000)+"require('x')\n")
+				return name
+			},
+			afterStage: func(t *testing.T, root, name string) {
+				runGuardGit(t, root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-m", "baseline")
+				runGuardGit(t, root, "rm", name)
+			},
+			wantSuccess: true,
+		},
+		{
+			name: "preinstall script is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/package.json"
+				writeGuardFixture(t, root, name, `{"scripts":{"preinstall":"node setup.js"}}`)
+				return name
+			},
+			wantText: "preinstall",
+		},
+		{
+			name: "install script is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/package.json"
+				writeGuardFixture(t, root, name, `{"scripts":{"install":"node setup.js"}}`)
+				return name
+			},
+			wantText: "install runs",
+		},
+		{
+			name: "postinstall script is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/package.json"
+				writeGuardFixture(t, root, name, `{"scripts":{"postinstall":"node setup.js"}}`)
+				return name
+			},
+			wantText: "postinstall",
+		},
+		{
+			name: "prepare script is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/package.json"
+				writeGuardFixture(t, root, name, `{"scripts":{"prepare":"node setup.js"}}`)
+				return name
+			},
+			wantText: "prepare",
+		},
+		{
+			name: ".npmrc script setting is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := ".npmrc"
+				writeGuardFixture(t, root, name, "pnpmfile=./setup.cjs\n")
+				return name
+			},
+			wantText: ".npmrc",
+		},
+		{
+			name: ".pnpmfile.cjs is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := ".pnpmfile.cjs"
+				writeGuardFixture(t, root, name, "module.exports = {};\n")
+				return name
+			},
+			wantText: ".pnpmfile.cjs",
+		},
+		{
+			name: "binding.gyp is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/binding.gyp"
+				writeGuardFixture(t, root, name, "{}\n")
+				return name
+			},
+			wantText: "binding.gyp",
+		},
+		{
+			name: "package.yaml is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/package.yaml"
+				writeGuardFixture(t, root, name, "scripts: {}\n")
+				return name
+			},
+			wantText: "package.yaml",
+		},
+		{
+			name: "package.json5 is refused",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/package.json5"
+				writeGuardFixture(t, root, name, "{ scripts: {} }\n")
+				return name
+			},
+			wantText: "package.json5",
+		},
+		{
+			name: "space in file name is preserved",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/has space.ts"
+				writeGuardFixture(t, root, name, strings.Repeat(" ", 2000)+"require('x')\n")
+				return name
+			},
+			wantText: "apps/com.acme.demo/has space.ts",
+		},
+		{
+			name: "non-ASCII letter in file name is preserved",
+			prepare: func(t *testing.T, root string) string {
+				name := "apps/com.acme.demo/café.ts"
+				writeGuardFixture(t, root, name, strings.Repeat(" ", 2000)+"require('x')\n")
+				return name
+			},
+			wantText: "apps/com.acme.demo/café.ts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "acme")
+			if err := CreateMonorepoStructure(fsx.OSFileSystem{}, TemplatesFS, root, MonorepoConfig{ProjectName: "acme", TenantName: "acme"}); err != nil {
+				t.Fatalf("CreateMonorepoStructure() error = %v", err)
+			}
+			runGuardGit(t, root, "init")
+			name := tt.prepare(t, root)
+			runGuardGit(t, root, "add", "--all")
+			if tt.afterStage != nil {
+				tt.afterStage(t, root, name)
+			}
+			if tt.cleanAfterStage {
+				writeGuardFixture(t, root, name, "const visible = true;\n")
+			}
+
+			output, err := runSupplyChainGuard(t, root, "--staged")
+			if (err == nil) != tt.wantSuccess {
+				t.Fatalf("guard error = %v, wantSuccess %v\n%s", err, tt.wantSuccess, output)
+			}
+			if !tt.wantSuccess && err == nil {
+				t.Fatalf("guard passed, want refusal containing %q\n%s", tt.wantText, output)
+			}
+			if tt.wantText != "" && !strings.Contains(string(output), tt.wantText) {
+				t.Errorf("guard output = %q, want it to contain %q", output, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestGeneratedPreCommitRefusesMissingNpx(t *testing.T) {
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("bash is missing; cannot run the generated pre-commit hook: %v", err)
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git is missing; cannot provide the generated hook's repository root: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		missing  string
+		wantText string
+	}{
+		{name: "npx", missing: "npx", wantText: "npx is unavailable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "acme")
+			if err := CreateMonorepoStructure(fsx.OSFileSystem{}, TemplatesFS, root, MonorepoConfig{ProjectName: "acme", TenantName: "acme"}); err != nil {
+				t.Fatalf("CreateMonorepoStructure() error = %v", err)
+			}
+			runGuardGit(t, root, "init")
+			envFile := filepath.Join(t.TempDir(), "bash_env")
+			if err := os.WriteFile(envFile, []byte("git() { \"$HOOK_TEST_GIT\" \"$@\"; }\nnode() { :; }\n"), fsx.FilePerm); err != nil {
+				t.Fatalf("write Bash environment: %v", err)
+			}
+			command := exec.Command(bashPath, filepath.Join(root, ".githooks", "pre-commit"))
+			command.Dir = root
+			command.Env = []string{"PATH=", "BASH_ENV=" + envFile, "HOOK_TEST_GIT=" + gitPath}
+			output, err := command.CombinedOutput()
+			if err == nil {
+				t.Fatalf("pre-commit passed, want refusal because %s is missing\n%s", tt.missing, output)
+			}
+			if !strings.Contains(string(output), tt.wantText) || !strings.Contains(string(output), "devbox shell") {
+				t.Errorf("pre-commit output = %q, want %q and the dev-environment message", output, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestCopyWorkspaceHooksNormalizesLineEndings(t *testing.T) {
+	tests := []string{
+		".githooks/pre-commit",
+		".githooks/commit-msg",
+		".githooks/pre-push",
+		".githooks/post-checkout",
+		".githooks/post-merge",
+		".githooks/post-rewrite",
+		"scripts/supply-chain-guard.sh",
+	}
+	root := t.TempDir()
+	if err := copyWorkspaceHooks(fsx.OSFileSystem{}, crlfTemplateFS{TemplateFS: TemplatesFS}, root); err != nil {
+		t.Fatalf("copyWorkspaceHooks() error = %v", err)
+	}
+	for _, name := range tests {
+		t.Run(name, func(t *testing.T) {
+			content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(name)))
+			if err != nil {
+				t.Fatalf("read generated file: %v", err)
+			}
+			if strings.ContainsRune(string(content), '\r') {
+				t.Errorf("generated file contains CR line endings")
+			}
+			if !strings.ContainsRune(string(content), '\n') {
+				t.Errorf("generated file contains no LF line endings")
+			}
+		})
+	}
+}
+
+type crlfTemplateFS struct{ fsx.TemplateFS }
+
+func (f crlfTemplateFS) ReadFile(name string) ([]byte, error) {
+	content, err := f.TemplateFS.ReadFile(name)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasPrefix(name, "templates/githooks/") || name == "templates/scripts/supply-chain-guard.sh" {
+		content = []byte(strings.ReplaceAll(string(content), "\n", "\r\n"))
+	}
+	return content, nil
+}
+
+func requireSupplyChainGuardTools(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skipf("bash is missing; cannot run the generated supply-chain guard: %v", err)
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is missing; cannot provide the generated guard's file list: %v", err)
+	}
+}
+
+func runSupplyChainGuard(t *testing.T, root, mode string) ([]byte, error) {
+	t.Helper()
+	command := exec.Command("bash", filepath.Join(root, "scripts", "supply-chain-guard.sh"), mode)
+	command.Dir = root
+	return command.CombinedOutput()
+}
+
+func writeGuardFixture(t *testing.T, root, name, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(path), fsx.DirPerm); err != nil {
+		t.Fatalf("create fixture directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), fsx.FilePerm); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+}
+
+func runGuardGit(t *testing.T, root string, args ...string) {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", root}, args...)...)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, output)
+	}
+}
+
+type permissionRecordingFileSystem struct {
+	fsx.FileSystem
+	written map[string]os.FileMode
+}
+
+func (f *permissionRecordingFileSystem) WriteFile(name string, data []byte, perm os.FileMode) error {
+	f.written[name] = perm
+	return f.FileSystem.WriteFile(name, data, perm)
 }
 
 func readWorkspaceJSON(t *testing.T, path string, value any) {

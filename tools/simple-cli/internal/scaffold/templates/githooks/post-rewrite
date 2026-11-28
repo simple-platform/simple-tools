@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "CHECK REFUSED: cannot find the repository root. Run git commit from inside the dev environment: devbox shell."
+  exit 1
+}
+if ! command -v node >/dev/null 2>&1; then
+  echo "CHECK REFUSED: node is unavailable. Run git commit from inside the dev environment: devbox shell."
+  exit 1
+fi
+if [ ! -f "$ROOT/scripts/supply-chain-guard.sh" ]; then
+  echo "CHECK REFUSED: scripts/supply-chain-guard.sh is missing. Restore it from a trusted commit."
+  exit 1
+fi
+bash "$ROOT/scripts/supply-chain-guard.sh" --tree

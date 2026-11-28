@@ -55,6 +55,7 @@ type MonorepoConfig struct {
 //   - pnpm-workspace.yaml at root, with pnpm's install protections for the
 //     root's own packages and no members
 //   - eslint.config.js at root, so generated files pass the linter as written
+//   - commitlint.config.js and executable Git hooks for commit and push checks
 //   - simple.scl (templated with tenant name)
 //
 // Returns an error if the target path already exists.
@@ -110,6 +111,9 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 	if err := copyTemplate(fsys, tplFS, "templates/gitignore", filepath.Join(rootPath, ".gitignore")); err != nil {
 		return err
 	}
+	if err := copyTemplate(fsys, tplFS, "templates/gitattributes", filepath.Join(rootPath, ".gitattributes")); err != nil {
+		return err
+	}
 
 	// The workspace's tools, pinned as Simple's own app repositories pin
 	// them: node through devbox, and pnpm through corepack. Without the pnpm
@@ -137,6 +141,12 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 	if err := copyTemplate(fsys, tplFS, "templates/eslint.config.js", filepath.Join(rootPath, "eslint.config.js")); err != nil {
 		return err
 	}
+	if err := copyTemplate(fsys, tplFS, "templates/commitlint.config.js", filepath.Join(rootPath, "commitlint.config.js")); err != nil {
+		return err
+	}
+	if err := copyWorkspaceHooks(fsys, tplFS, rootPath); err != nil {
+		return err
+	}
 
 	// The exposure vocabulary, declared to every TypeScript tool that reads doc
 	// comments. Written at the space root rather than beside each action because
@@ -158,6 +168,36 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		return fmt.Errorf("failed to write simple.scl: %w", err)
 	}
 
+	return nil
+}
+
+// copyWorkspaceHooks writes hooks and the guard with executable permissions,
+// so Git can run them directly in a newly created workspace.
+func copyWorkspaceHooks(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath string) error {
+	for _, dir := range []string{".githooks", "scripts"} {
+		if err := fsys.MkdirAll(filepath.Join(rootPath, dir), fsx.DirPerm); err != nil {
+			return fmt.Errorf("failed to create %s directory: %w", dir, err)
+		}
+	}
+	files := []struct{ src, dst string }{
+		{src: "templates/githooks/pre-commit", dst: filepath.Join(rootPath, ".githooks", "pre-commit")},
+		{src: "templates/githooks/commit-msg", dst: filepath.Join(rootPath, ".githooks", "commit-msg")},
+		{src: "templates/githooks/pre-push", dst: filepath.Join(rootPath, ".githooks", "pre-push")},
+		{src: "templates/githooks/post-checkout", dst: filepath.Join(rootPath, ".githooks", "post-checkout")},
+		{src: "templates/githooks/post-merge", dst: filepath.Join(rootPath, ".githooks", "post-merge")},
+		{src: "templates/githooks/post-rewrite", dst: filepath.Join(rootPath, ".githooks", "post-rewrite")},
+		{src: "templates/scripts/supply-chain-guard.sh", dst: filepath.Join(rootPath, "scripts", "supply-chain-guard.sh")},
+	}
+	for _, file := range files {
+		content, err := tplFS.ReadFile(file.src)
+		if err != nil {
+			return fmt.Errorf("failed to read %s: %w", file.src, err)
+		}
+		content = bytes.ReplaceAll(content, []byte("\r\n"), []byte("\n"))
+		if err := fsys.WriteFile(file.dst, content, fsx.ExecPerm); err != nil {
+			return fmt.Errorf("failed to write executable %s: %w", file.dst, err)
+		}
+	}
 	return nil
 }
 

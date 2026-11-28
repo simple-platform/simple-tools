@@ -12,6 +12,7 @@
   },
   "shell": {
     "init_hook": [
+      "root=\"$(git rev-parse --show-toplevel 2>/dev/null)\" && [ \"$(cd \"$root\" 2>/dev/null && pwd -P)\" = \"$(pwd -P)\" ] && git config core.hooksPath .githooks >/dev/null 2>&1 || true",
       "[ \"$(rustup component list --installed --toolchain \"$RUSTUP_TOOLCHAIN\" 2>/dev/null | grep -c -E '^(rustfmt-|clippy-|rust-std-wasm32-wasip1$)')\" = 3 ] || rustup toolchain install \"$RUSTUP_TOOLCHAIN\" --profile minimal --component rustfmt,clippy --target wasm32-wasip1 || echo \"Rust $RUSTUP_TOOLCHAIN is not completely installed: see the error above. Everything else here works, but Rust actions may not build, format or lint until a later start completes it.\" >&2"
     ]
   }

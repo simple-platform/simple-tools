@@ -181,8 +181,12 @@ func TestGeneratedWorkspacePassesLint(t *testing.T) {
 			// nothing looked at.
 			requiredEndings := []string{".ts", ".tsx", ".js", ".json", ".md", ".toml", ".css", ".html", ".yaml"}
 			seenEndings := make(map[string]bool, len(requiredEndings))
+			readCommitlintConfig := false
 			for _, file := range lintFiles {
 				seenEndings[filepath.Ext(file.FilePath)] = true
+				if filepath.Base(file.FilePath) == "commitlint.config.js" {
+					readCommitlintConfig = true
+				}
 				for _, message := range file.Messages {
 					t.Errorf("%s:%d:%d %s (%s)", file.FilePath, message.Line, message.Column, message.Message, message.RuleID)
 				}
@@ -191,6 +195,9 @@ func TestGeneratedWorkspacePassesLint(t *testing.T) {
 				if !seenEndings[ending] {
 					t.Errorf("the linter read no %s file", ending)
 				}
+			}
+			if !readCommitlintConfig {
+				t.Error("the linter did not read commitlint.config.js")
 			}
 			if runErr != nil && !t.Failed() {
 				t.Errorf("the linter failed without naming a finding: %v\n%s", runErr, stderr.String())

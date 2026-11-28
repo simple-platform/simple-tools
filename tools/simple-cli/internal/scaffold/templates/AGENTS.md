@@ -254,3 +254,14 @@ A: Read the error message carefully. It is usually a syntax error in `.scl` or a
 
 **Q: Where do I find the GraphQL URL?**
 A: `https://graph.<instance-url>/`. See [GraphQL API](./.simple/context/10-graphql-api.md).
+
+## Git Checks
+
+Do not bypass these checks with `git commit --no-verify` or `git push --no-verify`.
+
+- `pre-commit` scans staged files for hidden code and install-time scripts, then runs ESLint on staged files. Restore a hidden-code file from a trusted version; remove an unapproved install script; fix any ESLint finding and stage the corrected file again.
+- `commit-msg` requires a Conventional Commit header, at most 72 characters, with a lower-case subject and no final period. For example: `feat(com.acme.demo): add a greeting action`.
+- `pre-push` scans the whole tree and runs `simple lint`. Fix the guard's named file or setting, then fix every lint finding before pushing.
+- `post-checkout`, `post-merge`, and `post-rewrite` scan the whole tree after Git changes it. Fix any named hidden-code or install-script finding before committing or pushing.
+
+If a hook says `node`, `npx`, or `simple` is unavailable, run Git from the workspace's development environment with `devbox shell`.

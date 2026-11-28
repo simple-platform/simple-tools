@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "COMMIT REFUSED: cannot find the repository root. Run git commit from inside the dev environment: devbox shell."
+  exit 1
+}
+for tool in node npx; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "COMMIT REFUSED: $tool is unavailable. Run git commit from inside the dev environment: devbox shell."
+    exit 1
+  fi
+done
+if [ ! -f "$ROOT/scripts/supply-chain-guard.sh" ]; then
+  echo "COMMIT REFUSED: scripts/supply-chain-guard.sh is missing. Restore it from a trusted commit."
+  exit 1
+fi
+
+bash "$ROOT/scripts/supply-chain-guard.sh" --staged
+npx --no -- lint-staged

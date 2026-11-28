@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+for tool in node npx; do
+  if ! command -v "$tool" >/dev/null 2>&1; then
+    echo "COMMIT REFUSED: $tool is unavailable. Run git commit from inside the dev environment: devbox shell."
+    exit 1
+  fi
+done
+npx --no -- commitlint --edit "$1"

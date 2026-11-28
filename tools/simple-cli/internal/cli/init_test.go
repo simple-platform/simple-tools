@@ -2,12 +2,100 @@ package cli
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
 	"strings"
 	"testing"
 )
+
+func TestConfigureWorkspaceGitHooks(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is missing; cannot test workspace hook configuration: %v", err)
+	}
+
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T, root string) (target string, repo string)
+		gitMissing bool
+		wantHooks  bool
+	}{
+		{
+			name: "workspace at repository top sets hooks path",
+			setup: func(t *testing.T, root string) (string, string) {
+				initTestRepository(t, root)
+				return root, root
+			},
+			wantHooks: true,
+		},
+		{
+			name: "workspace inside parent repository leaves hooks path unset",
+			setup: func(t *testing.T, root string) (string, string) {
+				initTestRepository(t, root)
+				workspace := filepath.Join(root, "workspace")
+				if err := os.Mkdir(workspace, fsx.DirPerm); err != nil {
+					t.Fatalf("create nested workspace: %v", err)
+				}
+				return workspace, root
+			},
+		},
+		{
+			name: "git executable is missing",
+			setup: func(t *testing.T, root string) (string, string) {
+				if err := os.Mkdir(root, fsx.DirPerm); err != nil {
+					t.Fatalf("create workspace: %v", err)
+				}
+				return root, root
+			},
+			gitMissing: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "repo")
+			target, repo := tt.setup(t, root)
+			if tt.gitMissing {
+				missingPath := filepath.Join(t.TempDir(), "empty-path")
+				if err := os.Mkdir(missingPath, fsx.DirPerm); err != nil {
+					t.Fatalf("create empty PATH: %v", err)
+				}
+				t.Setenv("PATH", missingPath)
+			}
+			if err := configureWorkspaceGitHooks(target); err != nil {
+				t.Fatalf("configureWorkspaceGitHooks() error = %v, want nil", err)
+			}
+			if tt.gitMissing {
+				return
+			}
+
+			command := exec.Command("git", "-C", repo, "config", "--local", "--get", "core.hooksPath")
+			got, err := command.Output()
+			if tt.wantHooks {
+				if err != nil {
+					t.Fatalf("read core.hooksPath: %v", err)
+				}
+				if strings.TrimSpace(string(got)) != ".githooks" {
+					t.Errorf("core.hooksPath = %q, want .githooks", strings.TrimSpace(string(got)))
+				}
+			} else if err == nil {
+				t.Errorf("core.hooksPath = %q, want it unset", strings.TrimSpace(string(got)))
+			}
+		})
+	}
+}
+
+func initTestRepository(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Mkdir(path, fsx.DirPerm); err != nil {
+		t.Fatalf("create git repository: %v", err)
+	}
+	command := exec.Command("git", "-C", path, "init")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init failed: %v\n%s", err, output)
+	}
+}
 
 func TestCreateMonorepoStructure_Success(t *testing.T) {
 	tmpDir := t.TempDir()

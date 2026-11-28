@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"simple-cli/internal/fsx"
 	"simple-cli/internal/scaffold"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -82,6 +83,9 @@ func runInit(cmd *cobra.Command, args []string) error {
 			fmt.Printf("ℹ️  Directory %s is already inside a git repository, skipping git init\n", targetPath)
 		}
 	}
+	if err := configureWorkspaceGitHooks(targetPath); err != nil {
+		return err
+	}
 
 	// Output result
 	if jsonOutput {
@@ -98,5 +102,31 @@ func runInit(cmd *cobra.Command, args []string) error {
 		fmt.Println("  simple new app com.mycompany.myapp \"My App\"")
 	}
 
+	return nil
+}
+
+func configureWorkspaceGitHooks(targetPath string) error {
+	root, err := exec.Command("git", "-C", targetPath, "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		// A workspace outside Git, or a machine without Git, has no local hook
+		// setting to configure. simple init can still create its files there.
+		return nil
+	}
+	target, err := filepath.EvalSymlinks(targetPath)
+	if err != nil {
+		return fmt.Errorf("failed to resolve workspace path %s: %w", targetPath, err)
+	}
+	gitRoot, err := filepath.EvalSymlinks(strings.TrimSpace(string(root)))
+	if err != nil {
+		return fmt.Errorf("failed to resolve git root for %s: %w", targetPath, err)
+	}
+	// A workspace nested inside another repository does not own that repository's
+	// hook setting; only configure hooks when this folder is the repository root.
+	if filepath.Clean(target) != filepath.Clean(gitRoot) {
+		return nil
+	}
+	if err := exec.Command("git", "-C", targetPath, "config", "core.hooksPath", ".githooks").Run(); err != nil {
+		return fmt.Errorf("failed to configure workspace git hooks: %w", err)
+	}
 	return nil
 }

@@ -10,11 +10,17 @@
   },
   "devDependencies": {
     "@antfu/eslint-config": "10.0.0",
+    "@commitlint/cli": "20.5.0",
+    "@commitlint/config-conventional": "20.5.0",
     "eslint": "10.15.0",
     "eslint-plugin-format": "2.0.1",
+    "lint-staged": "16.2.7",
     "ts-json-schema-generator": "2.9.0",
     "ts-morph": "28.0.0",
     "typescript": "6.0.3",
     "vitest": "4.1.12"
+  },
+  "lint-staged": {
+    "**/*.{js,mjs,cjs,ts,tsx,mts,cts,jsx,json,css,html,md,toml,yaml,yml}": "eslint --fix --no-warn-ignored"
   }
 }

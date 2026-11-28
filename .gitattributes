@@ -1,0 +1,2 @@
+tools/simple-cli/internal/scaffold/templates/githooks/* eol=lf
+*.sh eol=lf
