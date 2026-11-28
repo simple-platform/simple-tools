@@ -14,9 +14,22 @@ import (
 // devStudioWorkspaceFiles are the root files every instance workspace needs,
 // taken from the CLI's own scaffold: devbox.json and package.json pin the
 // node, pnpm and Rust the agent's commands run with.
-var devStudioWorkspaceFiles = []struct{ template, name string }{
-	{"templates/devbox.json", "devbox.json"},
-	{"templates/package.json", "package.json"},
+//
+// eslint.config.js and pnpm-workspace.yaml follow package.json: each is
+// written only when this same pass wrote it. The lint setup loads packages
+// that only the scaffold's package.json names, and the pnpm settings are the
+// install rules for those packages. A workspace with a package.json of its
+// own is given neither: a lint setup it cannot load and install rules it never
+// chose would both change what a team wrote.
+var devStudioWorkspaceFiles = []struct {
+	template  string
+	name      string
+	dependsOn string
+}{
+	{template: "templates/devbox.json", name: "devbox.json"},
+	{template: "templates/package.json", name: "package.json"},
+	{template: "templates/eslint.config.js", name: "eslint.config.js", dependsOn: "package.json"},
+	{template: "templates/pnpm-workspace.yaml", name: "pnpm-workspace.yaml", dependsOn: "package.json"},
 }
 
 // ensureDevStudioWorkspaceFiles gives a workspace made by an older CLI the
@@ -24,7 +37,11 @@ var devStudioWorkspaceFiles = []struct{ template, name string }{
 // missing, and only the .gitignore lines that are missing, so nothing a team
 // wrote is changed.
 func ensureDevStudioWorkspaceFiles(workspace *devStudioWorkspace) error {
+	written := make(map[string]bool, len(devStudioWorkspaceFiles))
 	for _, file := range devStudioWorkspaceFiles {
+		if file.dependsOn != "" && !written[file.dependsOn] {
+			continue
+		}
 		path, err := devStudioPathInside(workspace.instanceRoot, file.name)
 		if err != nil {
 			return err
@@ -41,6 +58,7 @@ func ensureDevStudioWorkspaceFiles(workspace *devStudioWorkspace) error {
 		if err := os.WriteFile(path, contents, fsx.FilePerm); err != nil {
 			return fmt.Errorf("failed to write %s: %w", file.name, err)
 		}
+		written[file.name] = true
 	}
 	return ensureDevStudioGitignore(workspace.instanceRoot)
 }

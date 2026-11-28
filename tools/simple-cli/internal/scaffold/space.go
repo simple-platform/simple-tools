@@ -18,6 +18,22 @@ type SpaceConfig struct {
 	Description string
 }
 
+// escapeSpaceDisplayNameForJSX writes a display name so it can stand as plain
+// text inside a tag in the space's App.tsx. The workspace's linter refuses the
+// other form, a quoted string in braces, whenever the name is plain, so the
+// name is written as text; and as text, these five characters would be read as
+// markup and stop the file compiling. React shows each escape as the character
+// it stands for.
+func escapeSpaceDisplayNameForJSX(displayName string) string {
+	return strings.NewReplacer(
+		"&", "&amp;",
+		"<", "&lt;",
+		">", "&gt;",
+		"{", "&#123;",
+		"}", "&#125;",
+	).Replace(displayName)
+}
+
 // CreateSpaceStructure scaffolds a new space inside an app's spaces/ directory.
 //
 // It creates:
@@ -77,11 +93,12 @@ func CreateSpaceStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath st
 
 	// Template data
 	data := map[string]string{
-		"AppID":        cfg.AppID,
-		"SpaceName":    cfg.SpaceName,
-		"SpaceNameScl": spaceNameScl,
-		"DisplayName":  cfg.DisplayName,
-		"Description":  cfg.Description,
+		"AppID":          cfg.AppID,
+		"SpaceName":      cfg.SpaceName,
+		"SpaceNameScl":   spaceNameScl,
+		"DisplayName":    cfg.DisplayName,
+		"DisplayNameJSX": escapeSpaceDisplayNameForJSX(cfg.DisplayName),
+		"Description":    cfg.Description,
 	}
 
 	// Render space files

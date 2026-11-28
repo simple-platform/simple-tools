@@ -1,14 +1,13 @@
 package scaffold
 
 import (
-	"errors"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"simple-cli/internal/fsx"
+	"simple-cli/internal/testsupport"
 )
 
 // A behavior is generated as a script and a test for it, and the two have to
@@ -24,7 +23,7 @@ import (
 // The folder is named tmp, which the repository's .gitignore already covers,
 // so a run that is killed leaves nothing for git to pick up.
 func TestGeneratedBehaviorTestPassesWithVitest(t *testing.T) {
-	moduleRoot := simpleCLIModuleRoot(t)
+	moduleRoot := testsupport.ModuleRoot(t)
 	tempParent := filepath.Join(moduleRoot, "tmp")
 	if err := os.MkdirAll(tempParent, fsx.DirPerm); err != nil {
 		t.Fatalf("create %s: %v", tempParent, err)
@@ -72,29 +71,5 @@ func TestGeneratedBehaviorTestPassesWithVitest(t *testing.T) {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("generated behavior test failed: %v\n%s", err, output)
-	}
-}
-
-// simpleCLIModuleRoot finds the folder that holds this module's go.mod, which
-// is also the folder its package.json and node_modules sit in.
-func simpleCLIModuleRoot(t *testing.T) string {
-	t.Helper()
-
-	dir, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get test working directory: %v", err)
-	}
-	for {
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			return dir
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("find Go module from %s: %v", dir, err)
-		}
-
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			t.Fatalf("could not find go.mod walking up from test working directory %s", dir)
-		}
-		dir = parent
 	}
 }

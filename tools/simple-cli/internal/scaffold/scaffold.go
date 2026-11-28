@@ -52,6 +52,9 @@ type MonorepoConfig struct {
 //   - AGENTS.md at root
 //   - README.md at root (templated with project name)
 //   - devbox.json and package.json at root, pinning node, pnpm and Rust
+//   - pnpm-workspace.yaml at root, with pnpm's install protections for the
+//     root's own packages and no members
+//   - eslint.config.js at root, so generated files pass the linter as written
 //   - simple.scl (templated with tenant name)
 //
 // Returns an error if the target path already exists.
@@ -121,6 +124,17 @@ func CreateMonorepoStructure(fsys fsx.FileSystem, tplFS fsx.TemplateFS, rootPath
 		return err
 	}
 	if err := copyTemplate(fsys, tplFS, "templates/package.json", filepath.Join(rootPath, "package.json")); err != nil {
+		return err
+	}
+	// The root installs its own packages, so it gets the same protections as
+	// Simple's app repositories: releases with weaker proof of origin than
+	// earlier versions are refused.
+	if err := copyTemplate(fsys, tplFS, "templates/pnpm-workspace.yaml", filepath.Join(rootPath, "pnpm-workspace.yaml")); err != nil {
+		return err
+	}
+	// Everything the tool generates must pass this linter as generated. This is
+	// the same lint setup Simple's own app repositories use.
+	if err := copyTemplate(fsys, tplFS, "templates/eslint.config.js", filepath.Join(rootPath, "eslint.config.js")); err != nil {
 		return err
 	}
 

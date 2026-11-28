@@ -13,7 +13,7 @@ publish = false
 # to code that names `serde` by crate, so the action depends on it even though
 # the prelude re-exports the derive.
 simpleplatform-sdk = "0.7"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = [ "derive" ] }
 serde_json = "1.0"
 
 [features]
@@ -28,7 +28,7 @@ serde_json = "1.0"
 # browser build stops at "none of the selected packages contains these
 # features: async", and an action whose execution environment is `client` or
 # `both` cannot be built at all.
-async = ["simpleplatform-sdk/async"]
+async = [ "simpleplatform-sdk/async" ]
 
 # The profile the SDK asks a published action for: as small as the optimiser can
 # make it, linked as one unit, with the symbol table dropped. A wasm module is

@@ -56,22 +56,22 @@ You are an expert **Simple Platform Engineer** for this project.
 
 Use these commands to build and deploy your work.
 
-| Command                                        | Description                                                    |
-| :--------------------------------------------- | :------------------------------------------------------------- |
-| `simple init <path>`                           | Initialize a new workspace                                     |
-| `simple new app <app> <name>`                  | Scaffold a new application directory                           |
-| `simple new action <app> <name> "<Display name>" --lang ts --scope <org>`     | Scaffold a new TypeScript action                               |
-| `simple new action <app> <name> "<Display name>" --lang rust`   | Scaffold a new Rust action (a cargo crate; takes no `--scope`) |
-| `simple new space <app> <name> <display_name>` | Scaffold a new React space (custom UI)                         |
-| `simple new agent <app> <name> "<Display name>"` | Create an agent and its persona                              |
-| `simple new task-type <app> <name> "<Plural name>" [--no-agent]` | Create a kind of work for an agent or people                 |
-| `simple new skill <app> <name> ["<Title>"] --task-type <task-type>` | Add a skill to a kind of work                                |
-| `simple new knowledge <app> <name> ["<Title>"] --task-type <task-type>` | Add reference knowledge to a kind of work                   |
-| `simple new tool <app> <name> ["<Display name>"] [--task-type <task-type>]` | Set up a tool and optionally link it to a kind of work       |
-| `simple build <app>/<action>`                  | Build a single action                                          |
-| `simple build <app>`                           | Build all actions and spaces in an app in parallel             |
-| `simple build --all`                           | Build all actions and spaces in all apps in parallel           |
-| `simple deploy apps/<app> --env <env>`                          | Bundle and deploy an application (Schema, Logic, and Spaces)   |
+| Command                                                                     | Description                                                    |
+| :-------------------------------------------------------------------------- | :------------------------------------------------------------- |
+| `simple init <path>`                                                        | Initialize a new workspace                                     |
+| `simple new app <app> <name>`                                               | Scaffold a new application directory                           |
+| `simple new action <app> <name> "<Display name>" --lang ts --scope <org>`   | Scaffold a new TypeScript action                               |
+| `simple new action <app> <name> "<Display name>" --lang rust`               | Scaffold a new Rust action (a cargo crate; takes no `--scope`) |
+| `simple new space <app> <name> <display_name>`                              | Scaffold a new React space (custom UI)                         |
+| `simple new agent <app> <name> "<Display name>"`                            | Create an agent and its persona                                |
+| `simple new task-type <app> <name> "<Plural name>" [--no-agent]`            | Create a kind of work for an agent or people                   |
+| `simple new skill <app> <name> ["<Title>"] --task-type <task-type>`         | Add a skill to a kind of work                                  |
+| `simple new knowledge <app> <name> ["<Title>"] --task-type <task-type>`     | Add reference knowledge to a kind of work                      |
+| `simple new tool <app> <name> ["<Display name>"] [--task-type <task-type>]` | Set up a tool and optionally link it to a kind of work         |
+| `simple build <app>/<action>`                                               | Build a single action                                          |
+| `simple build <app>`                                                        | Build all actions and spaces in an app in parallel             |
+| `simple build --all`                                                        | Build all actions and spaces in all apps in parallel           |
+| `simple deploy apps/<app> --env <env>`                                      | Bundle and deploy an application (Schema, Logic, and Spaces)   |
 
 ## AI Coding Guidelines
 
@@ -89,7 +89,7 @@ Use these commands to build and deploy your work.
 > - UI: `create-view`; custom Spaces: `build-spaces` + `space-frontend-design`;
 >   record composition: `record-space-builder`.
 > - Releases: `simple-cli`, `app-versioning`; app decisions: `knowledge-base`.
-> Do not read every skill or the full grammar for an unrelated change.
+>   Do not read every skill or the full grammar for an unrelated change.
 
 > [!NOTE]
 > **Enterprise Standard**: Simple Platform is an ENTERPRISE business platform.
@@ -100,17 +100,17 @@ Use these commands to build and deploy your work.
 
 ## Boundaries
 
-| Type             | Rule                                                               |
-| :--------------- | :----------------------------------------------------------------- |
-| ✅ **Always**    | Use `SimpleID` (e.g., `ORD000123`) for primary keys.               |
-| ✅ **Always**    | Store external UUIDs as `:string` with `length 36`.                |
-| ✅ **Always**    | Write tests first (TDD) with 80%+ coverage.                        |
-| ✅ **Always**    | Use `kebab-case` for Action names and `snake_case` for Tables.     |
-| ⚠️ **Ask First** | Before modifying an existing `.scl` schema definition unless the current task explicitly authorizes that schema change. |
+| Type             | Rule                                                                                                                                                                                             |
+| :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ✅ **Always**    | Use `SimpleID` (e.g., `ORD000123`) for primary keys.                                                                                                                                             |
+| ✅ **Always**    | Store external UUIDs as `:string` with `length 36`.                                                                                                                                              |
+| ✅ **Always**    | Write tests first (TDD) with 80%+ coverage.                                                                                                                                                      |
+| ✅ **Always**    | Use `kebab-case` for Action names and `snake_case` for Tables.                                                                                                                                   |
+| ⚠️ **Ask First** | Before modifying an existing `.scl` schema definition unless the current task explicitly authorizes that schema change.                                                                          |
 | ⚠️ **Ask First** | Before adding a dependency unless the current task explicitly authorizes it. Action runtime packages must support QuickJS; Space runtime code targets browsers, while build/test tools use Node. |
-| 🚫 **Never**     | Use SQL directly. Use SCL for DDL and GraphQL for DML.             |
-| 🚫 **Never**     | Use UUIDs as primary keys.                                         |
-| 🚫 **Never**     | Commit secrets or API keys.                                        |
+| 🚫 **Never**     | Use SQL directly. Use SCL for DDL and GraphQL for DML.                                                                                                                                           |
+| 🚫 **Never**     | Use UUIDs as primary keys.                                                                                                                                                                       |
+| 🚫 **Never**     | Commit secrets or API keys.                                                                                                                                                                      |
 
 ---
 

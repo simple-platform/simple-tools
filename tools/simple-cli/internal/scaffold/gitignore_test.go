@@ -10,6 +10,13 @@ import (
 // The instance .gitignore keeps the Simple CLI's local state out of git: key
 // files, unpacked tool runtimes, build caches and local secrets. The platform
 // docs in .simple/context are part of the repository and stay in it.
+//
+// It also names two folders that other tools fill: devbox's environment,
+// which holds the Rust install, and Cargo's build folder inside a Rust action.
+// The workspace's linter skips what this one file ignores and reads no ignore
+// file below the root, so without these two lines it walks into both: 151
+// findings in a new workspace, and 48 more after the first build of a Rust
+// action, none of them in a file anyone wrote.
 func TestInstanceGitignoreKeepsLocalStateOutOfGit(t *testing.T) {
 	gitPath, err := exec.LookPath("git")
 	if err != nil {
@@ -37,6 +44,10 @@ func TestInstanceGitignoreKeepsLocalStateOutOfGit(t *testing.T) {
 		{".simple/cache/npm/index", true},
 		{".simple/tokens.json", true},
 		{".env", true},
+		{".devbox/virtenv/rustup/toolchains/1.100.0/share/doc/cargo/README.md", true},
+		{"apps/com.acme.crm/actions/close-lead/target/.rustc_info.json", true},
+		{"docs/target/notes.md", false},
+		{"apps/com.acme.crm/actions/close-lead/src/main.rs", false},
 		{".simple/context/01-platform-overview.md", false},
 		{"apps/com.acme.crm/app.scl", false},
 		{"simple.scl", false},

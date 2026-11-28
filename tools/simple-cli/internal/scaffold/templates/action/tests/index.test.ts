@@ -9,7 +9,13 @@ import { createRequest } from './helpers'
 // no-op here. Keep this in every test file that imports src/index.ts.
 vi.mock('@simpleplatform/sdk', async (importOriginal) => {
   const sdk = await importOriginal<typeof import('@simpleplatform/sdk')>()
-  return { ...sdk, default: { ...sdk.default, Handle: vi.fn() } }
+  return {
+    ...sdk,
+    default: {
+      ...sdk.default,
+      Handle: vi.fn(),
+    },
+  }
 })
 
 describe('{{.ActionName}}', () => {

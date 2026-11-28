@@ -1,0 +1,15 @@
+# Settings for installs at the repository root. Apps, actions and spaces are
+# not listed as members: `simple build` and `simple test` install each one's
+# packages themselves.
+minimumReleaseAgeExcludePrune: true
+trustPolicy: no-downgrade
+shellEmulator: true
+
+# Two packages the lint tools pull in have published security fixes that the
+# tools have not picked up yet. Force the fixed versions. Remove an entry once
+# the tool that needs it ships the fixed version itself.
+#   tinypool: comes with eslint-plugin-format (through oxfmt)
+#   katex: comes with @antfu/eslint-config (through @eslint/markdown)
+overrides:
+  katex: 0.18.2
+  tinypool: 2.1.2

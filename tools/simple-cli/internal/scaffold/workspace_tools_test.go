@@ -56,9 +56,23 @@ func TestNewWorkspaceGetsDevboxAndPackageManifest(t *testing.T) {
 	if !manifest.Private || !strings.HasPrefix(manifest.PackageManager, "pnpm@") || manifest.Engines["node"] == "" {
 		t.Fatalf("package.json = %+v, want a private manifest pinning pnpm", manifest)
 	}
-	// The workspace has no member packages to list.
-	if _, err := os.Stat(filepath.Join(root, "pnpm-workspace.yaml")); !os.IsNotExist(err) {
-		t.Fatalf("pnpm-workspace.yaml was written: %v", err)
+	// The root has packages of its own to install, so it carries pnpm's
+	// install protections. It lists no members: `simple build` and
+	// `simple test` install each action's and space's packages themselves, and
+	// a member would be installed a second time by a root install.
+	workspacePath := filepath.Join(root, "pnpm-workspace.yaml")
+	workspace, err := os.ReadFile(workspacePath)
+	if err != nil {
+		t.Fatalf("read pnpm-workspace.yaml: %v", err)
+	}
+	if !strings.Contains(string(workspace), "trustPolicy: no-downgrade") {
+		t.Errorf("pnpm-workspace.yaml = %q, want trustPolicy: no-downgrade", workspace)
+	}
+	for _, line := range strings.Split(string(workspace), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "packages:") || strings.Contains(trimmed, "apps/") {
+			t.Errorf("pnpm-workspace.yaml must not list package members, found %q", line)
+		}
 	}
 }
 
