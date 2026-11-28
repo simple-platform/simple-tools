@@ -1293,7 +1293,7 @@ func TestCreateTool(t *testing.T) {
 				}
 			case "new Rust action is marked tool":
 				source := string(fsys.Files[filepath.Join(wiringRoot, "apps", wiringAppID, "actions", "summarize-order", "src", "main.rs")])
-				if !strings.Contains(source, "/// @tool") || !strings.Contains(source, "/// @shortdesc TODO(simple):") {
+				if !strings.Contains(source, "/// @tool") || !strings.Contains(source, "/// @shortdesc TODO(simple):") || !strings.Contains(source, "/// @usewhen") {
 					t.Fatalf("Rust tool source missing tool tags: %s", source)
 				}
 			}
@@ -1311,7 +1311,7 @@ func TestActionToolTemplateMarkers(t *testing.T) {
 	}{
 		{name: "TypeScript action stays unmarked", language: LanguageTypeScript, actionName: "plain-ts"},
 		{name: "TypeScript tool is marked", language: LanguageTypeScript, actionName: "marked-ts", tool: true, wantMarker: true},
-		{name: "Rust action keeps its existing short description", language: LanguageRust, actionName: "plain-rust"},
+		{name: "Rust action has a plain handler summary", language: LanguageRust, actionName: "plain-rust"},
 		{name: "Rust tool short description is marked", language: LanguageRust, actionName: "marked-rust", tool: true, wantMarker: true},
 	}
 	for _, tt := range tests {
@@ -1337,8 +1337,15 @@ func TestActionToolTemplateMarkers(t *testing.T) {
 			if tt.language == LanguageTypeScript && strings.Contains(source, "@tool") != tt.tool {
 				t.Fatalf("TypeScript @tool marker presence does not match Tool=%v", tt.tool)
 			}
-			if tt.language == LanguageRust && !strings.Contains(source, "@shortdesc Greet whoever the caller names, and answer with the greeting.") && !tt.tool {
-				t.Fatal("ordinary Rust action short description changed")
+			if tt.language == LanguageRust && !tt.tool {
+				for _, tag := range []string{"@tool", "@shortdesc", "@usewhen", "@parallelsafe"} {
+					if strings.Contains(source, tag) {
+						t.Fatalf("plain Rust action contains tool documentation %q", tag)
+					}
+				}
+				if !strings.Contains(source, "/// Greets whoever the caller names and answers with the greeting. A blank name\n/// is refused.") {
+					t.Fatal("plain Rust action is missing its handler summary")
+				}
 			}
 		})
 	}

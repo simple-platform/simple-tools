@@ -1176,8 +1176,15 @@ func TestCheckRuleCases(t *testing.T) {
 		{name: "tool task type invalid", want: "kind of work that does not exist", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[0].TaskTypeRef.Key = "missing" }},
 		{name: "own tool does not exist", want: "not an action of this app", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[0].Tool.ActionKey = "missing" }},
 		{name: "own tool not built", want: "has not been built", mutate: func(_ *App, f *memoryFS) { f.delete("actions/find-order/action.json") }},
-		{name: "own action not marked tool", want: "not marked as a tool", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte(`{"ai":{"tool":false}}`)) }},
-		{name: "own action json invalid", want: "not marked as a tool", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte("{")) }},
+		{name: "own action not marked tool", want: "add @tool, and @shortdesc followed by one line saying what the tool gives an agent, to a comment there, then build again", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte(`{"ai":{"tool":false}}`)) }},
+		{name: "own action json invalid", want: "has a built description that cannot be read", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte("{")) }},
+		{name: "own action json empty", want: "has a built description that cannot be read", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", nil) }},
+		{name: "own action json null", want: "has a built description that cannot be read", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte("null")) }},
+		{name: "own action json a list", want: "has a built description that cannot be read", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte("[]")) }},
+		{name: "own action tool setting not yes or no", want: "has a built description that cannot be read", mutate: func(_ *App, f *memoryFS) { f.put("actions/find-order/action.json", []byte(`{"ai":{"tool":"true"}}`)) }},
+		{name: "own action description without a tool setting", want: "is not marked as a tool in its action source", mutate: func(_ *App, f *memoryFS) {
+			f.put("actions/find-order/action.json", []byte(`{"description":"Finds an order."}`))
+		}},
 		{name: "unknown platform tool", want: "unknown to this CLI", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[1].Tool.Name = "future-tool" }},
 		{name: "foreign app lookup", want: "unknown to this CLI", mutate: func(a *App, _ *memoryFS) { a.TaskTypeToolLinks[1].Tool.AppID = "com.other.app" }},
 		{name: "task skill task reference unreadable", want: "unreadable knowledge link", mutate: func(a *App, _ *memoryFS) { a.TaskTypeSkillLinks[0].TaskTypeRef.Readable = false }},

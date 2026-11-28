@@ -6,13 +6,15 @@
  */
 
 /**
+ * A behavior is handed four inputs: `$form` (the Form API), `$db` (the
+ * Database API), `$user` (the User Context) and `$ai` (the AI Context). This
+ * starter takes only the one it uses. Add another to the list below when a
+ * rule needs it.
+ *
  * @param {object} context
  * @param {object} context.$form - The Form API
- * @param {object} context.$db - The Database API
- * @param {object} context.$user - The User Context
- * @param {object} context.$ai - The AI Context
  */
-export default async ({ $ai, $db, $form, $user }) => {
+export default async ({ $form }) => {
   // Handle 'load' event (Server + Client)
   if ($form.event === 'load') {
     // Logic for setting defaults, visibility, etc.

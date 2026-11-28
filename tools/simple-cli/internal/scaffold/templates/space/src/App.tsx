@@ -45,7 +45,9 @@ const APPLICATIONS_PRESET: ListPreset = {
   },
   id: 'applications-list',
   kind: 'list',
-  orderBy: [{ direction: 'asc', fieldName: 'display_name' }],
+  orderBy: [
+    { direction: 'asc', fieldName: 'display_name' },
+  ],
   title: 'Applications',
 }
 
@@ -91,7 +93,7 @@ export default function App() {
 
   return (
     <div className="p-8 font-sans">
-      <h1 className="text-2xl font-bold mb-4">{'{{.DisplayName}}'}</h1>
+      <h1 className="text-2xl font-bold mb-4">{{.DisplayNameJSX}}</h1>
 
       {context && (
         <p className="text-sm text-muted-foreground mb-4">
@@ -132,7 +134,11 @@ export default function App() {
       <p className="text-sm text-muted-foreground mt-6">
         GraphQL:
         {' '}
-        {status === 'loading' ? '⏳' : status === 'ready' ? '✅ Connected' : '❌ Error'}
+        {status === 'loading'
+          ? '⏳'
+          : status === 'ready'
+            ? '✅ Connected'
+            : '❌ Error'}
       </p>
     </div>
   )

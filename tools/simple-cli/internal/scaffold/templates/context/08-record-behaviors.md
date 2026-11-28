@@ -49,6 +49,10 @@ export default async ({ $ai, $db, $form, $user }) => {
 }
 ```
 
+Name only the inputs a script uses. The script `simple new behavior` writes
+takes `({ $form })`, and the workspace's linter reports an input that is named
+and never used.
+
 ---
 
 ## Events

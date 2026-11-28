@@ -1,7 +1,7 @@
 //! `{{.ActionName}}`: a starting point you can run before you change anything.
 //!
 //! Everything an action needs is here and nothing else is: a payload with its
-//! constraints, a handler with the three tags that describe it, `main`, and the
+//! constraints, a handler{{if .Tool}} with the three tags that describe it{{end}}, `main`, and the
 //! tests. Replace the greeting with what this action actually does — the shape
 //! around it is the shape a finished action keeps.
 
@@ -45,7 +45,7 @@ fn main() {
     simple::run(handler)
 }
 
-/// The three tags below are what a caller reads when choosing between tools.
+{{if .Tool}}/// The three tags below are what a caller reads when choosing between tools.
 ///
 /// They are read from every comment in this file rather than from one of them,
 /// so they sit with the handler they describe and the description stays with
@@ -60,9 +60,11 @@ fn main() {
 /// checks it, and it never makes a failed call safe to repeat.
 ///
 /// @tool
-/// @shortdesc {{if .Tool}}TODO(simple): Say in one line what this tool gives an agent.{{else}}Greet whoever the caller names, and answer with the greeting.{{end}}
+/// @shortdesc TODO(simple): Say in one line what this tool gives an agent.
 /// @usewhen A greeting is wanted for a named person.
-fn handler(request: Request<Payload>) -> Result<Output, Error> {
+{{else}}/// Greets whoever the caller names and answers with the greeting. A blank name
+/// is refused.
+{{end}}fn handler(request: Request<Payload>) -> Result<Output, Error> {
     let name = request.data.name.trim();
 
     // Refuse with a message a caller can act on and a hint saying what to do
