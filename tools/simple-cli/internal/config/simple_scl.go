@@ -58,11 +58,19 @@ type DefaultSCLParser struct {
 //   - "kv" (key-value): A simple property (Key=Value).
 //   - "block": A nested structure (Key { ... Children ... }).
 type SCLBlock struct {
-	Type     string     `json:"type"`     // "kv" or "block"
-	Key      string     `json:"key"`      // Identifier (e.g., "tenant", "env")
-	Name     string     `json:"name"`     // Optional name for blocks (e.g., "dev" in "env dev { ... }")
-	Value    any        `json:"value"`    // Value for KV types
-	Children []SCLBlock `json:"children"` // Child nodes for block types
+	Type     string      `json:"type"`     // "kv" or "block"
+	Key      string      `json:"key"`      // Identifier (e.g., "tenant", "env")
+	Name     any         `json:"name"`     // Names can be strings or compound record identifiers.
+	KeyLoc   SCLLocation `json:"key_loc"`  // Source location for the block kind.
+	NameLoc  SCLLocation `json:"name_loc"` // Source location for the block name.
+	Value    any         `json:"value"`    // Value for KV types
+	Children []SCLBlock  `json:"children"` // Child nodes for block types
+}
+
+// SCLLocation is a one-based line and column reported by scl-parser.
+type SCLLocation struct {
+	Line int `json:"line"`
+	Col  int `json:"col"`
 }
 
 // Parse executes the scl-parser CLI tool against the given file path.
@@ -202,8 +210,7 @@ func extractConfig(blocks []SCLBlock) (*SimpleSCL, error) {
 			}
 		case "env":
 			// env is a block with Name (the env name) and Children (properties)
-			if block.Name != "" {
-				envName := block.Name
+			if envName, ok := block.Name.(string); ok && envName != "" {
 				env := &Environment{Name: envName}
 
 				for _, child := range block.Children {

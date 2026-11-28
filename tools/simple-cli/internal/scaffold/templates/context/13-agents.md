@@ -181,7 +181,7 @@ Known platform tools, provided by app `dev.simple.system`:
 
 ## Build and deploy checks
 
-When building an app or all apps, `simple build` checks agents after building actions. A single action or space build does not run these checks. An app with agent records and no actions or spaces is still a valid build target. `simple deploy` runs the same checks before collecting files and refuses if they find a problem.
+When building an app or all apps, `simple build` checks agents after building actions. A single action or space build does not run these checks. An app with agent records and no actions or spaces is still a valid build target. `simple deploy` runs the same checks before collecting files and refuses if they find a problem. `simple lint` runs these app record checks for every app in scope, including when a build would skip agent checks for a single action or space target.
 
 The marker scan runs for every app. It reports each `TODO(simple):` line in `knowledge/**/*.md`, `records/**/*.scl`, `records/**/*.json`, and app action sources under `actions/*/src/**`.
 

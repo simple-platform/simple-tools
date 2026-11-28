@@ -172,6 +172,22 @@ simple build apps/com.company.crm --concurrency 8
 
 ---
 
+### `simple lint`
+
+Lint the workspace or one app, action, or space:
+
+```bash
+simple lint [target] [--fix]
+```
+
+The SCL check parses every `.scl` file in scope, runs the app record checks
+used by `simple build`, and reports both locations when top-level blocks in
+one app repeat the same kind and parser name. Parser errors include the
+parser's line when available; otherwise the report says that no line was
+provided. `--fix` does not rewrite `.scl` files.
+
+---
+
 ### `simple test`
 
 Run tests for applications, actions, or record behaviors.

@@ -194,12 +194,12 @@
     },
     "lint": {
       "usage": "simple lint [target]",
-      "description": "Lint the workspace or a build target with ESLint, Rust fmt and clippy (including action tests and built WebAssembly variants), and Go formatting and vet checks",
+      "description": "Lint the workspace or a build target with ESLint, Rust fmt and clippy (including action tests and built WebAssembly variants), Go formatting and vet, and SCL parsing, build record checks, and duplicate named-block checks",
       "args": [
         { "name": "target", "type": "string", "optional": true, "description": "App, action, space, or app/action target" }
       ],
       "flags": [
-        { "name": "--fix", "type": "boolean", "description": "Apply available formatting fixes" },
+        { "name": "--fix", "type": "boolean", "description": "Apply available action formatting fixes; SCL files are never rewritten" },
         { "name": "--json", "type": "boolean", "description": "Output JSON check results" }
       ]
     },

@@ -25,6 +25,7 @@ var (
 	lintCombinedOutputFunc       = func(cmd *exec.Cmd) ([]byte, error) { return cmd.CombinedOutput() }
 	ensureLintWorkspaceInstall   = build.EnsureWorkspaceInstall
 	lintExecutionEnvironmentFunc = lintExecutionEnvironment
+	lintSCLParserFunc            = defaultLintSCLParser
 )
 
 type lintCheck struct {
@@ -64,7 +65,7 @@ func (lintFailure) AlreadyReported() bool { return true }
 var lintCmd = &cobra.Command{
 	Use:   "lint [target]",
 	Short: "Lint a workspace or target",
-	Long: `Run the workspace ESLint checks and the language checks for its actions.
+	Long: `Run the workspace ESLint, action language, and SCL checks.
 
 Examples:
   simple lint
@@ -112,6 +113,7 @@ func runLint(cmd *cobra.Command, args []string) error {
 
 	lintFolder := "."
 	var actionDirs []string
+	var resolvedTarget resolvedBuildTarget
 	if len(args) == 0 {
 		actionDirs, err = lintActionsInApps(fsys, "apps")
 		if err != nil {
@@ -122,6 +124,7 @@ func runLint(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return err
 		}
+		resolvedTarget = resolved
 		lintFolder, err = filepath.Rel(root, resolved.path)
 		if err != nil {
 			return fmt.Errorf("failed to resolve lint folder: %w", err)
@@ -194,8 +197,56 @@ func runLint(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	sclCheck := lintCheck{name: "SCL", where: lintFolder}
+	scanRoots, appDirs, scopeErr := lintSCLScope(fsys, root, args, resolvedTarget)
+	if scopeErr != nil {
+		sclCheck.err = scopeErr
+		sclCheck.output = scopeErr.Error()
+	} else if parser, err := lintSCLParserFunc(); err != nil {
+		sclCheck.err = fmt.Errorf("failed to ensure scl-parser: %w", err)
+		sclCheck.output = sclCheck.err.Error()
+	} else if findings, err := checkSCLWorkspace(fsys, root, scanRoots, appDirs, parser); err != nil {
+		sclCheck.err = err
+		sclCheck.output = err.Error()
+	} else if len(findings) > 0 {
+		sclCheck.err = fmt.Errorf("%d SCL findings", len(findings))
+		sclCheck.output = strings.Join(findings, "\n")
+	}
+	checks = append(checks, sclCheck)
+
 	runLintChecks(checks)
 	return reportLintResults(cmd, checks, jsonOutput)
+}
+
+func lintSCLScope(fsys fsx.FileSystem, root string, args []string, target resolvedBuildTarget) ([]string, []string, error) {
+	if len(args) > 0 {
+		appDir := lintTargetAppDir(root, target.path)
+		if appDir == "" {
+			return nil, nil, fmt.Errorf("cannot find the app for SCL checks at %s", target.path)
+		}
+		return []string{appDir}, []string{appDir}, nil
+	}
+	entries, err := fsys.ReadDir("apps")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to read apps directory for SCL checks: %w", err)
+	}
+	appDirs := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			appDirs = append(appDirs, filepath.Join(root, "apps", entry.Name()))
+		}
+	}
+	return []string{root}, appDirs, nil
+}
+
+func lintTargetAppDir(root, targetPath string) string {
+	appsRoot := filepath.Join(root, "apps")
+	rel, err := filepath.Rel(appsRoot, targetPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	appID := strings.Split(rel, string(filepath.Separator))[0]
+	return filepath.Join(appsRoot, appID)
 }
 
 func lintActionsInApps(fsys fsx.FileSystem, appsDir string) ([]string, error) {

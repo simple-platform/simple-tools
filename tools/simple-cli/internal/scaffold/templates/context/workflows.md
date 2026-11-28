@@ -78,7 +78,11 @@ This document defines the **standard operating procedure** for building and modi
     *   e.g., if adding logic, check "Record Behavior" vs "Custom Action" rules.
 
 ### Finalization:
-1.  `simple lint` (or `simple lint <target>` for one app or Action)
+1.  `simple lint` (or `simple lint <target>` for one app or Action). It parses
+    every `.scl` file in scope, runs the build's app record checks, and reports
+    repeated top-level blocks with the same kind and parser name in one app.
+    Parser failures include the parser's line when available; otherwise the
+    report says no line was provided. `--fix` leaves `.scl` files unchanged.
 2.  `simple build <app_id>` (when Actions or Spaces exist)
 3.  `simple test`
 4.  `simple deploy apps/<app_id> --env <env>` (when deployment is requested)

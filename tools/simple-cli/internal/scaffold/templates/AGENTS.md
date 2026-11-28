@@ -71,9 +71,16 @@ Use these commands to build and deploy your work.
 | `simple build <app>/<action>`                                               | Build a single action                                          |
 | `simple build <app>`                                                        | Build all actions and spaces in an app in parallel             |
 | `simple build --all`                                                        | Build all actions and spaces in all apps in parallel           |
-| `simple lint [target]`                                                      | Lint the workspace or one build target                         |
+| `simple lint [target]`                                                      | Lint actions and check SCL across the workspace or target app  |
 | `simple deps update <app>`                                                  | Update action and space lock files                             |
 | `simple deploy apps/<app> --env <env>`                                      | Bundle and deploy an application (Schema, Logic, and Spaces)   |
+
+`simple lint` parses every `.scl` file in its scope, runs the same app record
+checks as `simple build`, and reports duplicate named blocks. A parser error
+reports the parser's line and message when available; otherwise the report says
+that the parser did not provide a line. The duplicate check counts top-level
+blocks by their kind and parser name, and reports both definitions in one app.
+`simple lint --fix` does not rewrite `.scl` files.
 
 ## AI Coding Guidelines
 
