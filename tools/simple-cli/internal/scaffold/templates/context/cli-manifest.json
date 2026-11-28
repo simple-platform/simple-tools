@@ -163,6 +163,16 @@
         { "name": "--json", "type": "boolean", "description": "Output JSON results" }
       ]
     },
+    "deps update": {
+      "usage": "simple deps update <target> | --all",
+      "description": "Update action and space dependencies and report changed package-lock files",
+      "args": [
+        { "name": "target", "type": "string", "optional": true, "description": "App, action, space, or app/action target" }
+      ],
+      "flags": [
+        { "name": "--all", "type": "boolean", "description": "Update every action and space in every app" }
+      ]
+    },
     "deploy": {
       "usage": "simple deploy <app-path>",
       "description": "Run app checks, then deploy the application to the platform",
@@ -181,6 +191,17 @@
     "build": {
       "usage": "simple build [target]",
       "description": "Build app targets and check agent guidance after building actions; a single action or space target skips agent checks"
+    },
+    "lint": {
+      "usage": "simple lint [target]",
+      "description": "Lint the workspace or a build target with ESLint, Rust fmt and clippy (including action tests and built WebAssembly variants), and Go formatting and vet checks",
+      "args": [
+        { "name": "target", "type": "string", "optional": true, "description": "App, action, space, or app/action target" }
+      ],
+      "flags": [
+        { "name": "--fix", "type": "boolean", "description": "Apply available formatting fixes" },
+        { "name": "--json", "type": "boolean", "description": "Output JSON check results" }
+      ]
     },
     "init": {
       "usage": "simple init <project-name>",

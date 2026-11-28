@@ -2,15 +2,19 @@ package build
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 )
 
 // sdkPackage is the platform SDK that actions bundle.
 const sdkPackage = "@simpleplatform/sdk"
 
 func BundleJS(dir, entryPoint, outFile string, minify bool, defines map[string]string) error {
-	// Using esbuild CLI
-	cmd := exec.Command("npx", append([]string{"esbuild"}, bundleArgs(entryPoint, outFile, minify, defines)...)...)
+	if err := requireLocalPackage(dir, "esbuild"); err != nil {
+		return err
+	}
+	cmd := exec.Command("npx", esbuildCommandArgs(entryPoint, outFile, minify, defines)...)
 	cmd.Dir = dir
 
 	if output, err := cmd.CombinedOutput(); err != nil {
@@ -18,6 +22,23 @@ func BundleJS(dir, entryPoint, outFile string, minify bool, defines map[string]s
 	}
 
 	return nil
+}
+
+func esbuildCommandArgs(entryPoint, outFile string, minify bool, defines map[string]string) []string {
+	return append([]string{"--no", "--", "esbuild"}, bundleArgs(entryPoint, outFile, minify, defines)...)
+}
+
+func requireLocalPackage(dir, name string) error {
+	if _, err := os.Stat(filepath.Join(dir, "node_modules", filepath.FromSlash(name))); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("failed to check package %s in %s: %w", name, dir, err)
+	}
+	dependencyKind := "devDependencies"
+	if name == sdkPackage {
+		dependencyKind = "dependencies"
+	}
+	return fmt.Errorf("%s is not installed in %s; add it to that folder's package.json %s", name, dir, dependencyKind)
 }
 
 // bundleArgs are esbuild's arguments for bundling one action.

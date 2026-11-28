@@ -1,11 +1,13 @@
 package build
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"simple-cli/internal/fsx"
@@ -17,6 +19,108 @@ import (
 func TestNpmInstallRunsNoInstallScripts(t *testing.T) {
 	if !slices.Equal(npmInstallArgs, []string{"install", "--ignore-scripts"}) {
 		t.Errorf("npm install arguments are %v, want install --ignore-scripts", npmInstallArgs)
+	}
+}
+
+func TestDependencyInstallArguments(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		locked bool
+		update bool
+		want   []string
+	}{
+		{name: "first install", want: []string{"install", "--ignore-scripts"}},
+		{name: "exact install", locked: true, want: []string{"ci", "--ignore-scripts"}},
+		{name: "deliberate update", locked: true, update: true, want: []string{"install", "--ignore-scripts"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if test.locked {
+				writeFile(t, filepath.Join(dir, "package-lock.json"), lockedOne)
+			}
+			got, err := dependenciesInstallArgs(fsx.OSFileSystem{}, dir, test.update)
+			if err != nil {
+				t.Fatalf("dependenciesInstallArgs() error = %v", err)
+			}
+			if !slices.Equal(got, test.want) {
+				t.Errorf("dependenciesInstallArgs() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDependenciesNeedInstallUsesInstallNoteAndManifest(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		lock        bool
+		record      bool
+		change      bool
+		wantInstall bool
+	}{
+		{name: "no lock and no dependencies", wantInstall: false},
+		{name: "current lock install", lock: true, record: true, wantInstall: false},
+		{name: "changed lock install", lock: true, record: true, change: true, wantInstall: true},
+		{name: "missing install note", lock: true, wantInstall: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "package.json"), `{"name":"thing"}`)
+			if test.lock {
+				writeFile(t, filepath.Join(dir, "package-lock.json"), lockedOne)
+			}
+			if test.record {
+				if err := RecordInstall(fsx.OSFileSystem{}, dir); err != nil {
+					t.Fatalf("RecordInstall() error = %v", err)
+				}
+			}
+			if test.change {
+				writeFile(t, filepath.Join(dir, "package-lock.json"), lockedTwo)
+			}
+			if got := DependenciesNeedInstall(fsx.OSFileSystem{}, dir); got != test.wantInstall {
+				t.Errorf("DependenciesNeedInstall() = %v, want %v", got, test.wantInstall)
+			}
+		})
+	}
+}
+
+func TestBuildDependenciesNeedInstallRequiresALockFile(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		lock        bool
+		hoisted     bool
+		record      bool
+		wantInstall bool
+	}{
+		{name: "missing lock with no dependencies", wantInstall: true},
+		{name: "missing lock with hoisted package", hoisted: true, wantInstall: true},
+		{name: "current lock install", lock: true, record: true, wantInstall: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "apps", "com.acme.demo", "actions", "lookup")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			manifest := `{"name":"thing"}`
+			if test.hoisted {
+				manifest = `{"name":"thing","dependencies":{"is-number":"^7.0.0"}}`
+				if err := os.MkdirAll(filepath.Join(root, "node_modules", "is-number"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			writeFile(t, filepath.Join(dir, "package.json"), manifest)
+			if test.lock {
+				writeFile(t, filepath.Join(dir, "package-lock.json"), lockedOne)
+			}
+			if test.record {
+				if err := RecordInstall(fsx.OSFileSystem{}, dir); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := BuildDependenciesNeedInstall(fsx.OSFileSystem{}, dir); got != test.wantInstall {
+				t.Errorf("BuildDependenciesNeedInstall() = %v, want %v", got, test.wantInstall)
+			}
+		})
 	}
 }
 
@@ -109,6 +213,100 @@ func TestInstalledFromCurrentFiles(t *testing.T) {
 
 			if got := InstalledFromCurrentFiles(fsx.OSFileSystem{}, dir); got != tc.current {
 				t.Errorf("installed from the current files = %v, want %v", got, tc.current)
+			}
+		})
+	}
+}
+
+func TestEnsureDependenciesFailureNamesFolderOutputAndFix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm is stood in for by a shell command")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), `{"name":"thing"}`)
+	writeFile(t, filepath.Join(dir, "package-lock.json"), lockedOne)
+	original := ExecCommandFunc
+	ExecCommandFunc = func(string, ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "echo npm output >&2; exit 23")
+	}
+	t.Cleanup(func() { ExecCommandFunc = original })
+
+	err := EnsureDependencies(dir)
+	if err == nil {
+		t.Fatal("EnsureDependencies() error = nil, want failure")
+	}
+	for _, want := range []string{dir, "npm output", "simple deps update " + dir} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("EnsureDependencies() error %q does not contain %q", err, want)
+		}
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 23 {
+		t.Errorf("wrapped command error = %v, want exit code 23", err)
+	}
+}
+
+func TestEnsureDependenciesFirstInstallFailureHasNoLockAdvice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm is stood in for by a shell command")
+	}
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "package.json"), `{"name":"thing"}`)
+	original := ExecCommandFunc
+	ExecCommandFunc = func(string, ...string) *exec.Cmd {
+		return exec.Command("sh", "-c", "echo npm output >&2; exit 23")
+	}
+	t.Cleanup(func() { ExecCommandFunc = original })
+
+	err := EnsureDependencies(dir)
+	if err == nil || !strings.Contains(err.Error(), "npm output") {
+		t.Fatalf("EnsureDependencies() error = %v, want npm output", err)
+	}
+	if strings.Contains(err.Error(), "simple deps update") {
+		t.Errorf("first install failure included lock advice: %v", err)
+	}
+}
+
+func TestUpdateDependenciesUsesInstallAndDoesNotAddLockAdvice(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm is stood in for by a shell command")
+	}
+	for _, test := range []struct {
+		name    string
+		failure bool
+	}{
+		{name: "successful update"},
+		{name: "failed update", failure: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, filepath.Join(dir, "package.json"), `{"name":"thing"}`)
+			writeFile(t, filepath.Join(dir, "package-lock.json"), lockedOne)
+			original := ExecCommandFunc
+			var gotName string
+			var gotArgs []string
+			ExecCommandFunc = func(name string, args ...string) *exec.Cmd {
+				gotName, gotArgs = name, append([]string(nil), args...)
+				if test.failure {
+					return exec.Command("sh", "-c", "echo npm output >&2; exit 23")
+				}
+				return exec.Command("sh", "-c", "exit 0")
+			}
+			t.Cleanup(func() { ExecCommandFunc = original })
+
+			err := UpdateDependencies(dir)
+			if gotName != "npm" || !slices.Equal(gotArgs, []string{"install", "--ignore-scripts"}) {
+				t.Errorf("UpdateDependencies() command = %s %v, want npm install --ignore-scripts", gotName, gotArgs)
+			}
+			if test.failure {
+				if err == nil || !strings.Contains(err.Error(), "npm output") {
+					t.Errorf("UpdateDependencies() error = %v, want npm output", err)
+				}
+				if err != nil && strings.Contains(err.Error(), "simple deps update") {
+					t.Errorf("UpdateDependencies() error added the lock advice: %v", err)
+				}
+			} else if err != nil {
+				t.Errorf("UpdateDependencies() error = %v, want nil", err)
 			}
 		})
 	}

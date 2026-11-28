@@ -5,6 +5,7 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,10 +45,13 @@ func Execute() int {
 
 	code := 0
 	if err != nil {
-		if jsonOutput {
-			printErrorJSON(err)
-		} else {
-			fmt.Fprintln(os.Stderr, "Error:", err)
+		var reported interface{ AlreadyReported() bool }
+		if !errors.As(err, &reported) || !reported.AlreadyReported() {
+			if jsonOutput {
+				printErrorJSON(err)
+			} else {
+				fmt.Fprintln(os.Stderr, "Error:", err)
+			}
 		}
 		code = 1
 	}

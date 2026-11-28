@@ -12,10 +12,8 @@ import (
 	"simple-cli/internal/fsx"
 )
 
-// A Rust action or tool must pass Rust's own formatter and linter as
-// generated: `cargo fmt --check` and `cargo clippy -- -D warnings`, for the
-// computer it is written on, tests included, and for the WebAssembly target
-// it is built for, where its tests are never built.
+// Generated Rust must pass its formatter and clippy for every wasm variant the
+// build makes. Browser-only actions use the async feature; server builds do not.
 // Whoever runs either in a new workspace should find nothing wrong in code
 // they have not touched yet.
 //
@@ -38,39 +36,22 @@ func TestScaffoldedRustPassesFmtAndClippy(t *testing.T) {
 		actionName string
 		tool       bool
 		execution  string
-		commands   [][]string
 	}{
 		{
 			name:       "plain Rust action",
 			actionName: "plain-action",
 			execution:  "server",
-			commands: [][]string{
-				{"fmt", "--check"},
-				{"clippy", "--all-targets", "--", "-D", "warnings"},
-				{"clippy", "--target", build.RustWasmTarget, "--", "-D", "warnings"},
-			},
 		},
 		{
 			name:       "Rust action for server and browser",
 			actionName: "shared-action",
 			execution:  "both",
-			commands: [][]string{
-				{"fmt", "--check"},
-				{"clippy", "--all-targets", "--", "-D", "warnings"},
-				{"clippy", "--target", build.RustWasmTarget, "--", "-D", "warnings"},
-				{"clippy", "--target", build.RustWasmTarget, "--features", "async", "--", "-D", "warnings"},
-			},
 		},
 		{
 			name:       "Rust tool",
 			actionName: "report-status",
 			tool:       true,
 			execution:  "server",
-			commands: [][]string{
-				{"fmt", "--check"},
-				{"clippy", "--all-targets", "--", "-D", "warnings"},
-				{"clippy", "--target", build.RustWasmTarget, "--", "-D", "warnings"},
-			},
 		},
 	}
 
@@ -108,7 +89,7 @@ func TestScaffoldedRustPassesFmtAndClippy(t *testing.T) {
 				t.Fatalf("create Rust action: %v", err)
 			}
 
-			for _, args := range tt.commands {
+			for _, args := range build.RustLintCommands(tt.execution, false) {
 				cmd := exec.Command("cargo", args...)
 				cmd.Dir = actionDir
 				cmd.Env = rustCommandEnvironment(os.Environ(), release, targetDir)

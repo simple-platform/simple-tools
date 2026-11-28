@@ -261,6 +261,19 @@ TypeScript and JavaScript, `cargo test` for Rust actions.
   - `--coverage`: Enable code coverage reporting.
   - `--json`: Output results in JSON format (CI/CD friendly).
 
+### `simple lint`
+
+Lint the workspace with ESLint and run the formatter and linter for each Rust
+or Go Action. Rust linting includes test code because `simple test` compiles it,
+as well as the WebAssembly variants the action builds. Give a build target to
+limit the checks to one app, Action, or Space. Add `--fix` to apply formatting
+fixes.
+
+- **Usage:** `simple lint [target]`
+- **Flags:**
+  - `--fix`: Apply ESLint, Rust fmt, and gofmt fixes. Clippy and `go vet` still run.
+  - `--json`: Output the check results as JSON.
+
 ## 4. Operational Commands
 
 ### `simple deploy`

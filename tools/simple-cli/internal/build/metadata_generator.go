@@ -91,9 +91,10 @@ func describeActionFromSource(fs fsx.FileSystem, actionDir string, lang ActionLa
 		return "", fmt.Errorf("node.js is required for action metadata extraction: %w", err)
 	}
 
-	// Ensure required npm packages are installed
-	if err := ensureNPMPackages(); err != nil {
-		return "", fmt.Errorf("failed to install required npm packages: %w", err)
+	if lang == LanguageTypeScript {
+		if err := ensureNPMPackages(); err != nil {
+			return "", fmt.Errorf("failed to install required npm packages: %w", err)
+		}
 	}
 
 	// THE TOOLCHAIN IS ASKED FOR HERE RATHER THAN INSIDE NODE.
@@ -161,6 +162,21 @@ var generatorPackages = []string{
 	"ts-morph",
 }
 
+var (
+	metadataInstallMu  sync.Mutex
+	metadataInstalls   = map[string]*metadataInstall{}
+	runMetadataInstall = func(root string, args []string) ([]byte, error) {
+		cmd := exec.Command("pnpm", args...)
+		cmd.Dir = root
+		return cmd.CombinedOutput()
+	}
+)
+
+type metadataInstall struct {
+	done chan struct{}
+	err  error
+}
+
 // ensureNPMPackages makes sure the generator's packages can be found before the
 // generator is asked to run, and installs them when they cannot.
 //
@@ -178,26 +194,64 @@ var generatorPackages = []string{
 // written and run from. The directory it actually sits in is created empty under
 // that root, so it has no `node_modules` of its own to contribute.
 func ensureNPMPackages() error {
-	workspaceRoot, err := findWorkspaceRoot()
+	workspaceRoot, err := FindWorkspaceRoot()
 	if err != nil {
 		return fmt.Errorf("failed to find workspace root: %w", err)
 	}
 
+	metadataInstallMu.Lock()
+	if active, ok := metadataInstalls[workspaceRoot]; ok {
+		metadataInstallMu.Unlock()
+		<-active.done
+		return active.err
+	}
 	if generatorPackagesResolvable(workspaceRoot) {
+		metadataInstallMu.Unlock()
 		return nil
 	}
+	active := &metadataInstall{done: make(chan struct{})}
+	metadataInstalls[workspaceRoot] = active
+	metadataInstallMu.Unlock()
 
-	// Output is captured rather than inherited: builds run under a progress UI
-	// that repaints in place, and a concurrent write from a child process
-	// corrupts the frame. The output is surfaced only if the install fails.
-	cmd := exec.Command("pnpm", generatorInstallArgs(workspaceRoot)...)
-	cmd.Dir = workspaceRoot
+	// One root install serves every action in a concurrent build. Capturing the
+	// output keeps child processes from writing into the progress display.
+	output, installErr := runMetadataInstall(workspaceRoot, generatorInstallArgs(workspaceRoot))
+	if installErr != nil {
+		active.err = fmt.Errorf("failed to install packages at %s: %w\n%s", workspaceRoot, installErr, output)
+	}
+	metadataInstallMu.Lock()
+	close(active.done)
+	metadataInstallMu.Unlock()
+	return active.err
 
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("failed to install packages: %w\nOutput: %s", err, out)
+}
+
+// EnsureMetadataPackages resolves the packages the TypeScript metadata step
+// needs, installing them at the workspace root if they are absent.
+func EnsureMetadataPackages() error {
+	return ensureNPMPackages()
+}
+
+// EnsureWorkspaceInstall runs the pnpm install used by metadata setup at the
+// workspace root. Lint uses it when the workspace's own ESLint is missing.
+func EnsureWorkspaceInstall() error {
+	workspaceRoot, err := FindWorkspaceRoot()
+	if err != nil {
+		return fmt.Errorf("failed to find workspace root: %w", err)
 	}
 
+	output, err := runMetadataInstall(workspaceRoot, []string{"install", "--ignore-scripts"})
+	if err != nil {
+		return fmt.Errorf("failed to install workspace packages at %s: %w\n%s", workspaceRoot, err, output)
+	}
 	return nil
+}
+
+// ResetMetadataInstallState clears the per-root result cache for tests.
+func ResetMetadataInstallState() {
+	metadataInstallMu.Lock()
+	defer metadataInstallMu.Unlock()
+	metadataInstalls = map[string]*metadataInstall{}
 }
 
 // generatorInstallArgs are pnpm's arguments for installing the generator's
@@ -205,11 +259,40 @@ func ensureNPMPackages() error {
 // pnpm workspace and refuses it anywhere else, such as in a single project or
 // a Simple workspace with no manifest yet, where the add creates one.
 func generatorInstallArgs(root string) []string {
-	args := []string{"add", "-D"}
-	if _, err := os.Stat(filepath.Join(root, "pnpm-workspace.yaml")); err == nil {
-		args = []string{"add", "-w", "-D"}
+	if generatorPackagesDeclared(root) {
+		return []string{"install", "--ignore-scripts"}
 	}
-	return append(args, generatorPackages...)
+	args := []string{"add", "-D", "-E", "--ignore-scripts"}
+	if _, err := os.Stat(filepath.Join(root, "pnpm-workspace.yaml")); err == nil {
+		args = []string{"add", "-w", "-D", "-E", "--ignore-scripts"}
+	}
+	return append(args,
+		"ts-json-schema-generator@"+TSSchemaGeneratorVersion,
+		"ts-morph@"+TSMorphVersion,
+	)
+}
+
+func generatorPackagesDeclared(root string) bool {
+	data, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		return false
+	}
+	var manifest struct {
+		Dependencies    map[string]json.RawMessage `json:"dependencies"`
+		DevDependencies map[string]json.RawMessage `json:"devDependencies"`
+	}
+	if json.Unmarshal(data, &manifest) != nil {
+		return false
+	}
+	for _, name := range generatorPackages {
+		if _, dependency := manifest.Dependencies[name]; dependency {
+			continue
+		}
+		if _, devDependency := manifest.DevDependencies[name]; !devDependency {
+			return false
+		}
+	}
+	return true
 }
 
 // generatorPackagesResolvable reports whether every package the generator
@@ -238,7 +321,7 @@ func nodeCanResolve(dir, pkg string) bool {
 	return found
 }
 
-// findWorkspaceRoot answers with the root of the workspace whose `node_modules`
+// FindWorkspaceRoot answers with the root of the workspace whose `node_modules`
 // the generator runs against, by walking up from the current directory.
 //
 // A WORKSPACE ROOT IS NOT SIMPLY THE FIRST package.json ABOVE US. Every member
@@ -256,7 +339,7 @@ func nodeCanResolve(dir, pkg string) bool {
 // `workspaces` field marks an npm or yarn one. A plain manifest is remembered as
 // the answer for a project that belongs to no workspace at all, but the walk
 // carries on past it in case a workspace encloses it.
-func findWorkspaceRoot() (string, error) {
+func FindWorkspaceRoot() (string, error) {
 	dir, err := os.Getwd()
 	if err != nil {
 		return "", err
@@ -511,7 +594,7 @@ func writeRustCompanionCrate() (string, error) {
 // it wrote to its error stream on a run that succeeds.
 func executeScript(actionDir string, lang ActionLanguage) (string, error) {
 	// Find workspace root to run the script from there (so Node.js can find packages)
-	workspaceRoot, err := findWorkspaceRoot()
+	workspaceRoot, err := FindWorkspaceRoot()
 	if err != nil {
 		return "", fmt.Errorf("failed to find workspace root: %w", err)
 	}

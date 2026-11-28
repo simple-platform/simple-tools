@@ -78,10 +78,17 @@ This document defines the **standard operating procedure** for building and modi
     *   e.g., if adding logic, check "Record Behavior" vs "Custom Action" rules.
 
 ### Finalization:
-1.  `simple build <app_id>` (when Actions or Spaces exist)
-2.  `simple test`
-3.  `simple deploy apps/<app_id> --env <env>` (when deployment is requested)
+1.  `simple lint` (or `simple lint <target>` for one app or Action)
+2.  `simple build <app_id>` (when Actions or Spaces exist)
+3.  `simple test`
+4.  `simple deploy apps/<app_id> --env <env>` (when deployment is requested)
     *   *Ref:* `.simple/context/cli-manifest.json` (Command: "deploy")
+
+Action and space dependencies use their `package-lock.json` files. `simple build`
+and `simple test` run `npm ci --ignore-scripts` when a lock file is present; the
+first install uses `npm install --ignore-scripts`. After changing a dependency
+in `package.json`, run `simple deps update <app>` and commit the changed lock
+files before deploying.
 
 ## Create an Agent
 
