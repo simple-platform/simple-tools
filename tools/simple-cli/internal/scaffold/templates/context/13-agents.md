@@ -83,6 +83,8 @@ Sets up a tool and its lesson. The optional `--task-type` links it to a kind of 
 
 A platform tool gets a lookup and a kind-of-work link. An existing app action gets a lesson if it has none, and a kind-of-work link when `--task-type` is set. A new action uses the regular action scaffold, is marked as a tool, and gets a lesson. If the name is neither a platform tool nor an app action and no display name was given, the command refuses and shows the command to create it. When there is nothing left to add, it succeeds and says so.
 
+An app action is offered as a tool only when its own source says so: a comment in it carries the `@tool` tag and a `@shortdesc` line. `simple new tool` writes both when it creates the action. An action created with `simple new action` needs them added by hand, followed by a build.
+
 ### Output and safe retries
 
 Text output gives a success line, files waiting for the developer's words, and a reminder to run `simple build <app>`. JSON output has `status`, `app_id`, `name`, `created`, `records`, and `fill_in`. Paths are relative to the repository root. The three lists are empty arrays when empty, never `null`.
